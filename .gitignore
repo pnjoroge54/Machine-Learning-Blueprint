@@ -1,0 +1,24 @@
+.idea/*
+*.pyc
+__pycache__
+test_reports
+.coverage
+.DS_Store
+docs/build/
+.local/
+cover/
+*.pickle
+*.log
+*.png
+*.html
+*/.ipynb_checkpoints/*
+afml.egg-info/*
+
+# My exclusions
+.env
+credentials/
+.vscode/
+bash/
+*/logs/*
+*/GA_logs_triple_barrier/*
+*/feature_importance_charts/*
