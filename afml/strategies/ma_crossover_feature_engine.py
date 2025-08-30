@@ -6,6 +6,7 @@ import pandas_ta as ta
 import talib
 
 from ..labeling.trend_scanning import get_bins_from_trend
+from ..util.misc import optimize_dtypes
 
 
 class ForexFeatureEngine:
@@ -39,12 +40,12 @@ class ForexFeatureEngine:
 
         features = pd.DataFrame(index=price_data.index)
         close = price_data["close"]
-        high = price_data["high"]
-        low = price_data["low"]
-        open_price = price_data["open"]
+        # high = price_data["high"]
+        # low = price_data["low"]
+        # open_price = price_data["open"]
 
         # Core MA Features
-        ma_features = self._calculate_ma_features(close)
+        ma_features = self._calculate_ma_features(price_data)
         features = pd.concat([features, ma_features], axis=1)
 
         # Volatility & Range Features (Critical for Forex)
@@ -75,6 +76,9 @@ class ForexFeatureEngine:
         # Market Structure Features
         structure_features = self._calculate_market_structure_features(price_data)
         features = pd.concat([features, structure_features], axis=1)
+
+        fractal_features = self._calculate_enhanced_fractal_features(price_data)
+        features = pd.concat([features, fractal_features], axis=1)
 
         return features.fillna(method="ffill").fillna(0)
 
@@ -149,14 +153,13 @@ class ForexFeatureEngine:
         features["hl_range_regime"] = features["hl_range"] / (features["hl_range_ma"] + 1e-8)
 
         # Bollinger Bands
-        bb_period = 20
-        bb_std = 2
-        bb_ma = close.rolling(bb_period).mean()
-        bb_std_val = close.rolling(bb_period).std()
-        features["bb_upper"] = bb_ma + (bb_std_val * bb_std)
-        features["bb_lower"] = bb_ma - (bb_std_val * bb_std)
-        features["bb_position"] = (close - features["bb_lower"]) / (
-            features["bb_upper"] - features["bb_lower"] + 1e-8
+        bb = price_data.ta.bbands(length=20, std=2)
+        bb_std_val = bb["BBM_20_2.0"]
+        features = features.assign(
+            bb_upper=bb["BBU_20_2.0"],
+            bb_lower=bb["BBL_20_2.0"],
+            bb_percent=bb["BBP_20_2.0"],
+            bb_bandwidth=bb["BBB_20_2.0"],
         )
         features["bb_squeeze"] = bb_std_val / (bb_std_val.rolling(50).mean() + 1e-8)
 
@@ -179,10 +182,14 @@ class ForexFeatureEngine:
         features["efficiency_ratio_30"] = self._calculate_efficiency_ratio(close, 30)
 
         # Linear Regression Features
-        for period in [20, 50]:
-            lr_features = self._calculate_linear_regression_features(close, period)
-            for key, value in lr_features.items():
-                features[f"{key}_{period}"] = value
+        lr_features = self._calculate_linear_regression_features(close, period=(5, 200))
+        for key, value in lr_features.items():
+            features[key] = value
+
+        # for period in [20, 50]:
+        #     lr_features = self._calculate_linear_regression_features(close, period)
+        #     for key, value in lr_features.items():
+        #         features[f"{key}_{period}"] = value
 
         # Momentum Features
         features["roc_10"] = close.pct_change(10)
@@ -197,6 +204,7 @@ class ForexFeatureEngine:
         features["trend_persistence"] = returns.rolling(20).apply(
             lambda x: (x > 0).sum() / len(x) if len(x) > 0 else 0.5
         )
+        features = optimize_dtypes(features)
 
         return features
 
@@ -398,12 +406,14 @@ class ForexFeatureEngine:
         self, close: pd.Series, period: int
     ) -> Dict[str, pd.Series]:
         lr_results = get_bins_from_trend(
-            close, span=[period], volatility_threshold=0.0, lookforward=False
+            close, span=period, volatility_threshold=0.1, lookforward=False
         )
         if lr_results.shape[1] > 0:
-            lr_results = lr_results[["slope", "rsquared", "tval"]]
+            lr_results = lr_results[["slope", "rsquared", "t_value"]]
         else:
-            lr_results = pd.DataFrame(0, index=close.index, columns=["slope", "rsquared", "tval"])
+            lr_results = pd.DataFrame(
+                0, index=close.index, columns=["slope", "rsquared", "t_value"]
+            )
         lr_results.columns = [f"lr_{col}" for col in lr_results.columns]
         return lr_results.to_dict(orient="series")
 
