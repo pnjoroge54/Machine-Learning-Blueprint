@@ -23,7 +23,6 @@ def create_bollinger_features(data, lookback_window=10, bb_period=20, bb_std=2):
     features["bb_percentage"] = bb_feat.filter(regex="BBP")
 
     # Price-based features
-    # NOTE: Returns are lagged so no need to apply shift
     lagged_ret = get_lagged_returns(df.close, lags=[1, 5, 10], nperiods=3)
     features = features.join(lagged_ret)
 
@@ -75,8 +74,7 @@ def create_bollinger_features(data, lookback_window=10, bb_period=20, bb_std=2):
     features["macd"], _, features["macd_hist"] = talib.MACD(
         df.close, fastperiod=12, slowperiod=26, signalperiod=9
     )
-    features = optimize_dtypes(features, verbose=False)
-    cols = features.columns.difference(lagged_ret.columns)
-    features[cols] = features[cols].shift(1)
+
+    features = optimize_dtypes(features, verbose=False)  # Conserve memory
 
     return features
