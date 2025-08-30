@@ -449,11 +449,11 @@ def calculate_performance_metrics(
 
     # --- Trade Stats (if positions are provided) ---
     total_periods = len(data_index)
-    bet_frequency = timing_of_flattening_and_flips(positions).shape[0]  # timestamps of bets
-    metrics["bet_frequency"] = bet_frequency
-    metrics["bets_per_year"] = int(
-        bet_frequency * (periods_per_year / total_periods) if total_periods > 0 else 0
-    )
+    # bet_frequency = timing_of_flattening_and_flips(positions).shape[0]  # timestamps of bets
+    # metrics["bet_frequency"] = bet_frequency
+    # metrics["bets_per_year"] = int(
+    #     bet_frequency * (periods_per_year / total_periods) if total_periods > 0 else 0
+    # )
 
     trade_stats = _calculate_trade_stats(returns, periods_per_year, total_periods)
     trade_stats["avg_trade_duration"] = average_holding_period(positions)
