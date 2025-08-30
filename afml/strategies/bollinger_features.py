@@ -2,7 +2,7 @@ import pandas as pd
 import pandas_ta as ta
 import talib
 
-from ..features.moving_averages import get_MA_diffs
+from ..features.moving_averages import calculate_ma_differences
 from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
 from ..util.volatility import get_period_vol, get_yang_zhang_vol
@@ -53,7 +53,7 @@ def create_bollinger_features(data, lookback_window=10, bb_period=20, bb_std=2):
     features["atr"] = df.ta.atr()
 
     # Moving average differences
-    ma_diffs = get_MA_diffs(df.close, windows=(5, 20, 50, 100))
+    ma_diffs = calculate_ma_differences(df.close, windows=(5, 20, 50, 100))
     ma_diffs = ma_diffs.div(features["atr"], axis=0)  # Normalize by ATR
     features = features.join(ma_diffs)
 

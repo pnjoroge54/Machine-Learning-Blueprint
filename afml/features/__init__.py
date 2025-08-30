@@ -19,7 +19,7 @@ from .fractals import (
     comprehensive_fractal_analysis,
     generate_fractal_signals,
 )
-from .moving_averages import calculate_ma_differences, get_MA_diffs
+from .moving_averages import calculate_ma_differences
 from .returns import (
     get_lagged_returns,
     get_period_autocorr,
