@@ -136,9 +136,9 @@ def create_classification_report_image(
     """
     # Set image title
     if "classification report" not in title.lower():
-        title = "Classification Report: " + title.strip().title().replace(":", "-")
+        title = "Classification Report: " + title.strip().replace(":", "-")
     else:
-        title = title.strip().title()
+        title = title.strip()
 
     # --- 1. Generate Classification Report as a string ---
     report_str = classification_report(y_true, y_pred, target_names=target_names)
