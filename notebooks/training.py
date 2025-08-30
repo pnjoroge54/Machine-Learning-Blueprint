@@ -25,8 +25,9 @@ def train_meta_model(model, features, labels, test_size=0.3) -> namedtuple:
     """
 
     # Prepare features and target
-    X = features.replace([np.inf, -np.inf], np.nan).dropna()
+    X = features.reindex(labels.index).replace([np.inf, -np.inf], np.nan).dropna()
     cont = labels.loc[X.index]
+    X["side"] = cont["side"]
     y = cont["bin"]
     w = cont["w"] if "w" in cont else np.ones_like(y)  # sample weights
     t1 = cont["t1"]
@@ -72,7 +73,7 @@ def train_meta_model(model, features, labels, test_size=0.3) -> namedtuple:
 def compare_roc_curves(model_data: List[namedtuple], titles: List[str] = None):
     n = len(model_data)
     fig, axes = plt.subplots(
-        nrows=n // 2, ncols=2, sharex=True, sharey=True, figsize=(7.5, 5), dpi=100
+        nrows=round(n / 2), ncols=2, sharex=True, sharey=True, figsize=(7.5, 5), dpi=100
     )
     axes = axes.flatten()
     if not titles:
