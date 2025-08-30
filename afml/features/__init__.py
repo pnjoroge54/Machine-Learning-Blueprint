@@ -18,6 +18,7 @@ from .fractals import (
     calculate_fractal_trend_features,
     comprehensive_fractal_analysis,
     generate_fractal_signals,
+    get_fractal_features,
 )
 from .moving_averages import calculate_ma_differences
 from .returns import (

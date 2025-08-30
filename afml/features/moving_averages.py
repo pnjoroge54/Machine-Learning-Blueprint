@@ -21,7 +21,7 @@ def calculate_ma_differences(
     returns df: (pd.DataFrame)
     """
     df = pd.DataFrame(index=close.index)
-    sma = {window: close.rolling(window, closed="left").mean() for window in windows}
+    sma = {window: close.rolling(window).mean() for window in windows}
 
     # Create differences of all unique combinations of windows
     for win in combinations(windows, 2):

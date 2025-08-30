@@ -43,14 +43,12 @@ def trading_session_encoded_features(
     if datetime_index.tz is not None:
         dt_utc = datetime_index.tz_convert("UTC")
     else:
-        dt_utc = datetime_index.tz_localize(
-            "UTC"
-        )  # Assume naive is UTC and localize it
+        dt_utc = datetime_index.tz_localize("UTC")  # Assume naive is UTC and localize it
 
     hours = dt_utc.hour.values  # Use NumPy array for vectorized operations
 
     # Initialize DataFrame for results with the original datetime_index
-    results_df = pd.DataFrame(index=datetime_index)
+    out = pd.DataFrame(index=datetime_index)
 
     # Define session boundaries and whether they cross midnight (UTC hours)
     sessions = {
@@ -90,16 +88,16 @@ def trading_session_encoded_features(
             is_session = (hours >= start_hour) & (hours < end_hour)
 
         # Add the binary session flag to the results DataFrame
-        results_df[f"is_{session_name}"] = is_session.astype("int8")
+        out[f"is_{session_name}"] = is_session.astype("int8")
 
         # Create encoded hour features for the active session
         # These features will be 0 when the session is inactive,
         # and represent the cyclical hour when active.
         for k in range(1, n_terms + 1):
-            results_df[f"{session_name}_hour_sin_h{k}"] = hour_sin_terms[k] * is_session
-            results_df[f"{session_name}_hour_cos_h{k}"] = hour_cos_terms[k] * is_session
+            out[f"{session_name}_hour_sin_h{k}"] = hour_sin_terms[k] * is_session
+            out[f"{session_name}_hour_cos_h{k}"] = hour_cos_terms[k] * is_session
 
-    return results_df
+    return out
 
 
 def encode_cyclical_features(
@@ -129,8 +127,6 @@ def encode_cyclical_features(
     if not isinstance(df, pd.DataFrame):
         raise TypeError("Input must be a pandas DataFrame")
 
-    df = df.copy()
-
     # Handle datetime source
     if dt_col:
         dt_series = pd.to_datetime(df[dt_col])
@@ -138,6 +134,8 @@ def encode_cyclical_features(
         dt_series = df.index.to_series()
     else:
         raise TypeError("Must provide dt_col or have a DatetimeIndex")
+
+    out = pd.DataFrame(index=df.index)
 
     # Feature configuration
     features = {
@@ -151,14 +149,12 @@ def encode_cyclical_features(
     for name, (series, cycle_length) in features.items():
         # Base harmonic (k=1)
         radians = 2 * np.pi * series / cycle_length
-        df[f"{name}_sin"] = np.sin(radians)
-        df[f"{name}_cos"] = np.cos(radians)
+        out[f"{name}_sin"] = np.sin(radians)
+        out[f"{name}_cos"] = np.cos(radians)
 
         # Additional harmonics
-        if n_terms >= 1 and (
-            extra_fourier_features is None or name in extra_fourier_features
-        ):
-            df.rename(
+        if n_terms >= 1 and (extra_fourier_features is None or name in extra_fourier_features):
+            out.rename(
                 columns={
                     f"{name}_sin": f"{name}_sin_h1",
                     f"{name}_cos": f"{name}_cos_h1",
@@ -167,10 +163,10 @@ def encode_cyclical_features(
             )
             for k in range(2, n_terms + 1):
                 radians_k = 2 * np.pi * k * series / cycle_length
-                df[f"{name}_sin_h{k}"] = np.sin(radians_k)
-                df[f"{name}_cos_h{k}"] = np.cos(radians_k)
+                out[f"{name}_sin_h{k}"] = np.sin(radians_k)
+                out[f"{name}_cos_h{k}"] = np.cos(radians_k)
 
-    return df
+    return out
 
 
 def get_time_features(
@@ -225,4 +221,6 @@ def get_time_features(
         + cyclical_feat.columns[cyclical_feat.columns.str.startswith("hour_")].to_list()
     )
     df = pd.concat([cyclical_feat, session_feat], axis=1).drop(columns=to_drop)
+    df.columns = df.columns.str.lower()
+
     return df

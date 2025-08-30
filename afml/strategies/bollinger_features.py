@@ -50,17 +50,16 @@ def create_bollinger_features(data, lookback_window=10, bb_period=20, bb_std=2):
     # Technical indicators
     # Volatility
     features["tr"] = df.ta.true_range()
-    features["atr"] = df.ta.atr()
+    features["atr"] = df.ta.atr(14)
+
+    windows = (5, 10, 20, 50, 100, 200)
 
     # Moving average differences
-    ma_diffs = calculate_ma_differences(df.close, windows=(5, 20, 50, 100))
+    ma_diffs = calculate_ma_differences(df.close, windows)
     ma_diffs = ma_diffs.div(features["atr"], axis=0)  # Normalize by ATR
     features = features.join(ma_diffs)
 
     # Momentum
-    mom_feat = pd.concat((df.ta.mom(10), df.ta.mom(50), df.ta.mom(100)), axis=1)
-    mom_feat.columns = mom_feat.columns.str.lower()
-    features = features.join(mom_feat)  # Momentum indicators
     features["rsi"] = df.ta.rsi()
     stochrsi = df.ta.stochrsi()
     features["stoch_rsi_k"] = stochrsi.iloc[:, 0]  # Stochastic RSI %K
@@ -77,5 +76,7 @@ def create_bollinger_features(data, lookback_window=10, bb_period=20, bb_std=2):
         df.close, fastperiod=12, slowperiod=26, signalperiod=9
     )
     features = optimize_dtypes(features, verbose=False)
+    cols = features.columns.difference(lagged_ret.columns)
+    features[cols] = features[cols].shift(1)
 
     return features

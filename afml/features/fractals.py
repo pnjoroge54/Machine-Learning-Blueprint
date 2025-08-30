@@ -416,6 +416,28 @@ def comprehensive_fractal_analysis(
     }
 
 
+def get_fractal_features(
+    df: pd.DataFrame,
+    volatility: pd.Series,
+    n: int = 2,
+    lookback_period: int = 20,
+    ma_period: int = 20,
+):
+    high, low, close = df.high, df.low, df.close
+    features = comprehensive_fractal_analysis(
+        high, low, close, volatility, n, lookback_period, ma_period
+    )
+
+    features_df = {}
+    for data in features.values():
+        features_df.update(data)
+
+    # Drop b/c valid_fractal_high is a volatility-filtered version of fractal_high, etc.
+    features_df = pd.DataFrame(features_df)
+    features_df.drop(columns=["fractal_high", "fractal_low"], inplace=True)
+    return features_df
+
+
 if __name__ == "__main__":
     # Example usage
     print("Fractal Analysis Module")
