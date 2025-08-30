@@ -77,8 +77,7 @@ class ForexFeatureEngine:
         structure_features = self._calculate_market_structure_features(price_data)
         features = pd.concat([features, structure_features], axis=1)
 
-        fractal_features = self._calculate_enhanced_fractal_features(price_data)
-        features = pd.concat([features, fractal_features], axis=1)
+        features = optimize_dtypes(features)
 
         return features.fillna(method="ffill").fillna(0)
 
@@ -204,7 +203,6 @@ class ForexFeatureEngine:
         features["trend_persistence"] = returns.rolling(20).apply(
             lambda x: (x > 0).sum() / len(x) if len(x) > 0 else 0.5
         )
-        features = optimize_dtypes(features)
 
         return features
 
