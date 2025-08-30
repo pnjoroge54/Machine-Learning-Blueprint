@@ -4,6 +4,7 @@ import talib
 
 from ..features.moving_averages import get_MA_diffs
 from ..features.returns import get_lagged_returns, rolling_autocorr_numba
+from ..util.misc import optimize_dtypes
 from ..util.volatility import get_period_vol, get_yang_zhang_vol
 
 
@@ -75,5 +76,6 @@ def create_bollinger_features(data, lookback_window=10, bb_period=20, bb_std=2):
     features["macd"], _, features["macd_hist"] = talib.MACD(
         df.close, fastperiod=12, slowperiod=26, signalperiod=9
     )
+    features = optimize_dtypes(features, verbose=False)
 
     return features
