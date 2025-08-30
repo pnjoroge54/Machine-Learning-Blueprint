@@ -220,68 +220,66 @@ def get_bins_from_trend(
     return df
 
 
-def trend_meta_labels(
-    events: pd.DataFrame, side_prediction: pd.Series, t_events: pd.DatetimeIndex
+def get_trend_scanning_meta_labels(
+    close: pd.Series,
+    side_prediction: pd.Series,
+    t_events: pd.DatetimeIndex,
+    span: Union[List[int], Tuple[int, int]] = (5, 20),
+    volatility_threshold: float = 0.1,
+    use_log: bool = True,
+    verbose: bool = False,
 ) -> pd.DataFrame:
     """
-    Generate binary meta-labels by combining precomputed event outcomes with
-    predicted trade directions.
-
-    This function aligns each event's return and true outcome with a predicted side
-    (long/short), adjusts returns to the trade direction, and assigns a binary label:
-    1 if the predicted side matches the actual event outcome, 0 otherwise.
+    Generate meta-labels using trend-scanning labels and existing side predictions.
 
     Parameters
     ----------
-    events : pd.DataFrame
-        DataFrame of event data with at least:
-        - 't1' : pd.Timestamp
-            Event end time.
-        - 't_value' : float
-            Test statistic or score from the trend-scanning procedure.
-        - 'bin' : int
-            Actual event outcome side (1 for upward move, -1 for downward move,
-            0 for no trade). Must also contain 'ret', the return from the event.
-        - 'ret' : float
-            Realized return from the event. **Required** — used for directional
-            return adjustment, and function will fail if missing.
+    close : pd.Series
+        Time-indexed price series.
     side_prediction : pd.Series
-        Predicted trade direction for each event index:
-        1 for long, -1 for short, 0 for no position.
+        Primary model's side predictions (1 for long, -1 for short).
     t_events : pd.DatetimeIndex
-        Index of event start times to align with `events`.
+        Index of event start times to align with trend events.
+    span : Union[List[int], Tuple[int, int]], default=(5, 20)
+        Window span for trend scanning.
+    volatility_threshold : float, default=0.1
+        Volatility threshold for trend scanning.
+    use_log : bool, default=True
+        Use log prices for trend scanning.
+    verbose : bool, default=False
+        Verbosity flag.
 
     Returns
     -------
     pd.DataFrame
-        A copy of `events` where:
-        - 'side' : predicted trade direction (aligned to events).
-        - 'ret' : return adjusted to the predicted side.
-        - 'bin' : binary meta-label (int8), where:
-            1 → prediction matched actual outcome.
-            0 → prediction incorrect or no position taken.
-
-    Notes
-    -----
-    - The original 'bin' column (true outcome side) is replaced by the binary
-      correctness label in the returned DataFrame.
-    - Rows where `side_prediction` is 0 are always labeled 0.
+        Meta-labeled events with columns:
+        - t1: End time of trend
+        - ret: Return adjusted for side prediction
+        - bin: Meta-label (1 if correct prediction, 0 otherwise)
+        - side: Original side prediction
     """
-    events = events.copy()
-    events = events[events["bin"] != 0]  # Filter to events with non-zero true outcome
+    # Generate trend-scanning labels
+    trend_events = get_bins_from_trend(
+        close=close,
+        span=span,
+        volatility_threshold=volatility_threshold,
+        lookforward=True,
+        use_log=use_log,
+        verbose=verbose,
+    )
+    trend_events = trend_events.reindex(t_events.intersection(trend_events.index))
 
-    # Align events with side predictions
-    side = side_prediction.rename("side").reindex_like(events)
-    events["side"] = side
-    events["ret"] *= side  # Align returns to direction of trade
-    events = events.reindex(t_events.intersection(events.index))  # Align to t_events
+    # Align side predictions with trend events
+    aligned_side = side_prediction.reindex(trend_events.index)
 
-    # Assign meta-labels based on correctness of prediction
-    meta_label = pd.Series(0, index=events.index, dtype="int8")  # No position
-    meta_label[(events["side"] == events["bin"]) & (events["side"] != 0)] = 1  # Correct prediction
-    events["bin"] = meta_label
+    # Apply meta-labeling logic
+    trend_events["side"] = aligned_side
+    trend_events["ret"] *= trend_events["side"]  # Adjust returns for side
+    trend_events["bin"] = np.where(
+        (trend_events["side"] == trend_events["bin"]) & (trend_events["side"] != 0), 1, 0
+    ).astype("int8")
 
-    return events
+    return trend_events[["t1", "ret", "bin", "side"]]
 
 
 def plot_trend_labels(close, trend_labels, title="Trend Labels", view="bin"):
