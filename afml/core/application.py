@@ -10,7 +10,7 @@ import afml
 
 class AFMLApplication:
     """
-    Application wrapper that handles MLFinLab initialization optimally.
+    Application wrapper that handles AFML initialization optimally.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -33,11 +33,11 @@ class AFMLApplication:
 
     def startup(self) -> "AFMLApplication":
         """
-        Optimized startup sequence for MLFinLab.
+        Optimized startup sequence for AFML.
         Call this once at application initialization.
         """
         start_time = time.perf_counter()
-        logger.info("Starting MLFinLab application initialization...")
+        logger.info("Starting AFML application initialization...")
 
         try:
             # Step 1: Preload core modules
@@ -64,11 +64,11 @@ class AFMLApplication:
             if self.config.get("log_performance", False):
                 self._log_startup_performance()
 
-            logger.info(f"MLFinLab startup completed in {self.startup_time:.2f}s")
+            logger.info(f"AFML startup completed in {self.startup_time:.2f}s")
             return self
 
         except Exception as e:
-            logger.error(f"MLFinLab startup failed: {e}")
+            logger.error(f"AFML startup failed: {e}")
             raise RuntimeError(f"Application startup failed: {e}") from e
 
     def _preload_core_modules(self):
@@ -76,7 +76,7 @@ class AFMLApplication:
         core_modules = ["data_structures", "util"]
         logger.info("Preloading core modules...")
 
-        loaded = mlfinlab.preload_modules(*core_modules)
+        loaded = afml.preload_modules(*core_modules)
         self.loaded_modules.extend(loaded.keys())
         logger.debug(f"Loaded core modules: {list(loaded.keys())}")
 
@@ -85,7 +85,7 @@ class AFMLApplication:
         logger.info(f"Loading module group: {group_name}")
 
         try:
-            loaded = mlfinlab.load_module_group(group_name, fail_fast=False)
+            loaded = afml.load_module_group(group_name, fail_fast=False)
             self.loaded_modules.extend(loaded.keys())
             logger.debug(f"Loaded from {group_name}: {list(loaded.keys())}")
         except ValueError as e:
@@ -99,9 +99,9 @@ class AFMLApplication:
         logger.info("Initializing caching system...")
 
         # Skip test modules and any problematic modules
-        skip_prefixes = ["mlfinlab.tests", "mlfinlab.test_", "mlfinlab.examples"]
+        skip_prefixes = ["afml.tests", "afml.test_", "afml.examples"]
 
-        mlfinlab.init_cache_plugins(skip_prefixes=skip_prefixes)
+        afml.init_cache_plugins(skip_prefixes=skip_prefixes)
         self.cache_initialized = True
         logger.debug("Caching system initialized")
 
@@ -125,7 +125,7 @@ class AFMLApplication:
         parameters = func_config.get("parameters", [])
 
         if module_name and function_name:
-            module = getattr(mlfinlab, module_name)
+            module = getattr(afml, module_name)
             func = getattr(module, function_name)
 
             for params in parameters:
@@ -139,7 +139,7 @@ class AFMLApplication:
         logger.debug("Verifying startup integrity...")
 
         # Basic checks
-        loaded_count = len(mlfinlab.get_loaded_modules())
+        loaded_count = len(afml.get_loaded_modules())
         if loaded_count == 0:
             raise RuntimeError("No modules were loaded successfully")
 
@@ -159,18 +159,18 @@ class AFMLApplication:
         }
 
         if self.cache_initialized:
-            cache_stats = mlfinlab.get_cache_performance_summary()
+            cache_stats = afml.get_cache_performance_summary()
             stats["cacheable_functions"] = cache_stats.get("functions_tracked", 0)
 
         logger.info(f"Startup performance: {stats}")
 
     def get_module(self, name: str):
         """Get a module, loading it lazily if needed"""
-        return getattr(mlfinlab, name)
+        return getattr(afml, name)
 
     def preload_additional(self, *module_names: str):
         """Preload additional modules after startup"""
-        loaded = mlfinlab.preload_modules(*module_names)
+        loaded = afml.preload_modules(*module_names)
         self.loaded_modules.extend(loaded.keys())
         return loaded
 
@@ -178,12 +178,12 @@ class AFMLApplication:
         """Get current application status"""
         return {
             "startup_time": self.startup_time,
-            "modules_loaded": len(mlfinlab.get_loaded_modules()),
+            "modules_loaded": len(afml.get_loaded_modules()),
             "cache_enabled": self.cache_initialized,
             "cache_stats": (
-                mlfinlab.get_cache_performance_summary() if self.cache_initialized else None
+                afml.get_cache_performance_summary() if self.cache_initialized else None
             ),
-            "loaded_modules": mlfinlab.get_loaded_modules(),
+            "loaded_modules": afml.get_loaded_modules(),
         }
 
 
@@ -198,7 +198,7 @@ def pattern_basic_usage():
     app = AFMLApplication()
     app.startup()
 
-    # Now use mlfinlab normally
+    # Now use AFML normally
     data_structures = app.get_module("data_structures")
     features = app.get_module("features")  # Loaded lazily
 
@@ -265,7 +265,7 @@ def pattern_web_application():
             @fastapi_app.on_event("startup")
             async def startup_event():
                 create_app()
-                logger.info("MLFinLab initialized for FastAPI")
+                logger.info("AFML initialized for FastAPI")
 
             @fastapi_app.get("/ml-status")
             async def ml_status():
@@ -336,7 +336,7 @@ def pattern_jupyter_notebook():
             }
         )
 
-        print("✅ MLFinLab environment ready!")
+        print("✅ AFML environment ready!")
         print(f"📊 Loaded modules: {', '.join(app.loaded_modules)}")
 
         return app
@@ -373,7 +373,7 @@ def production_startup():
         if status["modules_loaded"] < 5:  # Adjust threshold as needed
             raise RuntimeError("Too few modules loaded for production")
 
-        logger.info("✅ Production MLFinLab startup successful")
+        logger.info("✅ Production AFML startup successful")
         return app
 
     except Exception as e:
