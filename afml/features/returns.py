@@ -36,7 +36,7 @@ def get_period_returns(close: pd.Series, **time_delta_kwargs) -> pd.Series:
     return ret
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def rolling_autocorr_numba(data: np.ndarray, lookback: int) -> np.ndarray:
     """
     Computes rolling autocorrelation for a 1D NumPy array using Numba for performance.

@@ -15,7 +15,7 @@ from statsmodels.tsa.stattools import adfuller
 from ..cache import cacheable
 
 
-@njit
+@njit(cache=True)
 def get_weights(d, size):
     """
     Advances in Financial Machine Learning, Chapter 5, section 5.4.2, page 79.
@@ -51,7 +51,7 @@ def get_weights(d, size):
     return weights
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _frac_diff_numba_core(series_values, weights, skip):
     """
     Numba-optimized core function for fractional differencing.
@@ -145,7 +145,7 @@ def frac_diff(series, d, thres=0.01, use_log=True):
     return output_df
 
 
-@njit
+@njit(cache=True)
 def get_weights_ffd(d, thres, lim):
     """
     Advances in Financial Machine Learning, Chapter 5, section 5.4.2, page 83.
@@ -192,7 +192,7 @@ def get_weights_ffd(d, thres, lim):
     return weights
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _frac_diff_ffd_numba_core(series_values, weights, skip):
     """
     Numba-optimized core function for fractional differencing.

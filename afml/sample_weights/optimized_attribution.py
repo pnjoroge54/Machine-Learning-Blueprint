@@ -26,7 +26,7 @@ from ..sampling.optimized_concurrent import (
 # =============================================================================
 
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def _compute_return_weights_numba(
     log_returns, start_indices, end_indices, concurrent_counts, n_events
 ):
@@ -87,7 +87,7 @@ def _compute_return_weights_numba(
     return weights
 
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def _apply_time_decay_numba(weights, decay_factor, linear_decay=True):
     """
     Numba-optimized function to apply time decay to weights.

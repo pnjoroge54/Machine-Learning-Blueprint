@@ -10,7 +10,7 @@ from numba import njit
 
 
 # Snippet 2.4, page 39, The Symmetric CUSUM Filter.
-@njit
+@njit(cache=True)
 def _cusum_filter_numba_core(
     log_returns_np: np.ndarray, thresholds_np: np.ndarray, index_values_np: np.ndarray
 ) -> list:

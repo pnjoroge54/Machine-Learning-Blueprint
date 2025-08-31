@@ -77,7 +77,7 @@ def apply_pt_sl_on_t1_optimized(close, events, pt_sl):
     return out
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _find_barrier_hits(close_val, event_locs, t1_locs, trgt, side, pt_sl_arr):
     """
     Core Numba-jitted logic to find the first time barriers are touched.
@@ -145,18 +145,18 @@ def add_vertical_barrier(t_events, close, num_bars=0, **time_delta_kwargs):
     :param num_bars: (int) Number of bars for vertical barrier (activity-based mode).
                      Takes precedence over time delta parameters when > 0.
     :param time_delta_kwargs: Time components for time-based barrier (mutually exclusive with num_bars):
-        :param days: (int) Number of days
-        :param hours: (int) Number of hours
-        :param minutes: (int) Number of minutes
-        :param seconds: (int) Number of seconds
+    - **days**: (int) Number of days
+    - **hours**: (int) Number of hours
+    - **minutes**: (int) Number of minutes
+    - **seconds**: (int) Number of seconds
     :return: (pd.Series) Vertical barrier timestamps with same index as t_events.
              Out-of-bound events return pd.NaT.
 
     Example:
-        # Activity-bar mode (tick/volume/dollar bars)
+        ### Activity-bar mode (tick/volume/dollar bars)
         vertical_barriers = add_vertical_barrier(t_events, close, num_bars=10)
 
-        # Time-based mode
+        ### Time-based mode
         vertical_barriers = add_vertical_barrier(t_events, close, days=1, hours=3)
     """
     # Validate inputs
@@ -223,10 +223,10 @@ def get_events(
     :param side_prediction: (pd.Series) Side of the bet (long/short) as decided by the primary model
     :param verbose: (bool) Flag to report progress on asynch jobs
     :return: (pd.DataFrame) Triple-barrier events with the following columns:
-        - index: Event start times
-        - t1: Event end times
-        - trgt: Target volatility
-        - side: Optional. Algo's position side
+    - index: Event start times
+    - t1: Event end times
+    - trgt: Target volatility
+    - side: Optional. Algo's position side
     """
 
     # 1. Get target
@@ -261,7 +261,7 @@ def get_events(
 
 
 # Snippet 3.9, page 55, Question 3.3
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def barrier_touched(ret, target, pt_sl):
     """
     Advances in Financial Machine Learning, Snippet 3.9, page 55, Question 3.3.
@@ -329,14 +329,14 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False, pt_sl=No
     :param close: (pd.Series) Close prices
     :param vertical_barrier_zero: (bool) If True, sets bin to 0 only for events where the vertical barrier is touched first; otherwise, labeling is determined by the sign of the return.
     :param pt_sl: (list) Profit-taking and stop-loss multiples
-    :return: pd.DataFrame
-        Events DataFrame with the following columns:
-            - index: Event start times
-            - t1: Event end times
-            - trgt: Target volatility
-            - side: Optional. Algo's position side
-            - ret: Returns of the event
-            - bin: Labels for the event, where 1 is a positive return, -1 is a negative return, and 0 is a vertical barrier hit
+    :return: (pd.DataFrame)
+    Events DataFrame with the following columns:
+    - index: Event start times
+    - t1: Event end times
+    - trgt: Target volatility
+    - side: Optional. Algo's position side
+    - ret: Returns of the event
+    - bin: Labels for the event, where 1 is a positive return, -1 is a negative return, and 0 is a vertical barrier hit
     """
 
     # 1. Align prices with their respective events
@@ -425,14 +425,14 @@ def triple_barrier_labels(
             price return when vertical barrier is touched,
             else, if True, sets it to 0 when vertical barrier is touched.
     :param verbose: Log outputs if True.
-    :return: pd.DataFrame
-        Events DataFrame with the following columns:
-            - index: Event start times
-            - t1: Event end times
-            - trgt: Target volatility
-            - side: Optional. Algo's position side
-            - ret: Returns of the event
-            - bin: Labels for the event, where 1 is a positive return, -1 is a negative return, and 0 is a vertical barrier hit
+    :return: (pd.DataFrame)
+    Events DataFrame with the following columns:
+    - index: Event start times
+    - t1: Event end times
+    - trgt: Target volatility
+    - side: Optional. Algo's position side
+    - ret: Returns of the event
+    - bin: Labels for the event, where 1 is a positive return, -1 is a negative return, and 0 is a vertical barrier hit
     """
     if verbose:
         time0 = time.perf_counter()

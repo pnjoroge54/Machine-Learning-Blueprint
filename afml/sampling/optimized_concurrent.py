@@ -21,7 +21,7 @@ from numba import njit, prange
 # =============================================================================
 
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def _compute_concurrent_events_numba(start_times, end_times, time_index, start_idx, end_idx):
     """
     Numba-optimized function to compute concurrent events count.
@@ -78,7 +78,7 @@ def _compute_concurrent_events_numba(start_times, end_times, time_index, start_i
     return counts
 
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def _compute_uniqueness_numba(start_indices, end_indices, concurrent_counts, n_events):
     """
     Numba-optimized function to compute average uniqueness.
