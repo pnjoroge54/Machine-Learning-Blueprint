@@ -67,9 +67,7 @@ def _count_max_decimals_numba(values: np.ndarray, max_places: int = 10) -> int:
     return max_dec
 
 
-def count_max_decimals(
-    values: Union[pd.Series, np.ndarray], max_places: int = 10
-) -> int:
+def count_max_decimals(values: Union[pd.Series, np.ndarray], max_places: int = 10) -> int:
     """
     Determine the maximum number of decimal places in a numeric array or pandas Series
     without using string-based operations.
