@@ -243,7 +243,7 @@ def get_weights_by_return_optimized(
     triple_barrier_events,
     close_series,
     num_conc_events=None,
-    verbose=True,
+    verbose=False,
 ):
     """
     Optimized determination of sample weight by absolute return attribution.
@@ -351,7 +351,7 @@ def get_weights_by_time_decay_optimized(
     decay=1,
     linear=True,
     av_uniqueness=None,
-    verbose=True,
+    verbose=False,
 ):
     """
     Optimized implementation of time decay factors for sample weights.

@@ -202,7 +202,7 @@ def _get_average_uniqueness_optimized(label_endtime, num_conc_events):
 # =============================================================================
 
 
-def get_num_conc_events_optimized(close_series_index, label_endtime, verbose=True):
+def get_num_conc_events_optimized(close_series_index, label_endtime, verbose=False):
     """
     Optimized version of concurrent events calculation using Numba.
 
@@ -292,7 +292,7 @@ def get_av_uniqueness_from_triple_barrier_optimized(
     triple_barrier_events,
     close_series_index,
     num_conc_events=None,
-    verbose=True,
+    verbose=False,
 ):
     """
     Optimized orchestrator for deriving average sample uniqueness from triple barrier events.
