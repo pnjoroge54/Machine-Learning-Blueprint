@@ -314,7 +314,7 @@ def get_weights_by_return_optimized(
     if num_conc_events is None:
         # Compute concurrent events using optimized function
         num_conc_events = get_num_conc_events_optimized(
-            triple_barrier_events, close_series, verbose
+            triple_barrier_events, close_series.index, verbose
         )
         processed_ce = process_concurrent_events(num_conc_events)
     else:
@@ -347,7 +347,7 @@ def get_weights_by_return_optimized(
 
 def get_weights_by_time_decay_optimized(
     triple_barrier_events,
-    close_series,
+    close_series_index,
     decay=1,
     linear=True,
     av_uniqueness=None,
@@ -376,8 +376,8 @@ def get_weights_by_time_decay_optimized(
     -----------
     triple_barrier_events : pd.DataFrame
         Events from labeling.get_events()
-    close_series : pd.Series
-        Close prices
+    close_series_index : pd.DatetimeIndex
+        Close prices index
     decay : float, default=1
         Decay factor:
         - decay = 1: no time decay
@@ -430,7 +430,7 @@ def get_weights_by_time_decay_optimized(
     if av_uniqueness is None:
         av_uniqueness = get_av_uniqueness_from_triple_barrier_optimized(
             triple_barrier_events,
-            close_series,
+            close_series_index,
             verbose=verbose,
         )
     else:

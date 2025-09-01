@@ -290,7 +290,7 @@ def get_num_conc_events_optimized(close_series_index, label_endtime, verbose=Tru
 
 def get_av_uniqueness_from_triple_barrier_optimized(
     triple_barrier_events,
-    close_series,
+    close_series_index,
     num_conc_events=None,
     verbose=True,
 ):
@@ -317,8 +317,8 @@ def get_av_uniqueness_from_triple_barrier_optimized(
     -----------
     triple_barrier_events : pd.DataFrame
         Events from labeling.get_events()
-    close_series : pd.Series
-        Close prices
+    close_series_index : pd.DatetimeIndex
+        Close prices index
     num_conc_events : pd.Series, optional
         Precomputed concurrent events count. If None, will be computed.
     verbose : bool, default=True
@@ -361,7 +361,7 @@ def get_av_uniqueness_from_triple_barrier_optimized(
     if num_conc_events is None:
         # Compute using optimized function
         num_conc_events = get_num_conc_events_optimized(
-            close_series_index=close_series.index,
+            close_series_index,
             label_endtime=triple_barrier_events["t1"],
             verbose=verbose,
         )

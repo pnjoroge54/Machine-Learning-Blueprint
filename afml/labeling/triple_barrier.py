@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from numba import njit, prange
 
+from ..cache import cacheable
 from ..sample_weights.optimized_attribution import (
     get_weights_by_return_optimized,
     get_weights_by_time_decay_optimized,
@@ -17,6 +18,7 @@ from ..sampling.optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,
     get_num_conc_events_optimized,
 )
+from ..util.misc import optimize_dtypes
 
 # pylint: disable=invalid-name, too-many-arguments, too-many-locals, too-many-statements, too-many-branches
 
@@ -145,12 +147,12 @@ def add_vertical_barrier(t_events, close, num_bars=0, **time_delta_kwargs):
     :param num_bars: (int) Number of bars for vertical barrier (activity-based mode).
                      Takes precedence over time delta parameters when > 0.
     :param time_delta_kwargs: Time components for time-based barrier (mutually exclusive with num_bars):
-    - **days**: (int) Number of days
-    - **hours**: (int) Number of hours
-    - **minutes**: (int) Number of minutes
-    - **seconds**: (int) Number of seconds
-    :return: (pd.Series) Vertical barrier timestamps with same index as t_events.
-             Out-of-bound events return pd.NaT.
+    - **days** (int) Number of days
+    - **hours** (int) Number of hours
+    - **minutes** (int) Number of minutes
+    - **seconds** (int) Number of seconds
+    :return (pd.Series) Vertical barrier timestamps with same index as t_events.
+        Out-of-bound events return pd.NaT.
 
     Example:
         ### Activity-bar mode (tick/volume/dollar bars)
@@ -239,18 +241,18 @@ def get_events(
 
     # 3. Form events object, apply stop loss on vertical barrier
     if side_prediction is None:
-        side_ = pd.Series(1.0, index=target.index)
-        pt_sl_ = [pt_sl[0], pt_sl[0]]
+        side = pd.Series(1.0, index=target.index)
+        pt_sl = [pt_sl[0], pt_sl[0]]
     else:
-        side_ = side_prediction.reindex(target.index)  # Subset side_prediction on target index.
-        pt_sl_ = pt_sl[:2]
+        side = side_prediction.reindex(target.index)  # Subset side_prediction on target index.
+        pt_sl = pt_sl[:2]
 
     # Create a new df with [v_barrier, target, side] and drop rows that are NA in target
-    events = pd.concat({"t1": vertical_barrier_times, "trgt": target, "side": side_}, axis=1)
+    events = pd.concat({"t1": vertical_barrier_times, "trgt": target, "side": side}, axis=1)
     events = events.dropna(subset=["trgt"])
 
     # Apply Triple Barrier
-    first_touch_dates = apply_pt_sl_on_t1_optimized(close, events, pt_sl_)
+    first_touch_dates = apply_pt_sl_on_t1_optimized(close, events, pt_sl)
 
     events["t1"] = first_touch_dates.dropna(how="all").min(axis=1)  # pd.min ignores nan
 
@@ -355,8 +357,8 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False, pt_sl=No
 
     if vertical_barrier_zero:
         # Label 0 when vertical barrier reached
-        pt_sl_ = [1, 1] if pt_sl is None else [pt_sl[0], pt_sl[1]]
-        pt_sl = np.array(pt_sl_, dtype=float)
+        pt_sl = [1, 1] if pt_sl is None else [pt_sl[0], pt_sl[1]]
+        pt_sl = np.array(pt_sl, dtype=float)
         out_df["bin"] = barrier_touched(out_df["ret"].values, out_df["trgt"].values, pt_sl)
     else:
         # Label is the sign of the return
@@ -398,6 +400,7 @@ def drop_labels(triple_barrier_events, min_pct=0.05):
     return triple_barrier_events
 
 
+@cacheable
 def triple_barrier_labels(
     close: pd.Series,
     target: pd.Series,
@@ -472,9 +475,11 @@ def triple_barrier_labels(
         print(f"Sampled {n_events:,} of {N:,} ({n_events / N:.2%}).")
         print(f"Accuracy: {events.bin.value_counts(normalize=True)[1]:.2%}")
 
+    events = optimize_dtypes(events)
     return events
 
 
+@cacheable
 def get_event_weights(
     triple_barrier_events, close, time_decay=1.0, linear_decay=False, verbose=False
 ):
@@ -500,31 +505,34 @@ def get_event_weights(
         - **w**: Sample weights scaled by time-decay & return-weighted attribution
     """
     events = triple_barrier_events.copy()
+
     # Estimate the uniqueness of a triple_barrier_events
     num_conc_events = get_num_conc_events_optimized(close.index, events["t1"], verbose)
     av_uniqueness = get_av_uniqueness_from_triple_barrier_optimized(
+        events,
+        close.index,
+        num_conc_events,
+        verbose,
+    )
+    events["tW"] = av_uniqueness
+
+    # Sample weights by return-weighted attribution
+    events["w"] = get_weights_by_return_optimized(
         events,
         close,
         num_conc_events,
         verbose,
     )
 
-    # Sample weights scaled by time-decay & return-weighted attribution
-    return_weights = get_weights_by_return_optimized(
+    # Sample weights by time-decay
+    events["time_decay"] = get_weights_by_time_decay_optimized(
         events,
-        close,
-        num_conc_events,
-        verbose,
-    )
-    time_decay = get_weights_by_time_decay_optimized(
-        events,
-        close,
+        close.index,
         time_decay,
         linear_decay,
         av_uniqueness,
         verbose,
     )
 
-    events["tW"] = av_uniqueness
-    events["w"] = return_weights * time_decay
+    events = optimize_dtypes(events)
     return events
