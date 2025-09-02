@@ -1,10 +1,15 @@
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
 import talib
 
+from ..features.fracdiff import fracdiff_optimal
+from ..features.fractals import (
+    calculate_enhanced_fractals,
+    calculate_fractal_trend_features,
+)
 from ..labeling.trend_scanning import get_bins_from_trend
 from ..util.misc import optimize_dtypes
 
@@ -24,6 +29,7 @@ class ForexFeatureEngine:
         self,
         price_data: pd.DataFrame,
         volume_data: Optional[pd.Series] = None,
+        use_ffd: bool = False,
         additional_pairs: Optional[Dict[str, pd.DataFrame]] = None,
     ) -> pd.DataFrame:
         """
@@ -32,6 +38,7 @@ class ForexFeatureEngine:
         Parameters:
         price_data: DataFrame with OHLC columns
         volume_data: Series with volume data (if available, often limited in forex)
+        use_ffd: Return fractionally differentiated MA and Bollinger prices
         additional_pairs: Dict of related currency pair OHLC data for correlation features
 
         Returns:
@@ -40,16 +47,15 @@ class ForexFeatureEngine:
 
         features = pd.DataFrame(index=price_data.index)
         close = price_data["close"]
-        # high = price_data["high"]
-        # low = price_data["low"]
-        # open_price = price_data["open"]
+        if use_ffd:
+            self.close_ffd = fracdiff_optimal(close)[0]
 
         # Core MA Features
-        ma_features = self._calculate_ma_features(price_data)
+        ma_features = self._calculate_ma_features(price_data, use_ffd)
         features = pd.concat([features, ma_features], axis=1)
 
         # Volatility & Range Features (Critical for Forex)
-        vol_features = self._calculate_volatility_features(price_data)
+        vol_features = self._calculate_volatility_features(price_data, use_ffd)
         features = pd.concat([features, vol_features], axis=1)
 
         # Trend Strength Features
@@ -81,7 +87,9 @@ class ForexFeatureEngine:
 
         return features.fillna(method="ffill").fillna(0)
 
-    def _calculate_ma_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_ma_features(
+        self, price_data: pd.DataFrame, use_ffd: bool = False
+    ) -> pd.DataFrame:
         """Core moving average features optimized for forex"""
         close = price_data["close"]
         features = pd.DataFrame(index=close.index)
@@ -120,9 +128,16 @@ class ForexFeatureEngine:
             ma_alignment *= np.where(mas[ma_periods[i]] > mas[ma_periods[i + 1]], 1, -1)
         features["ma_ribbon_aligned"] = ma_alignment
 
+        # Use fractionally differenced prices
+        if use_ffd:
+            for period in ma_periods:
+                features[f"ma_{period}"] = self.close_ffd.rolling(period).mean()
+
         return features
 
-    def _calculate_volatility_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_volatility_features(
+        self, price_data: pd.DataFrame, use_ffd: bool = False
+    ) -> pd.DataFrame:
         """Volatility features critical for forex risk management"""
         features = pd.DataFrame(index=price_data.index)
 
@@ -152,15 +167,21 @@ class ForexFeatureEngine:
         features["hl_range_regime"] = features["hl_range"] / (features["hl_range_ma"] + 1e-8)
 
         # Bollinger Bands
-        bb = price_data.ta.bbands(length=20, std=2)
-        bb_std_val = bb["BBM_20_2.0"]
+        bb = ta.bbands(close, length=20, std=2)
         features = features.assign(
             bb_upper=bb["BBU_20_2.0"],
             bb_lower=bb["BBL_20_2.0"],
             bb_percent=bb["BBP_20_2.0"],
             bb_bandwidth=bb["BBB_20_2.0"],
         )
+        bb_std_val = bb["BBM_20_2.0"]
         features["bb_squeeze"] = bb_std_val / (bb_std_val.rolling(50).mean() + 1e-8)
+
+        # Use fractionally differenced prices
+        if use_ffd:
+            bb_ffd = ta.bbands(self.close_ffd, length=20, std=2)
+            features["bb_upper"] = bb_ffd["BBU_20_2.0"]
+            features["bb_lower"] = bb_ffd["BBL_20_2.0"]
 
         return features
 
@@ -181,14 +202,9 @@ class ForexFeatureEngine:
         features["efficiency_ratio_30"] = self._calculate_efficiency_ratio(close, 30)
 
         # Linear Regression Features
-        lr_features = self._calculate_linear_regression_features(close, period=(5, 200))
+        lr_features = self._calculate_linear_regression_features(close, period=(5, 100))
         for key, value in lr_features.items():
             features[key] = value
-
-        # for period in [20, 50]:
-        #     lr_features = self._calculate_linear_regression_features(close, period)
-        #     for key, value in lr_features.items():
-        #         features[f"{key}_{period}"] = value
 
         # Momentum Features
         features["roc_10"] = close.pct_change(10)
@@ -321,12 +337,16 @@ class ForexFeatureEngine:
         features = pd.DataFrame(index=index)
 
         # Basic time features
+        features["minute"] = index.minute
         features["hour"] = index.hour
         features["day_of_week"] = index.dayofweek
         features["day_of_month"] = index.day
         features["month"] = index.month
 
         # Cyclical encoding for continuous time features
+        if features["minute"].unique().size > 1:
+            features["minute_sin"] = np.sin(2 * np.pi * features["minute"] / 60)
+            features["minute_cos"] = np.cos(2 * np.pi * features["minute"] / 60)
         features["hour_sin"] = np.sin(2 * np.pi * features["hour"] / 24)
         features["hour_cos"] = np.cos(2 * np.pi * features["hour"] / 24)
         features["day_sin"] = np.sin(2 * np.pi * features["day_of_week"] / 7)
@@ -401,18 +421,18 @@ class ForexFeatureEngine:
         return direction / (volatility + 1e-8)
 
     def _calculate_linear_regression_features(
-        self, close: pd.Series, period: int
+        self, close: pd.Series, period: Tuple[int]
     ) -> Dict[str, pd.Series]:
         lr_results = get_bins_from_trend(
-            close, span=period, volatility_threshold=0.1, lookforward=False
+            close, span=period, volatility_threshold=0.3, lookforward=False
         )
         if lr_results.shape[1] > 0:
-            lr_results = lr_results[["slope", "rsquared", "t_value"]]
+            lr_results = lr_results[["window", "rsquared", "t_value"]]
         else:
             lr_results = pd.DataFrame(
-                0, index=close.index, columns=["slope", "rsquared", "t_value"]
+                0, index=close.index, columns=["window", "rsquared", "t_value"]
             )
-        lr_results.columns = [f"lr_{col}" for col in lr_results.columns]
+        lr_results.columns = [f"trend_{col}" for col in lr_results.columns]
         return lr_results.to_dict(orient="series")
 
     def _calculate_hh_ll_count(self, high: pd.Series, low: pd.Series, period: int) -> pd.Series:
@@ -421,25 +441,20 @@ class ForexFeatureEngine:
         ll = (low < low.shift(1)).rolling(period).sum()
         return hh - ll  # Positive = more higher highs, Negative = more lower lows
 
-    def _calculate_fractals(self, price: pd.Series, type_: str, n: int = 2) -> pd.Series:
-        """Simple fractal calculation"""
-        if type_ == "high":
-            fractals = (price == price.rolling(2 * n + 1, center=True).max()).astype(int)
-        else:  # low
-            fractals = (price == price.rolling(2 * n + 1, center=True).min()).astype(int)
-        return fractals
-
-        # In your feature engineering
-
     def _calculate_enhanced_fractal_features(self, price_data: pd.DataFrame):
         high = price_data["high"]
         low = price_data["low"]
-
-        fractal_features = calculate_enhanced_fractals(high, low)
+        close = price_data["close"]
 
         # Fractal-based trend confirmation
-        close = price_data["close"]
         features = pd.DataFrame(index=price_data.index)
+        fractal_features = calculate_enhanced_fractals(high, low, close)
+        fractal_trend_features = calculate_fractal_trend_features(
+            close,
+            fractal_features["fractal_breakout_up"],
+            fractal_features["fractal_breakout_down"],
+        )
+        features = features.join(pd.DataFrame(fractal_trend_features))
 
         features["fractal_trend_confirmation"] = np.where(
             fractal_features["valid_fractal_high"] == 1,
@@ -464,40 +479,6 @@ class ForexFeatureEngine:
         )
 
         return features
-
-
-def calculate_enhanced_fractals(high: pd.Series, low: pd.Series, n: int = 2) -> pd.DataFrame:
-    """
-    Enhanced fractal detection with strength measurement
-    """
-    # Basic fractal patterns
-    fractal_high = (high == high.rolling(2 * n + 1, center=True).max()).astype(int)
-    fractal_low = (low == low.rolling(2 * n + 1, center=True).min()).astype(int)
-
-    # Fractal strength (how much higher/lower than surrounding fractals)
-    fractal_high_strength = np.where(
-        fractal_high == 1, high / high.rolling(2 * n + 1, center=True).mean() - 1, 0
-    )
-
-    fractal_low_strength = np.where(
-        fractal_low == 1, 1 - low / low.rolling(2 * n + 1, center=True).mean(), 0
-    )
-
-    # Fractal validation (volume/volatility confirmation could be added)
-    valid_fractal_high = (fractal_high == 1) & (fractal_high_strength > 0.002)  # 0.2% threshold
-    valid_fractal_low = (fractal_low == 1) & (fractal_low_strength > 0.002)
-
-    return pd.DataFrame(
-        {
-            "fractal_high": fractal_high,
-            "fractal_low": fractal_low,
-            "fractal_high_strength": fractal_high_strength,
-            "fractal_low_strength": fractal_low_strength,
-            "valid_fractal_high": valid_fractal_high.astype(int),
-            "valid_fractal_low": valid_fractal_low.astype(int),
-        },
-        index=high.index,
-    )
 
 
 # Example usage
@@ -527,6 +508,9 @@ if __name__ == "__main__":
     print(f"\nFeature columns:")
     for i, col in enumerate(features.columns):
         print(f"{i+1:2d}. {col}")
+
+    print(f"\nSample of first 5 rows and 10 columns:")
+    print(features.iloc[:5, :10].round(4))
 
     print(f"\nSample of first 5 rows and 10 columns:")
     print(features.iloc[:5, :10].round(4))
