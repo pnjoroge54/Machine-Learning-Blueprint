@@ -7,6 +7,7 @@ Handles both Numba JIT compilation caching and function result caching.
 
 import json
 import os
+import pickle
 import threading
 from collections import defaultdict
 from functools import wraps
@@ -149,7 +150,7 @@ memory = Memory(location=str(CACHE_DIRS["joblib"]), verbose=0)
 
 def cacheable(func):
     """
-    Simple cacheable decorator with hit/miss tracking.
+    Enhanced cacheable decorator with corruption handling.
     Use this for expensive computational functions.
     """
     func_name = f"{func.__module__}.{func.__qualname__}"
@@ -174,7 +175,33 @@ def cacheable(func):
             if sig:
                 seen_signatures.add(sig)
 
-        return cached_func(*args, **kwargs)
+        # Try cached function with error handling
+        try:
+            return cached_func(*args, **kwargs)
+        except (EOFError, pickle.PickleError, OSError) as e:
+            # Cache corruption detected
+            logger.warning("Cache corruption for {}: {} - recomputing", func_name, type(e).__name__)
+
+            # Clear the corrupted cache entry
+            try:
+                cache_key = cached_func._get_cache_id(*args, **kwargs)
+                cache_dir = Path(cached_func.store_backend.location)
+
+                # Remove files matching this cache key
+                for cache_file in cache_dir.rglob("*"):
+                    if cache_file.is_file() and str(cache_key) in str(cache_file):
+                        cache_file.unlink()
+                        logger.debug("Removed corrupted file: {}", cache_file.name)
+
+            except Exception:
+                pass  # If clearing fails, just continue
+
+            # Execute function directly
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Other unexpected errors
+            logger.error("Unexpected cache error for {}: {}", func_name, e)
+            return func(*args, **kwargs)
 
     wrapper._afml_cacheable = True
     return wrapper
@@ -292,7 +319,22 @@ def initialize_cache_system():
 
 
 # =============================================================================
-# 9) EXPORTS
+# 9) IMPORT SELECTIVE CLEANER FUNCTIONS (after everything else is defined)
+# =============================================================================
+
+# Import selective cleaner functions after all the base components are defined
+from .selective_cleaner import (
+    cache_maintenance,
+    clear_changed_features_functions,
+    clear_changed_labeling_functions,
+    clear_changed_ml_functions,
+    get_function_tracker,
+    selective_cache_clear,
+    smart_cacheable,
+)
+
+# =============================================================================
+# 10) EXPORTS
 # =============================================================================
 
 __all__ = [
@@ -312,4 +354,12 @@ __all__ = [
     "clear_afml_cache",
     # Directory info
     "CACHE_DIRS",
+    # NEW: Selective cache management
+    "selective_cache_clear",
+    "smart_cacheable",
+    "cache_maintenance",
+    "get_function_tracker",
+    "clear_changed_ml_functions",
+    "clear_changed_labeling_functions",
+    "clear_changed_features_functions",
 ]

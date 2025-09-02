@@ -76,7 +76,7 @@ class AFMLApplication:
         core_modules = ["data_structures", "util"]
         logger.info("Preloading core modules...")
 
-        loaded = afml.preload_modules(*core_modules)
+        loaded = afml.preload_ml_modules(*core_modules)
         self.loaded_modules.extend(loaded.keys())
         logger.debug(f"Loaded core modules: {list(loaded.keys())}")
 
@@ -85,7 +85,7 @@ class AFMLApplication:
         logger.info(f"Loading module group: {group_name}")
 
         try:
-            loaded = afml.load_module_group(group_name, fail_fast=False)
+            loaded = afml.preload_heavy_modules(group_name)
             self.loaded_modules.extend(loaded.keys())
             logger.debug(f"Loaded from {group_name}: {list(loaded.keys())}")
         except ValueError as e:
@@ -101,7 +101,7 @@ class AFMLApplication:
         # Skip test modules and any problematic modules
         skip_prefixes = ["afml.tests", "afml.test_", "afml.examples"]
 
-        afml.init_cache_plugins(skip_prefixes=skip_prefixes)
+        afml.initialize_cache_system()
         self.cache_initialized = True
         logger.debug("Caching system initialized")
 
@@ -139,7 +139,7 @@ class AFMLApplication:
         logger.debug("Verifying startup integrity...")
 
         # Basic checks
-        loaded_count = len(afml.get_loaded_modules())
+        loaded_count = len(afml.get_loaded_heavy_modules())
         if loaded_count == 0:
             raise RuntimeError("No modules were loaded successfully")
 
@@ -159,7 +159,7 @@ class AFMLApplication:
         }
 
         if self.cache_initialized:
-            cache_stats = afml.get_cache_performance_summary()
+            cache_stats = afml.get_cache_summary()
             stats["cacheable_functions"] = cache_stats.get("functions_tracked", 0)
 
         logger.info(f"Startup performance: {stats}")
@@ -170,7 +170,7 @@ class AFMLApplication:
 
     def preload_additional(self, *module_names: str):
         """Preload additional modules after startup"""
-        loaded = afml.preload_modules(*module_names)
+        loaded = afml.preload_heavy_modules(*module_names)
         self.loaded_modules.extend(loaded.keys())
         return loaded
 
@@ -178,12 +178,10 @@ class AFMLApplication:
         """Get current application status"""
         return {
             "startup_time": self.startup_time,
-            "modules_loaded": len(afml.get_loaded_modules()),
+            "modules_loaded": len(afml.get_loaded_heavy_modules()),
             "cache_enabled": self.cache_initialized,
-            "cache_stats": (
-                afml.get_cache_performance_summary() if self.cache_initialized else None
-            ),
-            "loaded_modules": afml.get_loaded_modules(),
+            "cache_stats": (afml.get_cache_summary() if self.cache_initialized else None),
+            "loaded_modules": afml.get_loaded_heavy_modules(),
         }
 
 

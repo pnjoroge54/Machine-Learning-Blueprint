@@ -15,15 +15,22 @@ from loguru import logger
 from .cache import (
     CACHE_DIRS,
     CacheAnalyzer,
+    cache_maintenance,
     cache_stats,
     cacheable,
     clear_afml_cache,
     clear_cache_stats,
+    clear_changed_features_functions,
+    clear_changed_labeling_functions,
+    clear_changed_ml_functions,
     get_cache_hit_rate,
     get_cache_stats,
     get_cache_summary,
+    get_function_tracker,
     initialize_cache_system,
     memory,
+    selective_cache_clear,
+    smart_cacheable,
 )
 
 # =============================================================================
@@ -248,30 +255,44 @@ def cache_status() -> str:
     return " | ".join(status_parts)
 
 
-def cache_info():
-    """Print detailed cache information."""
-    print("AFML Cache System Status")
-    print("=" * 50)
+def smart_cache_clear(modules: str = None, dry_run: bool = False):
+    """
+    Intelligently clear cache for changed functions.
 
-    # Cache directories
-    print("\nCache Directories:")
-    for name, path in CACHE_DIRS.items():
-        size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) if path.exists() else 0
-        print(f"  {name:>10}: {path} ({size/1024/1024:.1f} MB)")
+    Args:
+        modules: Module name to check (e.g., 'labeling', 'features')
+        dry_run: If True, only report what would be cleared
 
-    # Statistics
-    summary = get_cache_summary()
-    print(f"\nCache Performance:")
-    print(f"  Overall hit rate: {summary['hit_rate']:.1%}")
-    print(f"  Total calls: {summary['total_calls']:,}")
-    print(f"  Functions tracked: {summary['functions_tracked']}")
+    Examples:
+        smart_cache_clear('labeling')  # Clear changed labeling functions
+        smart_cache_clear(dry_run=True)  # See what would be cleared
+    """
+    if modules:
+        module_name = f"afml.{modules}" if not modules.startswith("afml.") else modules
+        result = selective_cache_clear(modules=[module_name], dry_run=dry_run)
+    else:
+        result = selective_cache_clear(dry_run=dry_run)
 
-    # Module status
-    loaded = get_loaded_heavy_modules()
-    print(f"\nModule Status:")
-    print(f"  Heavy modules loaded: {len(loaded)}/{len(HEAVY_MODULES)}")
-    if loaded:
-        print(f"  Loaded: {', '.join(loaded)}")
+    if not dry_run and result["cleared"]:
+        logger.info("Smart cache clear completed - cleared {} functions", len(result["cleared"]))
+
+    return result
+
+
+def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days: int = 30):
+    """
+    Perform intelligent cache maintenance.
+
+    Args:
+        auto_clear: Automatically clear changed functions
+        max_size_mb: Maximum cache size in MB
+        max_age_days: Remove cache files older than this
+    """
+    logger.info("Running cache maintenance...")
+    report = cache_maintenance(
+        auto_clear_changed=auto_clear, max_cache_size_mb=max_size_mb, max_age_days=max_age_days
+    )
+    return report
 
 
 # =============================================================================
@@ -281,11 +302,11 @@ def cache_info():
 __version__ = "1.0.0"
 __author__ = "AFML Team"
 
-# Clean __all__ - only essential items
 __all__ = [
     # Cache system
     "memory",
     "cacheable",
+    "smart_cacheable",  # NEW
     "get_cache_hit_rate",
     "get_cache_stats",
     "clear_cache_stats",
@@ -304,7 +325,15 @@ __all__ = [
     "get_loaded_heavy_modules",
     # Utilities
     "cache_status",
-    "cache_info",
+    # NEW: Smart cache management
+    "smart_cache_clear",
+    "maintain_cache",
+    "selective_cache_clear",
+    "cache_maintenance",
+    "clear_changed_ml_functions",
+    "clear_changed_labeling_functions",
+    "clear_changed_features_functions",
+    "get_function_tracker",  # Updated from function_tracker
     # Lightweight modules (directly imported)
     "data_structures",
     "util",
@@ -333,10 +362,6 @@ __all__ = [
 # 9) STARTUP
 # =============================================================================
 
-logger.info(
-    "AFML v{} ready - {} heavy modules available for lazy loading", __version__, len(HEAVY_MODULES)
-)
-logger.debug("Cache status: {}", cache_status())
 logger.info(
     "AFML v{} ready - {} heavy modules available for lazy loading", __version__, len(HEAVY_MODULES)
 )
