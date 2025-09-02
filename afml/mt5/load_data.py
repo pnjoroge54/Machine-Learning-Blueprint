@@ -448,77 +448,6 @@ def load_tick_data(
         return pd.DataFrame()
 
 
-# --- Main Execution Block ---
-if __name__ == "__main__":
-    MAJORS = [
-        "EURUSD",
-        "USDJPY",
-        "GBPUSD",
-        "USDCHF",
-        "AUDUSD",
-        "USDCAD",
-        "NZDUSD",
-        "XAUUSD",
-    ]
-
-    CRYPTO = [
-        "ADAUSD",
-        "BTCUSD",
-        "DOGUSD",
-        "ETHUSD",
-        "LNKUSD",
-        "LTCUSD",
-        "XLMUSD",
-        "XMRUSD",
-        "XRPUSD",
-    ]
-
-    # --- 1. User Configuration ---
-    CONFIG = {
-        "save_path": Path.home() / "tick_data_parquet",
-        "symbols_to_download": CRYPTO[3:],
-        "account_to_use": "FundedNext_STLR2_6K",  # This name MUST match the one used in your environment variables
-        "start_date": "2022-01-01",
-        "end_date": "2024-12-31",
-        "verbose_login": True,
-    }
-
-    # --- 2. Setup Logging ---
-    # Configure logger to output to console and a file for persistent records.
-    log_path = CONFIG["save_path"] / "data_download.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # The default logger is console-only. Add a file sink.
-    logger.add(
-        log_path,
-        rotation="10 MB",
-        retention="30 days",
-        level="INFO",
-        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    )
-    logger.info("--- Starting New Data Download Session ---")
-
-    # --- 3. Login to MT5 ---
-    logged_in_account = login_mt5(account=CONFIG["account_to_use"], verbose=CONFIG["verbose_login"])
-
-    # --- 4. Run Downloader ---
-    if logged_in_account:
-        save_data_to_parquet(
-            path=CONFIG["save_path"],
-            symbols=CONFIG["symbols_to_download"],
-            start_date=CONFIG["start_date"],
-            end_date=CONFIG["end_date"],
-            account_name=logged_in_account,
-        )
-
-        # --- 6. Shutdown MT5 Connection ---
-        mt5.shutdown()
-        logger.info("--- MT5 Connection Closed. Session End ---")
-
-    else:
-        logger.critical("Could not log in to MetaTrader 5. Aborting all operations.")
-
-
 def clean_tick_data(
     df: pd.DataFrame, timezone: str = "UTC", min_spread: float = 1e-5
 ) -> Optional[pd.DataFrame]:
@@ -585,3 +514,74 @@ def clean_tick_data(
         return None
 
     return df
+
+
+# --- Main Execution Block ---
+if __name__ == "__main__":
+    MAJORS = [
+        "EURUSD",
+        "USDJPY",
+        "GBPUSD",
+        "USDCHF",
+        "AUDUSD",
+        "USDCAD",
+        "NZDUSD",
+        "XAUUSD",
+    ]
+
+    CRYPTO = [
+        "ADAUSD",
+        "BTCUSD",
+        "DOGUSD",
+        "ETHUSD",
+        "LNKUSD",
+        "LTCUSD",
+        "XLMUSD",
+        "XMRUSD",
+        "XRPUSD",
+    ]
+
+    # --- 1. User Configuration ---
+    CONFIG = {
+        "save_path": Path.home() / "tick_data_parquet",
+        "symbols_to_download": MAJORS + CRYPTO,
+        "account_to_use": "FundedNext_STLR2_6K",  # This name MUST match the one used in your environment variables
+        "start_date": "2022-01-01",
+        "end_date": "2024-12-31",
+        "verbose_login": True,
+    }
+
+    # --- 2. Setup Logging ---
+    # Configure logger to output to console and a file for persistent records.
+    log_path = CONFIG["save_path"] / "data_download.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # The default logger is console-only. Add a file sink.
+    logger.add(
+        log_path,
+        rotation="10 MB",
+        retention="30 days",
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    )
+    logger.info("--- Starting New Data Download Session ---")
+
+    # --- 3. Login to MT5 ---
+    logged_in_account = login_mt5(account=CONFIG["account_to_use"], verbose=CONFIG["verbose_login"])
+
+    # --- 4. Run Downloader ---
+    if logged_in_account:
+        save_data_to_parquet(
+            path=CONFIG["save_path"],
+            symbols=CONFIG["symbols_to_download"],
+            start_date=CONFIG["start_date"],
+            end_date=CONFIG["end_date"],
+            account_name=logged_in_account,
+        )
+
+        # --- 6. Shutdown MT5 Connection ---
+        mt5.shutdown()
+        logger.info("--- MT5 Connection Closed. Session End ---")
+
+    else:
+        logger.critical("Could not log in to MetaTrader 5. Aborting all operations.")
