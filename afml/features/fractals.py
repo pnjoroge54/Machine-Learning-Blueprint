@@ -432,9 +432,7 @@ def get_fractal_features(
     for data in features.values():
         features_df.update(data)
 
-    # Drop b/c valid_fractal_high is a volatility-filtered version of fractal_high, etc.
     features_df = pd.DataFrame(features_df)
-    features_df.drop(columns=["fractal_high", "fractal_low"], inplace=True)
     return features_df
 
 
