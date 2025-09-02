@@ -2,17 +2,18 @@ import pandas as pd
 import pandas_ta as ta
 import talib
 
+from ..cache import smart_cacheable
 from ..features.moving_averages import calculate_ma_differences
 from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
 from ..util.volatility import get_period_vol, get_yang_zhang_vol
 
 
-def create_bollinger_features(data, lookback_window=10, bb_period=20, bb_std=2):
+@smart_cacheable
+def create_bollinger_features(df, lookback_window=10, bb_period=20, bb_std=2):
     """
     Create features for meta-labeling model
     """
-    df = data.copy()
     features = pd.DataFrame(index=df.index)
 
     features["rel_spread"] = df["spread"] / df["close"]

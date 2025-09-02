@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from numba import njit, prange
 
+from ..cache import smart_cacheable
+
 
 @njit(parallel=True, cache=True)
 def _window_stats_numba(y, window_length):
@@ -63,6 +65,7 @@ def _window_stats_numba(y, window_length):
     return t_values, slopes, r_squared
 
 
+@smart_cacheable
 def get_bins_from_trend(
     close: pd.Series,
     span: Union[List[int], Tuple[int, int]] = (5, 20),
@@ -209,7 +212,7 @@ def get_bins_from_trend(
             "ret": rets,
             "bin": np.where(np.abs(opt_tval) > 1e-6, np.sign(opt_tval), 0).astype("int8"),
         },
-        index=pd.Index(valid_indices, name="time"),
+        index=pd.Index(valid_indices),
     )
 
     # Clip t-values as before
@@ -220,6 +223,7 @@ def get_bins_from_trend(
     return df
 
 
+@smart_cacheable
 def get_trend_scanning_meta_labels(
     close: pd.Series,
     side_prediction: pd.Series,
@@ -279,7 +283,7 @@ def get_trend_scanning_meta_labels(
         (trend_events["side"] == trend_events["bin"]) & (trend_events["side"] != 0), 1, 0
     ).astype("int8")
 
-    return trend_events[["t1", "ret", "bin", "side"]]
+    return trend_events
 
 
 def plot_trend_labels(close, trend_labels, title="Trend Labels", view="bin"):

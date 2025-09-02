@@ -12,7 +12,7 @@ from loguru import logger
 from numba import njit, prange
 from statsmodels.tsa.stattools import adfuller
 
-from ..cache import cacheable
+from ..cache import smart_cacheable
 
 
 @njit(cache=True)
@@ -73,7 +73,7 @@ def _frac_diff_numba_core(series_values, weights, skip):
     return output_values
 
 
-@cacheable
+@smart_cacheable
 def frac_diff(series, d, thres=0.01, use_log=True):
     """
     Advances in Financial Machine Learning, Chapter 5, section 5.5, page 82.
@@ -213,7 +213,7 @@ def _frac_diff_ffd_numba_core(series_values, weights, skip):
     return arr[skip:]
 
 
-@cacheable
+@smart_cacheable
 def frac_diff_ffd(series, d, thres=1e-5, use_log=True):
     """
     Advances in Financial Machine Learning, Chapter 5, section 5.5, page 83.
@@ -311,7 +311,7 @@ def adf_data(df1, df2, d=0, out_df=None, alpha=0.05):
     return out_df
 
 
-@cacheable
+@smart_cacheable
 def fracdiff_optimal(
     series, fixed_width=True, alpha=0.05, max_d=1.0, tol=1e-3, use_log=True, verbose=False
 ):
@@ -455,6 +455,7 @@ def fracdiff_optimal(
         )
         logger.info(msg)
 
+    diff_adf.index = diff_adf.index.round(4)  # Round index to match with d
     return out_df, d, diff_adf
 
 

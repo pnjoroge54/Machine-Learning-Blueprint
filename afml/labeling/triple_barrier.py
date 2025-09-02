@@ -9,16 +9,12 @@ import numpy as np
 import pandas as pd
 from numba import njit, prange
 
-from ..cache import cacheable
-from ..sample_weights.optimized_attribution import (
-    get_weights_by_return_optimized,
-    get_weights_by_time_decay_optimized,
-)
+from ..cache import smart_cacheable
+from ..sample_weights.optimized_attribution import get_weights_by_return_optimized
 from ..sampling.optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,
     get_num_conc_events_optimized,
 )
-from ..util.misc import optimize_dtypes
 
 # pylint: disable=invalid-name, too-many-arguments, too-many-locals, too-many-statements, too-many-branches
 
@@ -400,7 +396,7 @@ def drop_labels(triple_barrier_events, min_pct=0.05):
     return triple_barrier_events
 
 
-@cacheable
+@smart_cacheable
 def triple_barrier_labels(
     close: pd.Series,
     target: pd.Series,
@@ -475,14 +471,11 @@ def triple_barrier_labels(
         print(f"Sampled {n_events:,} of {N:,} ({n_events / N:.2%}).")
         print(f"Accuracy: {events.bin.value_counts(normalize=True)[1]:.2%}")
 
-    events = optimize_dtypes(events)
     return events
 
 
-@cacheable
-def get_event_weights(
-    triple_barrier_events, close, time_decay=1.0, linear_decay=False, verbose=False
-):
+@smart_cacheable
+def get_event_weights(triple_barrier_events, close, verbose=False):
     """
     :param triple_barrier_events: (pd.DataFrame) Triple-barrier events DataFrame with the following structure:
     - **index**: pd.DatetimeIndex of event start times
@@ -493,13 +486,6 @@ def get_event_weights(
     - **side**: (pd.Series, optional) Algo's position side
     :param close: (pd.Series) Close prices
     :param verbose: (bool) Log outputs if True.
-    :param time_decay: (float) Decay factor
-        - decay = 1 means there is no time decay
-        - 0 < decay < 1 means that weights decay linearly over time, but every observation still receives a strictly positive weight, regardless of how old
-        - decay = 0 means that weights converge linearly (exponenentially) to zero, as they become older
-        - decay < 0 means that the oldest portion c of the observations receive zero weight (i.e they are erased from memory)
-    :param linear_decay: (bool) If True, linear decay is applied, else exponential decay
-    :param verbose: (bool) Log outputs if True.
     :return: (pd.DataFrame) Events DataFrame with additional columns:
         - **tW**: Average uniqueness of the event (time-weighted)
         - **w**: Sample weights scaled by time-decay & return-weighted attribution
@@ -508,13 +494,12 @@ def get_event_weights(
 
     # Estimate the uniqueness of a triple_barrier_events
     num_conc_events = get_num_conc_events_optimized(close.index, events["t1"], verbose)
-    av_uniqueness = get_av_uniqueness_from_triple_barrier_optimized(
+    events["tW"] = get_av_uniqueness_from_triple_barrier_optimized(
         events,
         close.index,
         num_conc_events,
         verbose,
     )
-    events["tW"] = av_uniqueness
 
     # Sample weights by return-weighted attribution
     events["w"] = get_weights_by_return_optimized(
@@ -524,15 +509,4 @@ def get_event_weights(
         verbose,
     )
 
-    # Sample weights by time-decay
-    events["time_decay"] = get_weights_by_time_decay_optimized(
-        events,
-        close.index,
-        time_decay,
-        linear_decay,
-        av_uniqueness,
-        verbose,
-    )
-
-    events = optimize_dtypes(events)
     return events
