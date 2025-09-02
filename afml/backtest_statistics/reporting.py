@@ -1,9 +1,11 @@
 import re
 from collections import namedtuple
+from pathlib import Path
 from typing import List
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 from matplotlib import pyplot as plt
 from PIL import Image, ImageDraw, ImageFont
 from sklearn.metrics import (
@@ -16,37 +18,52 @@ from sklearn.metrics import (
 )
 
 
-def meta_labelling_reports(y_test, w_test, pred, prob, plot_roc=False):
+def meta_labelling_reports(model_data, plot_roc=False):
     """
-    Generate meta-labeling report for both tick and time bar features.
+    Generate meta-labeling report for primary strategy and meta-model.
+
+    In meta-labeling framework:
+    - Primary model generates signals (when to trade)
+    - Meta-model filters signals (which trades to take)
+    - Evaluation focuses on primary model's signal periods
 
     Args:
-        model_template: Classifier to be used for meta-labeling.
-        y_test: True labels for the test set.
-        w_test: Sample weights for the test set.
-        pred: Predictions from the meta-model.
-        prob: Predicted probabilities from the meta-model.
+        model_data: Object containing test data and predictions with attributes:
+            - y_test: True labels (whether primary signals were profitable)
+            - pred: Meta-model predictions (filtered signals)
+            - prob: Meta-model predicted probabilities
+            - primary_signals: Primary strategy signals (Bollinger, MA, etc.)
+            - w_test: Sample weights (optional)
         plot_roc: If True, plots the ROC curve.
+
     Returns: None
     """
-    print("Primary-Model on Validation Set:")
+    y_test, pred, prob = (
+        model_data.y_test,
+        model_data.pred,
+        model_data.prob,
+    )
+    # 1. Evaluate Primary Model Performance
+    print("\nPRIMARY MODEL PERFORMANCE:")
+    print("-" * 53)
+
     pred0 = np.ones_like(y_test)  # primary model predicts all signals as true
-    w_test = w_test if np.unique(w_test).size > 1 else None
-    print(classification_report(y_test, pred0, sample_weight=w_test))
+    print(classification_report(y_test, pred0))
     print("\nConfusion Matrix:")
-    cm = confusion_matrix(y_test, pred0, sample_weight=w_test)
+    cm = confusion_matrix(y_test, pred0)
     print(cm)
 
-    print("\nMeta-Model on Validation Set:")
-    print(classification_report(y_test, pred, sample_weight=w_test))
+    print(f"\nMETA-MODEL PERFORMANCE:")
+    print("-" * 53)
+    print(classification_report(y_test, pred))
     print("\nConfusion Matrix:")
-    cm = confusion_matrix(y_test, pred, sample_weight=w_test)
+    cm = confusion_matrix(y_test, pred)
     print(cm)
 
     # Plot ROC curve
     if plot_roc:
-        fpr, tpr, _ = roc_curve(y_test, prob, sample_weight=w_test)
-        roc_auc = roc_auc_score(y_test, prob, sample_weight=w_test)
+        fpr, tpr, _ = roc_curve(y_test, prob)
+        roc_auc = roc_auc_score(y_test, prob)
 
         plt.figure(figsize=(7.5, 5), dpi=100)
         plt.plot(fpr, tpr, label=f"ROC Curve (AUC = {roc_auc:.2f})", color="blue")
@@ -64,13 +81,11 @@ def compare_confusion_matrices(
     cm0 = confusion_matrix(
         model_data_1.y_test,
         model_data_1.pred,
-        sample_weight=model_data_1.w_test,
         normalize=normalize,
     )
     cm1 = confusion_matrix(
         model_data_2.y_test,
         model_data_2.pred,
-        sample_weight=model_data_2.w_test,
         normalize=normalize,
     )
     if not titles:
@@ -92,17 +107,28 @@ def compare_confusion_matrices(
 
 
 def compare_roc_curves(
-    model_data_1: namedtuple, model_data_2: namedtuple, titles: List[str] = None
+    model_data: List[namedtuple],
+    titles: List[str] = None,
+    fig_title: str = None,
+    columns: int = 1,
+    height: float = 5,
 ):
-    fig, axes = plt.subplots(nrows=1, ncols=2, sharey=True, figsize=(7.5, 5), dpi=100)
+    n = len(model_data)
     if not titles:
-        titles = [""] * 2
+        titles = [""] * n
+
+    nrows = int(np.ceil(n / columns))
+    sharex = True if nrows <= 2 else False
+    fig, ax = plt.subplots(
+        nrows, ncols=columns, sharex=sharex, sharey=True, figsize=(7.5, height), dpi=100
+    )
+    ax = ax.flatten()
 
     # Plot ROC curve
-    for data, ax, title in zip((model_data_1, model_data_2), axes, titles):
+    for data, ax, title in zip((model_data), ax, titles):
         # Compute ROC curve
-        fpr, tpr, _ = roc_curve(data.y_test, data.prob, sample_weight=data.w_test)
-        auc = roc_auc_score(data.y_test, data.prob, sample_weight=data.w_test)
+        fpr, tpr, _ = roc_curve(data.y_test, data.prob)
+        auc = roc_auc_score(data.y_test, data.prob)
         ax.plot(fpr, tpr, label=f"ROC Curve (AUC = {auc:.2f})", color="blue")
         ax.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Random Chance")
         ax.set_xlabel("False Positive Rate")
@@ -112,6 +138,11 @@ def compare_roc_curves(
 
     plt.style.use("dark_background")
     plt.tight_layout()
+
+    if fig_title:
+        fig.suptitle(fig_title, fontsize=13)
+        plt.subplots_adjust(top=0.9)
+
     return fig
 
 
@@ -122,6 +153,7 @@ def create_classification_report_image(
     title="Classification Report",
     output_filename="classification_report.png",
     display=True,
+    verbose=False,
 ):
     """
     Generates a classification report and saves it as a well-formatted PNG image.
@@ -135,22 +167,20 @@ def create_classification_report_image(
         display (bool): If True, displays the image after saving.
     """
     # Set image title
-    if "classification report" not in title.lower():
-        title = "Classification Report: " + title.strip().replace(":", "-")
-    else:
-        title = title.strip()
+    title = title.strip()
 
     # --- 1. Generate Classification Report as a string ---
     report_str = classification_report(y_true, y_pred, target_names=target_names)
     cm = confusion_matrix(y_true, y_pred)
     accuracy = accuracy_score(y_true, y_pred)
 
-    print("Classification Report (as text):")
-    print(report_str)
-    print("\nConfusion Matrix:")
-    print(cm)
-    print("\nAccuracy:")
-    print(accuracy)
+    if verbose:
+        print("Classification Report (as text):")
+        print(report_str)
+        print("\nConfusion Matrix:")
+        print(cm)
+        print("\nAccuracy:")
+        print(accuracy)
 
     # --- 2. Render the Report to an Image with a Tabular Format ---
 
@@ -182,7 +212,21 @@ def create_classification_report_image(
     lines = [line for line in lines if line.strip()]
 
     header_parts = lines[0].split()
-    data_rows_raw = [re.split(r"\s{2,}", line.strip()) for line in lines[1:]]
+
+    # CHANGE 1: Enhanced parsing to handle decimal support values and round them
+    data_rows_raw = []
+    for line in lines[1:]:
+        parts = re.split(r"\s{2,}", line.strip())
+        if parts:  # Only process non-empty splits
+            # Round support values (last column) to 2 decimal places if it's a number
+            if len(parts) >= 4:  # Has support column
+                try:
+                    support_val = float(parts[-1])
+                    parts[-1] = f"{support_val:.0f}"
+                except ValueError:
+                    # Keep original if not a number (e.g., headers or text)
+                    pass
+            data_rows_raw.append(parts)
 
     # Split data rows into per-class metrics and summary metrics
     summary_index = -1
@@ -202,25 +246,35 @@ def create_classification_report_image(
     labels = [row[0] for row in data_rows_raw]
     data_values = [row[1:] for row in data_rows_raw]
 
-    # Calculate column widths to ensure perfect alignment
-    col_widths = [font_data.getlength(label) for label in labels]
+    # CHANGE 2: Improved column width calculation to handle decimal numbers properly
+    col_widths = []
+    for label in labels:
+        col_widths.append(font_data.getlength(str(label)))
+
     # Account for header parts too
     for i, h in enumerate(header_parts):
-        if font_data.getlength(h) > col_widths[i]:
-            col_widths[i] = font_data.getlength(h)
+        if i < len(col_widths) and font_data.getlength(str(h)) > col_widths[i]:
+            col_widths[i] = font_data.getlength(str(h))
 
     # Find the max width for the label column
-    label_col_width = max([font_data.getlength(label) for label in labels])
+    label_col_width = max([font_data.getlength(str(label)) for label in labels])
 
-    # Calculate x positions for each column
+    # CHANGE 3: More robust x position calculation that accounts for all data values
     x_positions = [padding + label_col_width + col_margin]
-    for i in range(len(header_parts)):
-        # Safely get max width by checking if the row has a value at index i
-        current_col_width = max(
-            [font_data.getlength(header_parts[i])]
-            + [font_data.getlength(row[i]) for row in data_values if i < len(row)]
-        )
-        x_positions.append(x_positions[-1] + current_col_width + col_margin)
+
+    # Calculate width needed for each data column
+    column_widths = []
+    for col_idx in range(len(header_parts)):
+        max_width = font_data.getlength(str(header_parts[col_idx]))  # Start with header width
+
+        # Check all data values in this column
+        for row in data_values:
+            if col_idx < len(row):
+                width = font_data.getlength(str(row[col_idx]))
+                max_width = max(max_width, width)
+
+        column_widths.append(max_width)
+        x_positions.append(x_positions[-1] + max_width + col_margin)
 
     # Calculate the image height with new sections
     total_height = int(
@@ -241,6 +295,9 @@ def create_classification_report_image(
         font_data.getbbox("A")[3] - font_data.getbbox("A")[1]
     ) + line_spacing  # for accuracy value
 
+    # Add extra height for the empty row before accuracy
+    total_height += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + line_spacing
+
     img_width = int(x_positions[-1] + padding)
     img_height = total_height
     img = Image.new("RGB", (img_width, img_height), color=bg_color)
@@ -253,11 +310,14 @@ def create_classification_report_image(
 
     # Draw the table headers
     y_pos += (font_header.getbbox("A")[3] - font_header.getbbox("A")[1]) + 10
-    x_pos = padding + label_col_width + col_margin
 
-    for h in header_parts:
+    # Draw headers with appropriate alignment
+    for i, h in enumerate(header_parts):
+        if h == "support":  # Right-align support header
+            x_pos = x_positions[i + 1] - font_data.getlength(h)
+        else:  # Left-align other headers
+            x_pos = x_positions[i]
         draw.text((x_pos, y_pos), h, font=font_data, fill=header_color)
-        x_pos += font_data.getlength(h) + col_margin
 
     # Draw a horizontal line under the header
     draw.line(
@@ -276,41 +336,49 @@ def create_classification_report_image(
 
     # Draw the per-class data rows
     for i, row in enumerate(class_data):
+        # Left-align class label
         draw.text((padding, y_pos), row[0], font=font_data, fill=data_color)
-        x_pos = padding + label_col_width + col_margin
+
+        # Draw data columns with appropriate alignment
         for j, col in enumerate(row[1:]):
+            if j == len(row[1:]) - 1:  # Support column (last column) - right align
+                x_pos = x_positions[j + 1] - font_data.getlength(str(col))
+            else:  # Other columns - left align
+                x_pos = x_positions[j]
             draw.text((x_pos, y_pos), col, font=font_data, fill=data_color)
-            x_pos += font_data.getlength(header_parts[j]) + col_margin
+
         y_pos += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + line_spacing
 
-    # Add a blank line for spacing
-    y_pos += line_spacing
+    # Add empty row after per-class data (before summary metrics)
+    y_pos += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + line_spacing
 
-    # Draw the summary data rows
+    # Draw the summary data rows (accuracy, macro avg, weighted avg)
     for i, row in enumerate(summary_data):
+        # Left-align summary label
         draw.text((padding, y_pos), row[0], font=font_data, fill=data_color)
-        x_pos = padding + label_col_width + col_margin
+
         # Special handling for 'accuracy' row to align with 'f1-score' and 'support'
         if row[0] == "accuracy":
             f1_score_col_index = header_parts.index("f1-score")
             support_col_index = header_parts.index("support")
 
-            # Draw accuracy value in the f1-score column
-            x_pos_f1_score = padding + label_col_width + col_margin
-            for j in range(f1_score_col_index):
-                x_pos_f1_score += font_data.getlength(header_parts[j]) + col_margin
+            # Draw accuracy value in the f1-score column (left-aligned)
+            x_pos_f1_score = x_positions[f1_score_col_index]
             draw.text((x_pos_f1_score, y_pos), row[1], font=font_data, fill=data_color)
 
-            # Draw total support in the support column
-            x_pos_support = padding + label_col_width + col_margin
-            for j in range(support_col_index):
-                x_pos_support += font_data.getlength(header_parts[j]) + col_margin
+            # Draw total support in the support column (right-aligned)
+            x_pos_support = x_positions[support_col_index + 1] - font_data.getlength(row[2])
             draw.text((x_pos_support, y_pos), row[2], font=font_data, fill=data_color)
 
         else:
+            # Draw other summary rows with appropriate alignment
             for j, col in enumerate(row[1:]):
+                if j == len(row[1:]) - 1:  # Support column - right align
+                    x_pos = x_positions[j + 1] - font_data.getlength(str(col))
+                else:  # Other columns - left align
+                    x_pos = x_positions[j]
                 draw.text((x_pos, y_pos), col, font=font_data, fill=data_color)
-                x_pos += font_data.getlength(header_parts[j]) + col_margin
+
         y_pos += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + line_spacing
 
     # Draw Confusion Matrix
@@ -318,8 +386,37 @@ def create_classification_report_image(
     draw.text((padding, y_pos), "Confusion Matrix", font=font_data, fill=header_color)
     y_pos += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + line_spacing
 
+    # Draw confusion matrix with proper spacing alignment
+    # Find the maximum width needed for each column to align properly
+    max_val_width = 0
     for row in cm:
-        draw.text((padding, y_pos), str(row), font=font_data, fill=data_color)
+        for val in row:
+            val_width = font_data.getlength(str(val))
+            max_val_width = max(max_val_width, val_width)
+
+    # Add some padding between columns
+    col_spacing = font_data.getlength("  ")  # Two spaces
+
+    for row in cm:
+        # Start with opening bracket
+        cm_line = "["
+
+        # Add each value with right-alignment within its allocated width
+        for i, val in enumerate(row):
+            val_str = str(val)
+            if i > 0:  # Add spacing between values
+                cm_line += " "
+
+            # Right-align each number within the max width
+            spaces_needed = max_val_width - font_data.getlength(val_str)
+            spaces_count = int(spaces_needed / font_data.getlength(" "))
+            cm_line += " " * spaces_count + val_str
+
+        # Close with bracket
+        cm_line += "]"
+
+        # Draw the complete line
+        draw.text((padding, y_pos), cm_line, font=font_data, fill=data_color)
         y_pos += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + line_spacing
 
     # Draw Accuracy
@@ -333,4 +430,26 @@ def create_classification_report_image(
     if display:
         img.show()
 
-    print(f"\nSuccessfully generated and saved '{output_filename}'")
+    logger.info(f"Successfully generated and saved '{output_filename}'")
+
+
+def meta_labelling_classification_reports(model_data, titles, output_filenames, path):
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    for data, title, fname in zip(model_data, titles, output_filenames):
+        create_classification_report_image(
+            y_true=data.y_test,
+            y_pred=np.ones_like(data.pred),
+            title=f"{title} Primary Model",
+            output_filename=path / f"{fname}_primary_clf_report.png",
+            display=False,
+        )
+        create_classification_report_image(
+            y_true=data.y_test,
+            y_pred=data.pred,
+            title=f"{title} Meta-Model",
+            output_filename=path / f"{fname}_meta_clf_report.png",
+            display=False,
+        )
+    logger.info("Classification reports saved.")
