@@ -3,10 +3,9 @@ import asyncio
 import numpy as np
 
 from ..data_structures.bars import make_bars
-from util.constants import DATA_PATH
-from mt5.get_data import load_tick_data
-
 from ..labeling.triple_barrier import triple_barrier_labels
+from ..mt5.load_data import load_tick_data
+from ..util.constants import DATA_PATH
 
 
 class BacktestHook:
