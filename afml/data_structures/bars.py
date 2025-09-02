@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..cache import cacheable
+from ..cache import smart_cacheable
 from ..util.misc import (
     flatten_column_names,
     log_df_info,
@@ -11,7 +11,7 @@ from ..util.misc import (
 )
 
 
-@cacheable
+@smart_cacheable
 def calculate_ticks_per_period(
     df: pd.DataFrame,
     timeframe: str = "M1",
@@ -116,7 +116,7 @@ def _make_bar_type_grouper(
     return df.groupby(bar_id), bar_size
 
 
-@cacheable
+@smart_cacheable
 def make_bars(
     tick_df: pd.DataFrame,
     bar_type: str = "tick",
