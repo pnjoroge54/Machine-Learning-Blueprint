@@ -536,3 +536,80 @@ def markdown_to_notebook(markdown_content, output_filename="AFML Experiments.ipy
 
     print(f"Notebook saved as {output_filename}")
     return output_filename
+
+
+#  --- String Formatting ---
+
+
+def to_subscript(text):
+    subscript_chars = {
+        # Numbers
+        "0": "₀",
+        "1": "₁",
+        "2": "₂",
+        "3": "₃",
+        "4": "₄",
+        "5": "₅",
+        "6": "₆",
+        "7": "₇",
+        "8": "₈",
+        "9": "₉",
+        # Mathematical operators
+        "+": "₊",
+        "-": "₋",
+        "=": "₌",
+        "(": "₍",
+        ")": "₎",
+        # Latin letters
+        "a": "ₐ",
+        "e": "ₑ",
+        "h": "ₕ",
+        "i": "ᵢ",
+        "j": "ⱼ",
+        "k": "ₖ",
+        "l": "ₗ",
+        "m": "ₘ",
+        "n": "ₙ",
+        "o": "ₒ",
+        "p": "ₚ",
+        "r": "ᵣ",
+        "s": "ₛ",
+        "t": "ₜ",
+        "u": "ᵤ",
+        "v": "ᵥ",
+        "x": "ₓ",
+        # Greek letters (only those with actual Unicode subscripts)
+        "β": "ᵦ",  # Beta - this one exists
+        "γ": "ᵧ",  # Gamma - this one exists
+        "ρ": "ᵨ",  # Rho - this one exists
+        "φ": "ᵩ",  # Phi - this one exists
+        "χ": "ᵪ",  # Chi - this one exists
+        # Note: δ, α, σ, λ, μ, τ, θ, ε, ψ don't have Unicode subscripts
+    }
+
+    return "".join(subscript_chars.get(char, char) for char in str(text))
+
+
+def smart_subscript(base, subscript):
+    """
+    Smart subscript formatting with fallback options
+    """
+    # Try Unicode subscript first
+    unicode_result = to_subscript(subscript)
+
+    # For letters without subscript equivalents, return original
+    if unicode_result == subscript and any(char in subscript for char in "δασλμτθεψ"):
+        unicode_result = f"{base}_{subscript}"  # Fallback notation
+    else:
+        unicode_result = f"{base}{unicode_result}"
+
+    # For display contexts that support it
+    latex_result = f"${base}_{{{subscript}}}$"
+    html_result = f"{base}<sub>{subscript}</sub>"
+
+    return {
+        "unicode": unicode_result,
+        "latex": latex_result,
+        "html": html_result,
+        "plain": f"{base}_{subscript}",  # Fallback
+    }
