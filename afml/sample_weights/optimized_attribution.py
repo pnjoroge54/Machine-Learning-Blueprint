@@ -436,8 +436,8 @@ def get_weights_by_time_decay_optimized(
             close_series_index,
             verbose=verbose,
         )
-    else:
-        av_uniqueness = av_uniqueness.copy()
+    elif isinstance(av_uniqueness, pd.Series):
+        av_uniqueness = av_uniqueness.to_frame()
 
     # Extract and sort weights by time
     weights = av_uniqueness["tW"].sort_index()

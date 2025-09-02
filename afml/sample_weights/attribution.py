@@ -147,8 +147,9 @@ def get_weights_by_time_decay(
         av_uniqueness = get_av_uniqueness_from_triple_barrier(
             triple_barrier_events, close_series, num_threads, verbose=verbose
         )
-    else:
-        av_uniqueness = av_uniqueness.copy()
+    elif isinstance(av_uniqueness, pd.Series):
+        av_uniqueness = av_uniqueness.to_frame()
+
     decay_w = av_uniqueness["tW"].sort_index().cumsum()
 
     if linear:
