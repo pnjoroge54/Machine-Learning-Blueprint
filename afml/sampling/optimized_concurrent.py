@@ -355,7 +355,10 @@ def get_av_uniqueness_from_triple_barrier_optimized(
     def process_concurrent_events(ce):
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
-        return ce.reindex(close_series.index).fillna(0)
+        ce = ce.reindex(close_series_index).fillna(0)
+        if isinstance(ce, pd.Series):
+            ce = ce.to_frame()
+        return ce
 
     # Handle num_conc_events (whether provided or computed)
     if num_conc_events is None:
@@ -371,7 +374,7 @@ def get_av_uniqueness_from_triple_barrier_optimized(
         processed_ce = process_concurrent_events(num_conc_events.copy())
 
     # Verify index compatibility
-    missing_in_close = processed_ce.index.difference(close_series.index)
+    missing_in_close = processed_ce.index.difference(close_series_index)
     assert (
         missing_in_close.empty
     ), f"num_conc_events contains {len(missing_in_close)} indices not in close_series"

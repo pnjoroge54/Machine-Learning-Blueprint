@@ -4,7 +4,7 @@ Logic regarding concurrent labels from chapter 4.
 
 import pandas as pd
 
-from ..cache import cacheable
+from ..cache import smart_cacheable
 from ..util.multiprocess import mp_pandas_obj
 
 
@@ -64,7 +64,7 @@ def _get_average_uniqueness(label_endtime, num_conc_events, molecule):
     return wght
 
 
-@cacheable
+@smart_cacheable
 def get_num_conc_events(events, close, num_threads=4, verbose=True):
     num_conc_events = mp_pandas_obj(
         num_concurrent_events,
@@ -77,7 +77,7 @@ def get_num_conc_events(events, close, num_threads=4, verbose=True):
     return num_conc_events
 
 
-@cacheable
+@smart_cacheable
 def get_av_uniqueness_from_triple_barrier(
     triple_barrier_events, close_series, num_threads, num_conc_events=None, verbose=True
 ):
@@ -96,8 +96,12 @@ def get_av_uniqueness_from_triple_barrier(
 
     # Create processing pipeline for num_conc_events
     def process_concurrent_events(ce):
+        """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
-        return ce.reindex(close_series.index).fillna(0)
+        ce = ce.reindex(close_series.index).fillna(0)
+        if isinstance(ce, pd.Series):
+            ce = ce.to_frame()
+        return ce
 
     # Handle num_conc_events (whether provided or computed)
     if num_conc_events is None:

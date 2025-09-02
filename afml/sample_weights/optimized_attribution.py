@@ -308,13 +308,16 @@ def get_weights_by_return_optimized(
     def process_concurrent_events(ce):
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
-        return ce.reindex(close_series.index).fillna(0)
+        ce = ce.reindex(close_series.index).fillna(0)
+        if isinstance(ce, pd.Series):
+            ce = ce.to_frame()
+        return ce
 
     # Handle num_conc_events (whether provided or computed)
     if num_conc_events is None:
         # Compute concurrent events using optimized function
         num_conc_events = get_num_conc_events_optimized(
-            triple_barrier_events, close_series.index, verbose
+            close_series.index, triple_barrier_events["t1"], verbose
         )
         processed_ce = process_concurrent_events(num_conc_events)
     else:
