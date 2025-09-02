@@ -28,6 +28,7 @@ from .returns import (
     get_return_dist_features,
     rolling_autocorr_numba,
 )
+from .stationary import is_stationary
 from .time import (
     encode_cyclical_features,
     get_time_features,
