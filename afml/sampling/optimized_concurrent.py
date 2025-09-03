@@ -292,7 +292,7 @@ def get_av_uniqueness_from_triple_barrier_optimized(
     triple_barrier_events,
     close_series,
     num_conc_events=None,
-    verbose=True,
+    verbose=False,
 ):
     """
     Optimized orchestrator for deriving average sample uniqueness from triple barrier events.
@@ -321,7 +321,7 @@ def get_av_uniqueness_from_triple_barrier_optimized(
         Close prices
     num_conc_events : pd.Series, optional
         Precomputed concurrent events count. If None, will be computed.
-    verbose : bool, default=True
+    verbose : bool, default=False
         Report progress on parallel jobs
 
     Returns:
