@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 from numba import njit, prange
 
 from ..cache import smart_cacheable
@@ -32,7 +33,7 @@ def apply_pt_sl_on_t1_optimized(close, events, pt_sl):
     Mainly it returns a DataFrame of timestamps regarding the time when the first barriers were reached.
 
     :param close: (pd.Series) Close prices
-    :param events: (pd.Series) Indices that signify "events" (see cusum_filter function for more details)
+    :param events: (pd.DataFrame) Indices that signify "events" (see cusum_filter function for more details)
     :param pt_sl: (list) Element 0, indicates the profit taking level; Element 1 is stop loss level
     :return: (pd.DataFrame) Timestamps of when first barrier was touched
     """
@@ -249,7 +250,6 @@ def get_events(
 
     # Apply Triple Barrier
     first_touch_dates = apply_pt_sl_on_t1_optimized(close, events, pt_sl)
-
     events["t1"] = first_touch_dates.dropna(how="all").min(axis=1)  # pd.min ignores nan
 
     if side_prediction is None:
@@ -390,7 +390,7 @@ def drop_labels(triple_barrier_events, min_pct=0.05):
         if df0.min() > min_pct or df0.shape[0] < 3:
             break
 
-        print(f"dropped label: {df0.idxmin()} - {df0.min():.4%}")
+        logger.info(f"dropped label: {df0.idxmin()} - {df0.min():.4%}")
         triple_barrier_events = triple_barrier_events[triple_barrier_events["bin"] != df0.idxmin()]
 
     return triple_barrier_events
