@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from numba import njit, prange
+from scipy.stats import t
 
 from ..cache import smart_cacheable
 
@@ -66,7 +67,7 @@ def _window_stats_numba(y, window_length):
 
 
 @smart_cacheable
-def get_bins_from_trend(
+def trend_scanning_labels(
     close: pd.Series,
     span: Union[List[int], Tuple[int, int]] = (5, 20),
     volatility_threshold: float = 0.1,
@@ -144,8 +145,8 @@ def get_bins_from_trend(
 
     # Log transformation
     if use_log:
-        close_processed = close.clip(lower=1e-8)
-        y = np.log(close_processed).values.astype(np.float64)
+        close_processed = close.clip(lower=1e-8).astype(np.float64)
+        y = np.log(close_processed).values
     else:
         y = close.values.astype(np.float64)
 
@@ -199,7 +200,15 @@ def get_bins_from_trend(
 
     # Map to timestamps and returns
     t1_arr = close.index[t1_idx]
-    rets = close.iloc[t1_idx].values / close.iloc[event_idx].values - 1
+    a, b = (event_idx, t1_idx) if lookforward else (t1_idx, event_idx)
+    rets = close.iloc[b].values / close.iloc[a].values - 1
+
+    # Filter labels by t-value
+    alpha = 0.05  # 95% confidence
+    t_critical = t.ppf(1 - alpha / 2, N - 1)  # two-tailed test
+    tval_abs = np.abs(opt_tval)
+    mask = (tval_abs > 1e-6) & (tval_abs > t_critical)
+    bins = np.where(mask, np.sign(opt_tval), 0).astype("int8")
 
     # Assemble DataFrame
     df = pd.DataFrame(
@@ -210,80 +219,17 @@ def get_bins_from_trend(
             "t_value": opt_tval,
             "rsquared": opt_rsq,
             "ret": rets,
-            "bin": np.where(np.abs(opt_tval) > 1e-6, np.sign(opt_tval), 0).astype("int8"),
+            "bin": bins,
         },
         index=pd.Index(valid_indices),
     )
 
     # Clip t-values as before
-    tVal_var = df["t_value"].var()
-    t_max = tVal_var if tVal_var < 20 else 20
+    tval_var = df["t_value"].var()
+    t_max = tval_var if tval_var < 20 else 20
     df["t_value"] = df["t_value"].clip(lower=-t_max, upper=t_max)
 
     return df
-
-
-@smart_cacheable
-def get_trend_scanning_meta_labels(
-    close: pd.Series,
-    side_prediction: pd.Series,
-    t_events: pd.DatetimeIndex,
-    span: Union[List[int], Tuple[int, int]] = (5, 20),
-    volatility_threshold: float = 0.1,
-    use_log: bool = True,
-    verbose: bool = False,
-) -> pd.DataFrame:
-    """
-    Generate meta-labels using trend-scanning labels and existing side predictions.
-
-    Parameters
-    ----------
-    close : pd.Series
-        Time-indexed price series.
-    side_prediction : pd.Series
-        Primary model's side predictions (1 for long, -1 for short).
-    t_events : pd.DatetimeIndex
-        Index of event start times to align with trend events.
-    span : Union[List[int], Tuple[int, int]], default=(5, 20)
-        Window span for trend scanning.
-    volatility_threshold : float, default=0.1
-        Volatility threshold for trend scanning.
-    use_log : bool, default=True
-        Use log prices for trend scanning.
-    verbose : bool, default=False
-        Verbosity flag.
-
-    Returns
-    -------
-    pd.DataFrame
-        Meta-labeled events with columns:
-        - t1: End time of trend
-        - ret: Return adjusted for side prediction
-        - bin: Meta-label (1 if correct prediction, 0 otherwise)
-        - side: Original side prediction
-    """
-    # Generate trend-scanning labels
-    trend_events = get_bins_from_trend(
-        close=close,
-        span=span,
-        volatility_threshold=volatility_threshold,
-        lookforward=True,
-        use_log=use_log,
-        verbose=verbose,
-    )
-    trend_events = trend_events.reindex(t_events.intersection(trend_events.index))
-
-    # Align side predictions with trend events
-    aligned_side = side_prediction.reindex(trend_events.index)
-
-    # Apply meta-labeling logic
-    trend_events["side"] = aligned_side
-    trend_events["ret"] *= trend_events["side"]  # Adjust returns for side
-    trend_events["bin"] = np.where(
-        (trend_events["side"] == trend_events["bin"]) & (trend_events["side"] != 0), 1, 0
-    ).astype("int8")
-
-    return trend_events
 
 
 def plot_trend_labels(close, trend_labels, title="Trend Labels", view="bin"):
