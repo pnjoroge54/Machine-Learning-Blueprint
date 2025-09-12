@@ -1,254 +1,222 @@
-import asyncio
+from typing import Dict, Tuple
 
 import numpy as np
+import pandas as pd
 
-from ..data_structures.bars import make_bars
-from ..labeling.triple_barrier import triple_barrier_labels
-from ..mt5.load_data import load_tick_data
-from ..util.constants import DATA_PATH
+from afml.backtest_statistics.performance_analysis import (
+    analyze_trading_behavior,
+    calculate_performance_metrics,
+)
 
 
-class BacktestHook:
+def backtest_model(
+    model,
+    X_test: pd.DataFrame,
+    close_prices: pd.Series,
+    initial_capital: float = 10000,
+    transaction_cost: float = 0.001,
+    position_sizing: str = "fixed",
+    max_position: float = 1.0,
+    risk_free_rate: float = 0.0,
+) -> Tuple[pd.DataFrame, Dict]:
     """
-    Base hook interface. Subclass and override any methods you need.
-    Hooks have a `priority` attribute—higher values run earlier.
+    Backtest a trained model on out-of-sample data.
+
+    Parameters:
+    model: Trained model (e.g., Random Forest)
+    X_test: Test features
+    close_prices: Series of close prices
+    initial_capital: Starting capital
+    transaction_cost: Transaction cost per trade (percentage)
+    position_sizing: 'fixed' or 'confidence'
+    max_position: Maximum position size
+    risk_free_rate: Annual risk-free rate for Sharpe ratio
+
+    Returns:
+    portfolio_history: DataFrame with portfolio values
+    metrics: Dictionary of performance metrics
     """
+    # Generate predictions
+    predictions = model.predict(X_test)
+    predictions = pd.Series(predictions, index=X_test.index)
 
-    priority = 0
+    # Get prediction probabilities if available
+    if hasattr(model, "predict_proba"):
+        confidence = model.predict_proba(X_test)[:, 1]  # Probability of positive class
+        confidence = pd.Series(confidence, index=X_test.index)
+    else:
+        confidence = pd.Series(1.0, index=X_test.index)
 
-    def before_strategy(self, df):
-        return df
+    # Calculate returns (current period, not forward-looking)
+    returns = close_prices.pct_change().reindex(X_test.index)
 
-    def after_strategy(self, strategy_df):
-        return strategy_df
+    # Create positions based on predictions and position sizing
+    positions = pd.Series(0, index=X_test.index)
 
-    def before_labeling(self, strategy_df, t_events):
-        return strategy_df, t_events
+    if position_sizing == "fixed":
+        # Convert predictions to directional signals if they aren't already
+        # Assuming predictions are probabilities, convert to signals
+        if predictions.min() >= 0 and predictions.max() <= 1:
+            # Predictions are probabilities, convert to signals
+            signals = np.where(predictions > 0.5, 1, -1)
+        else:
+            # Predictions are already signals
+            signals = predictions
+        positions = pd.Series(signals, index=X_test.index) * max_position
 
-    def after_labeling(self, labels):
-        return labels
+    elif position_sizing == "confidence":
+        # For confidence-based sizing, use probability * direction
+        if predictions.min() >= 0 and predictions.max() <= 1:
+            # Predictions are probabilities
+            signals = np.where(predictions > 0.5, 1, -1)
+            # Use confidence as position size
+            positions = pd.Series(signals, index=X_test.index) * confidence * max_position
+        else:
+            # Predictions are signals, use as-is
+            positions = predictions * confidence * max_position
+
+    # Calculate strategy returns (positions from previous period * current returns)
+    strategy_returns = (positions.shift(1) * returns).fillna(0)
+
+    # Apply transaction costs when position changes
+    position_changes = positions.diff().fillna(0)
+    transaction_costs = abs(position_changes) * transaction_cost
+    strategy_returns_net = strategy_returns - transaction_costs
+
+    # Calculate equity curve
+    equity_curve = (1 + strategy_returns_net.fillna(0)).cumprod() * initial_capital
+
+    # Create portfolio history
+    portfolio_history = pd.DataFrame(
+        {
+            "close": close_prices.reindex(X_test.index),
+            "position": positions,
+            "return": strategy_returns_net,
+            "equity": equity_curve,
+        }
+    )
+
+    # Calculate performance metrics
+    metrics = calculate_performance_metrics(
+        returns=strategy_returns_net,
+        data_index=X_test.index,
+        positions=positions,
+        trading_days_per_year=252,
+        trading_hours_per_day=24,
+    )
+
+    # Add custom metrics
+    metrics["final_capital"] = equity_curve.iloc[-1]
+    metrics["total_return"] = (equity_curve.iloc[-1] / initial_capital) - 1
+    metrics["sharpe_ratio_annualized"] = metrics["sharpe_ratio"]  # Already annualized
+    metrics["transaction_costs"] = transaction_costs.sum()
+
+    # Analyze trading behavior
+    trading_behavior = analyze_trading_behavior(positions, strategy_returns_net)
+    metrics.update(trading_behavior)
+
+    return portfolio_history, metrics
 
 
-# Hook registry and decorator
-HOOK_REGISTRY = []
-
-
-def register_hook(cls):
-    """Decorator to auto-register a hook class."""
-    inst = cls()
-    HOOK_REGISTRY.append(inst)
-    return cls
-
-
-# Unified (sync/async) hook runner
-async def _run_hook(hook, method_name, *args):
-    method = getattr(hook, method_name)
-    if asyncio.iscoroutinefunction(method):
-        return await method(*args)
-    return method(*args)
-
-
-def backtest_engine(
-    assets,
-    timeframes,
-    model_data_template,
-    func,
-    kargs,
-    target,
-    pt_sl,
-    hooks=None,
-    **label_kwargs,
-):
+def backtest_with_labeling(
+    labels: pd.DataFrame,
+    close_prices: pd.Series,
+    initial_capital: float = 10000,
+    transaction_cost: float = 0.001,
+) -> Dict:
     """
-    Synchronous backtest engine.
-    - `assets`: list of asset identifiers
-    - `timeframes`: list of timeframe strings
-    - `model_data_template`: dict with template metadata
-    - `func`: strategy function, signature func(data=df, **kargs)
-    - `kargs`: dict of strategy parameters
-    - `target`: pd.Series target volatility or returns
-    - `pt_sl`: tuple of (profit_taking, stop_loss)
-    - `hooks`: list of BacktestHook instances
-    - `label_kwargs`: passed to triple_barrier_labels
+    Backtest using the entry/exit points defined by labeling functions
+
+    Parameters:
+    labels: DataFrame from triple_barrier_labels or get_bins_from_trend
+    close_prices: Series of close prices
+    initial_capital: Starting capital
+    transaction_cost: Transaction cost per trade
+
+    Returns:
+    Dictionary with backtest results
     """
-    # Sort hooks by priority (descending)
-    hooks = sorted(hooks or [], key=lambda h: getattr(h, "priority", 0), reverse=True)
-    results = {}
+    # Extract trade information from labels
+    trade_entries = labels.index
+    trade_exits = labels["t1"]
+    trade_returns = labels["ret"]
+    trade_directions = labels.get("side", 1)  # Default to long if side not specified
 
-    # Variables needed for load_data function
-    global start_date
-    global end_date
-    global account
-    global bar_type
-    start_date = model_data_template["start_date"]
-    end_date = model_data_template["end_date"]
-    account = model_data_template["account"]
-    bar_type = model_data_template["bar_type"]
+    # Initialize tracking variables
+    equity_curve = pd.Series(initial_capital, index=close_prices.index)
+    current_capital = initial_capital
+    active_trades = {}
 
-    for asset in assets:
-        for tf in timeframes:
-            df = load_data(asset, tf)
-            model_data = dict(model_data_template, asset=asset, timeframe=tf)
+    # Create a position series for compatibility with performance metrics
+    positions = pd.Series(0, index=close_prices.index)
 
-            # pre‐strategy hooks
-            for hook in hooks:
-                df = hook.before_strategy(df)
+    # Process each trading period
+    for timestamp, price in close_prices.items():
+        # Check for new trade entries at this timestamp
+        if timestamp in trade_entries:
+            trade_idx = trade_entries.get_loc(timestamp)
+            exit_time = trade_exits.iloc[trade_idx]
+            trade_ret = trade_returns.iloc[trade_idx]
+            direction = trade_directions.iloc[trade_idx] if hasattr(trade_directions, "iloc") else 1
 
-            # run strategy
-            strategy_df = func(data=df, **kargs)
+            # Record this trade
+            active_trades[timestamp] = {
+                "exit_time": exit_time,
+                "expected_return": trade_ret,
+                "direction": direction,
+                "entry_price": price,
+            }
 
-            # post‐strategy hooks
-            for hook in hooks:
-                strategy_df = hook.after_strategy(strategy_df)
+            # Update positions
+            positions.loc[timestamp] = direction
 
-            # identify entries
-            side = strategy_df["side"]
-            entry_mask = side.notna() & (side != side.shift()) & (side != 0)
-            t_events = side[entry_mask].index
+        # Check for trade exits at this timestamp
+        trades_to_remove = []
+        for entry_time, trade_info in active_trades.items():
+            if timestamp >= trade_info["exit_time"]:
+                # Calculate actual return (might differ from expected due to execution)
+                exit_price = close_prices.loc[trade_info["exit_time"]]
+                actual_return = (exit_price / trade_info["entry_price"] - 1) * trade_info[
+                    "direction"
+                ]
 
-            # before‐labeling hooks
-            for hook in hooks:
-                strategy_df, t_events = hook.before_labeling(strategy_df, t_events)
+                # Apply transaction costs
+                actual_return_net = actual_return - transaction_cost * 2  # Entry and exit
 
-            # triple barrier labeling
-            labels = triple_barrier_labels(
-                close=strategy_df["close"],
-                t_events=t_events,
-                target=target,
-                pt_sl=pt_sl,
-                **label_kwargs,
-            )
+                # Update capital
+                current_capital *= 1 + actual_return_net
 
-            # after‐labeling hooks
-            for hook in hooks:
-                labels = hook.after_labeling(labels)
+                # Mark for removal
+                trades_to_remove.append(entry_time)
 
-            model_data["labels"] = labels
-            results[(asset, tf)] = model_data
+                # Update positions
+                positions.loc[timestamp] = 0
 
-    return results
+        # Remove completed trades
+        for entry_time in trades_to_remove:
+            del active_trades[entry_time]
 
+        # Update equity curve
+        equity_curve.loc[timestamp] = current_capital
 
-async def backtest_engine_async(
-    assets,
-    timeframes,
-    model_data_template,
-    func,
-    kargs,
-    target,
-    pt_sl,
-    hooks=None,
-    **label_kwargs,
-):
-    """
-    Asynchronous backtest engine.
-    Non‐blocking hooks (`async def`) run in parallel where possible.
-    """
-    hooks = sorted(hooks or [], key=lambda h: getattr(h, "priority", 0), reverse=True)
-    results = {}
+    # Calculate strategy returns from equity curve
+    strategy_returns = equity_curve.pct_change().fillna(0)
 
-    # Variables needed for load_data function
-    global start_date
-    global end_date
-    global account
-    start_date = model_data_template["start_date"]
-    end_date = model_data_template["end_date"]
-    account = model_data_template["account"]
+    # Calculate performance metrics
+    performance_metrics = calculate_performance_metrics(
+        returns=strategy_returns,
+        data_index=close_prices.index,
+        positions=positions,
+        trading_days_per_year=252,
+    )
 
-    for asset in assets:
-        for tf in timeframes:
-            df = load_data(asset, tf)
-            model_data = dict(model_data_template, asset=asset, timeframe=tf)
+    # Add trade-based metrics
+    performance_metrics["final_capital"] = equity_curve.iloc[-1]
+    performance_metrics["total_return"] = (equity_curve.iloc[-1] / initial_capital) - 1
 
-            # pre‐strategy hooks (sequential)
-            for hook in hooks:
-                df = await _run_hook(hook, "before_strategy", df)
-
-            strategy_df = func(data=df, **kargs)
-
-            # post‐strategy hooks
-            for hook in hooks:
-                strategy_df = await _run_hook(hook, "after_strategy", strategy_df)
-
-            side = strategy_df["side"]
-            entry_mask = side.notna() & (side != side.shift()) & (side != 0)
-            t_events = side[entry_mask].index
-
-            # before‐labeling hooks
-            for hook in hooks:
-                strategy_df, t_events = await _run_hook(
-                    hook, "before_labeling", strategy_df, t_events
-                )
-
-            labels = triple_barrier_labels(
-                close=strategy_df["close"],
-                t_events=t_events,
-                target=target,
-                pt_sl=pt_sl,
-                **label_kwargs,
-            )
-
-            # after‐labeling hooks (parallel)
-            await asyncio.gather(*[_run_hook(hook, "after_labeling", labels) for hook in hooks])
-
-            model_data["labels"] = labels
-            results[(asset, tf)] = model_data
-
-    return results
-
-
-# Example hooks
-
-
-@register_hook
-class VolumeFilterHook(BacktestHook):
-    priority = 10
-
-    def before_strategy(self, df):
-        """Filter out bars where tick_volume ≤ 10."""
-        return df[df["tick_volume"] >= 10]
-
-
-@register_hook
-class CleanDataHook(BacktestHook):
-    priority = 8
-
-    def before_strategy(self, df):
-        """Drop any NaNs or Inf before running strategy."""
-        return df.replace([np.inf, -np.inf], np.nan).dropna()
-
-
-@register_hook
-class EntryLoggerHook(BacktestHook):
-    priority = 5
-
-    def before_labeling(self, df, t_events):
-        print(f"[EntryLogger] {len(t_events):,} of {len(df):,} ({len(t_events) / len(df):.2%})")
-        return df, t_events
-
-
-@register_hook
-class MetricsHook(BacktestHook):
-    priority = 1
-
-    def after_labeling(self, labels):
-        print(f"[Metrics] total labels: {len(labels):,}")
-        print(f"Average uniqueness of labels is {events.tW.mean():.4f}.")
-        print(value_counts_data(events["bin"]))
-        print(f"Cumulative returns: {((1 + events.ret).cumprod() - 1)[-1]:.2%}")
-        print(
-            f"\nReturns skew: {events.ret.skew():.4f} \nReturns kurtosis: {events.ret.kurt():.4f}\n"
-        )
-
-        return labels
-
-
-# Placeholder functions—implement these to suit your environment
-def load_data(asset, timeframe):
-    """
-    Load and return a pandas.DataFrame for the given asset/timeframe.
-    Must contain at least 'close', 'side', and 'volume' columns.
-    """
-    tick_df = load_tick_data(DATA_PATH, asset, start_date, end_date, account, verbose=False)
-    df = make_bars(tick_df, bar_type, timeframe=timeframe, verbose=False)
-    return df
+    return {
+        "equity_curve": equity_curve,
+        "positions": positions,
+        "returns": strategy_returns,
+        "performance_metrics": performance_metrics,
+    }

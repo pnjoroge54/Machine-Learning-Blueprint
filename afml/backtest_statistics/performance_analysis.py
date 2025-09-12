@@ -1,15 +1,11 @@
-import itertools
-import sys
 import warnings
-from datetime import datetime
+from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
-from loguru import logger
-from numba import njit, prange
-from pytz import timezone
+from numba import njit
 from scipy.stats import kurtosis, skew
 
 from .statistics import (
@@ -17,11 +13,8 @@ from .statistics import (
     average_holding_period,
     drawdown_and_time_under_water,
     information_ratio,
-    probabilistic_sharpe_ratio,
     timing_of_flattening_and_flips,
 )
-
-# --- Helper Functions for Trade Analysis ---
 
 # Metrics where a lower value is preferable (e.g., risk, losses).
 lower_is_better = [
@@ -38,7 +31,10 @@ lower_is_better = [
 ]
 
 
-def _get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd.Series]:
+# --- Helper Functions for Trade Analysis ---
+
+
+def get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd.Series]:
     """
     Identifies individual trades from a positions series and calculates their
     compounded returns and holding durations.
@@ -76,7 +72,7 @@ def _get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd
         return pd.Series(trade_returns), pd.Series(trade_durations)
 
 
-@njit
+@njit(cache=True)
 def _get_trades_numba_core(returns, positions, trade_end_times):
     trade_returns = []
     trade_durations = []
@@ -213,8 +209,8 @@ def _calculate_trade_stats(
 # --- Helper Functions for General Metrics ---
 
 
-def _get_annualization_factors(
-    timeframe_str: Optional[str] = None,
+def get_annualization_factors(
+    timeframe: Optional[str] = None,
     data_index: Optional[pd.DatetimeIndex] = None,
     trading_days_per_year: int = 252,
     trading_hours_per_day: float = 6.5,
@@ -223,13 +219,13 @@ def _get_annualization_factors(
     Calculates the annualization factor (sqrt(N)) and periods per year (N).
 
     This function operates in one of two modes:
-    1.  **Explicit Calculation** (if `timeframe_str` is provided): For standard,
+    1.  **Explicit Calculation** (if `timeframe` is provided): For standard,
         time-based bars like 'D1', 'H4', 'M15'.
     2.  **Empirical Inference** (if `data_index` is provided): For non-standard
         bars (e.g., tick, volume, dollar) by analyzing the timestamps of the data.
 
     Args:
-        timeframe_str: The time-based frame string (e.g., 'M15', 'H4', 'D1').
+        timeframe: The time-based frame string (e.g., 'M15', 'H4', 'D1').
         data_index: The DatetimeIndex of the returns series.
         trading_days_per_year: Number of trading days in a year.
         trading_hours_per_day: Trading hours in a day.
@@ -238,16 +234,16 @@ def _get_annualization_factors(
         A tuple containing (annualization_factor, periods_per_year).
 
     Raises:
-        ValueError: If neither or both `timeframe_str` and `data_index` are provided.
+        ValueError: If neither or both `timeframe` and `data_index` are provided.
     """
-    if timeframe_str and data_index is not None:
-        raise ValueError("Provide either 'timeframe_str' or 'data_index', not both.")
-    if not timeframe_str and data_index is None:
-        raise ValueError("Either 'timeframe_str' or 'data_index' must be provided.")
+    if timeframe and data_index is not None:
+        raise ValueError("Provide either 'timeframe' or 'data_index', not both.")
+    if not timeframe and data_index is None:
+        raise ValueError("Either 'timeframe' or 'data_index' must be provided.")
 
     # Mode 1: Explicit calculation for standard time-based bars.
-    if timeframe_str:
-        timeframe = timeframe_str.upper()
+    if timeframe:
+        timeframe = timeframe.upper()
         # Extract the numeric part of the timeframe string, defaulting to 1 if none.
         numeric_val = int("".join(filter(str.isdigit, timeframe)) or 1)
 
@@ -303,7 +299,7 @@ def calculate_performance_metrics(
     data_index: pd.Index,
     positions: Optional[pd.Series] = None,
     trading_days_per_year: int = 252,
-    trading_hours_per_day: float = 6.5,
+    trading_hours_per_day: float = 24,
 ) -> dict:
     """
     Calculates a comprehensive set of performance metrics for a return series.
@@ -315,8 +311,8 @@ def calculate_performance_metrics(
     Args:
         returns: A Series of returns from individual trades.
         data_index: The index from the full data used.
-        positions: An optional Series of positions to enable trade-based analysis.
-        timeframe: An optional timeframe string (e.g., 'D1', 'H1') for annualization.
+        positions: An optional Series of positions (same index as returns)
+            to enable trade-based analysis.
         trading_days_per_year: The number of trading days in a year.
         trading_hours_per_day: The number of trading hours in a day.
 
@@ -324,10 +320,10 @@ def calculate_performance_metrics(
         A dictionary containing a wide range of performance metrics.
     """
     # --- Input Validation and Sanitization ---
-    if not isinstance(returns, pd.Series):
-        returns = pd.Series(returns)
-    if positions is not None and not isinstance(positions, pd.Series):
-        positions = pd.Series(positions, index=data_index).fillna(0)
+    if not returns.index.isin(data_index).all():
+        raise ValueError("Returns index must be fully contained within data index.")
+    if positions.index != returns.index:
+        raise ValueError("Positions must have the same index as returns.")
 
     # If data is too short or has no variance, return a dict of zeros.
     if len(returns) < 2 or returns.std() == 0:
@@ -366,7 +362,7 @@ def calculate_performance_metrics(
         return zero_metrics
 
     # --- Annualization ---
-    annualization_factor, periods_per_year = _get_annualization_factors(
+    annualization_factor, periods_per_year = get_annualization_factors(
         data_index=data_index,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
@@ -393,13 +389,6 @@ def calculate_performance_metrics(
     )
     skewness = skew(returns) if len(returns) > 3 else 0
     kurtosis_ = kurtosis(returns) if len(returns) > 3 else 0
-    psr = probabilistic_sharpe_ratio(
-        observed_sr=(returns.mean() / volatility),
-        benchmark_sr=0,
-        number_of_returns=len(returns),
-        skewness_of_returns=skewness,
-        kurtosis_of_returns=kurtosis_,
-    )
     positive_concentration, negative_concentration, time_concentration = all_bets_concentration(
         returns
     )
@@ -421,7 +410,6 @@ def calculate_performance_metrics(
         ),
         "skewness": skewness,
         "kurtosis": kurtosis_,
-        "probabilistic_sharpe_ratio": psr,
         "pos_concentration": positive_concentration,
         "neg_concentration": negative_concentration,
         "time_concentration": time_concentration,
@@ -449,14 +437,16 @@ def calculate_performance_metrics(
 
     # --- Trade Stats (if positions are provided) ---
     total_periods = len(data_index)
-    # bet_frequency = timing_of_flattening_and_flips(positions).shape[0]  # timestamps of bets
-    # metrics["bet_frequency"] = bet_frequency
-    # metrics["bets_per_year"] = int(
-    #     bet_frequency * (periods_per_year / total_periods) if total_periods > 0 else 0
-    # )
+
+    if positions:
+        metrics["avg_trade_duration"] = average_holding_period(positions)
+        bet_frequency = timing_of_flattening_and_flips(positions).shape[0]
+        metrics["bet_frequency"] = bet_frequency
+        metrics["bets_per_year"] = int(
+            bet_frequency * (periods_per_year / total_periods) if total_periods > 0 else 0
+        )
 
     trade_stats = _calculate_trade_stats(returns, periods_per_year, total_periods)
-    trade_stats["avg_trade_duration"] = average_holding_period(positions)
 
     side = positions.loc[returns.index]
     longs = (side > 0).sum()
@@ -468,12 +458,58 @@ def calculate_performance_metrics(
     return metrics
 
 
+def analyze_trading_behavior(positions: pd.Series, returns: pd.Series) -> dict:
+    """
+    Analyze trading behavior using flattening and flip points.
+
+    Parameters:
+    positions: Series of target positions
+    returns: Series of returns
+
+    Returns:
+    Dictionary with trading behavior metrics
+    """
+    # Get critical points
+    critical_points = timing_of_flattening_and_flips(positions)
+
+    # Classify points as flips or flattenings
+    flip_mask = positions.reindex(critical_points) != 0
+    flips = critical_points[flip_mask]
+    flattenings = critical_points[~flip_mask]
+
+    # Calculate returns around these points
+    pre_returns = []
+    post_returns = []
+
+    for point in critical_points:
+        if point in returns.index:
+            # Look at returns 5 periods before and after
+            pre_period = returns[returns.index < point].tail(5)
+            post_period = returns[returns.index > point].head(5)
+
+            if not pre_period.empty:
+                pre_returns.append(pre_period.mean())
+            if not post_period.empty:
+                post_returns.append(post_period.mean())
+
+    return {
+        "total_critical_points": len(critical_points),
+        "flip_count": len(flips),
+        "flattening_count": len(flattenings),
+        "avg_pre_critical_return": np.mean(pre_returns) if pre_returns else 0,
+        "avg_post_critical_return": np.mean(post_returns) if post_returns else 0,
+        "critical_points": critical_points,
+    }
+
+
+# --- Helper Functions for Meta-Labelling Analysis ---
+
+
 def evaluate_meta_labeling_performance(
     primary_signals: pd.Series,
-    meta_probabilities: Union[pd.Series, np.ndarray],
-    returns_data: pd.Series,
+    meta_probabilities: pd.Series,
+    returns: pd.Series,
     confidence_threshold: float = 0.5,
-    timeframe: Optional[str] = None,
     trading_days_per_year: int = 252,
     trading_hours_per_day: int = 24,
     strategy_name: str = "Strategy",
@@ -490,9 +526,8 @@ def evaluate_meta_labeling_performance(
     Args:
         primary_signals: A Series of trading signals from the primary model.
         meta_probabilities: A Series or array of probabilities from the meta-model.
-        returns_data: A Series of the underlying asset's returns.
+        returns: A Series of the underlying asset's returns.
         confidence_threshold: The minimum probability required to take a trade.
-        timeframe: The timeframe of the data, for annualization.
         trading_days_per_year: The number of trading days in a year.
         trading_hours_per_day: The number of trading hours per day.
         strategy_name: The name of the strategy for reporting.
@@ -502,7 +537,7 @@ def evaluate_meta_labeling_performance(
         their return series, and other comparison metadata.
     """
     # Align returns data with the signal index for accurate backtesting.
-    aligned_returns = returns_data.reindex(primary_signals.index, fill_value=0)
+    aligned_returns = returns.reindex(primary_signals.index, fill_value=0)
 
     # --- 1. Primary Strategy Performance ---
     primary_positions = primary_signals.copy()
@@ -513,12 +548,7 @@ def evaluate_meta_labeling_performance(
     meta_positions = primary_signals.copy()
 
     # Ensure probabilities are a Series aligned with the primary signals index.
-    if hasattr(meta_probabilities, "index"):
-        aligned_probs = meta_probabilities.reindex(primary_signals.index, fill_value=0.5)
-    else:
-        aligned_probs = pd.Series(
-            meta_probabilities, index=primary_signals.index[-len(meta_probabilities) :]
-        ).reindex(primary_signals.index, fill_value=0.5)
+    aligned_probs = meta_probabilities.reindex(primary_signals.index, fill_value=0.5)
 
     # Clip probabilities to avoid issues with log(0) or division by zero in z-score.
     adjusted_meta_prob = aligned_probs.clip(lower=1e-6, upper=1 - 1e-6)
@@ -542,18 +572,18 @@ def evaluate_meta_labeling_performance(
 
     # --- 3. Performance Calculation ---
     primary_metrics = calculate_performance_metrics(
-        primary_returns,
-        primary_positions,
-        timeframe,
-        trading_days_per_year,
-        trading_hours_per_day,
+        returns=primary_returns,
+        data_index=returns.index,
+        positions=primary_positions,
+        trading_days_per_year=trading_days_per_year,
+        trading_hours_per_day=trading_hours_per_day,
     )
     meta_metrics = calculate_performance_metrics(
-        meta_returns,
-        meta_positions,
-        timeframe,
-        trading_days_per_year,
-        trading_hours_per_day,
+        returns=meta_returns,
+        data_index=returns.index,
+        positions=meta_positions,
+        trading_days_per_year=trading_days_per_year,
+        trading_hours_per_day=trading_hours_per_day,
     )
 
     # --- 4. Meta-Specific Metrics ---
@@ -567,7 +597,7 @@ def evaluate_meta_labeling_performance(
 
     # Information Ratio: Measures the meta-model's ability to generate excess return per unit of tracking error.
     excess_returns = meta_returns - primary_returns.reindex(meta_returns.index, fill_value=0)
-    _, periods_per_year = _get_annualization_factors(
+    _, periods_per_year = get_annualization_factors(
         data_index=excess_returns.index,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
@@ -587,176 +617,199 @@ def evaluate_meta_labeling_performance(
     }
 
 
-def print_meta_labeling_comparison(results: dict):
+def print_meta_labeling_comparison(results: dict, save_path: str = None):
     """
-    Prints a comprehensive, formatted comparison of the primary strategy
+    Prints and optionally saves a comprehensive comparison of the primary strategy
     versus the meta-labeled strategy performance.
 
     Args:
-        results: The output dictionary from `evaluate_meta_labeling_performance`.
+        results: Output dictionary from `evaluate_meta_labeling_performance`
+        save_path: If provided, saves the output to this file path
     """
-    strategy_name = results["strategy_name"]
-    primary_metrics = results["primary_metrics"]
-    meta_metrics = results["meta_metrics"]
+    import io
+    from contextlib import redirect_stdout
 
-    print(f"\n{'='*100}")
-    print(f"Meta-Labeling Performance Analysis: {strategy_name}")
-    print(f"{'='*100}")
+    # Capture output in a string buffer
+    output_buffer = io.StringIO()
 
-    # --- Signal Filtering Summary ---
-    print(f"\nSignal Filtering Summary:")
-    print(f"  Total Primary Signals: {results['total_primary_signals']:,}")
-    print(f"  Filtered Signals: {results['filtered_signals']:,}")
-    print(f"  Filter Rate: {meta_metrics['signal_filter_rate']:,.2%}")
-    print(f"  Confidence Threshold: {meta_metrics['confidence_threshold']}")
+    with redirect_stdout(output_buffer):
+        strategy_name = results["strategy_name"]
+        primary_metrics = results["primary_metrics"]
+        meta_metrics = results["meta_metrics"]
 
-    # --- Core Performance Metrics Table ---
-    print(
-        f"\n{'CORE PERFORMANCE METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}"
-    )
-    print("=" * 75)
-    core_metrics = [
-        ("Total Return", "total_return", "%"),
-        ("Annualized Return", "annualized_return", "%"),
-        ("Sharpe Ratio", "sharpe_ratio", "4f"),
-        ("Sortino Ratio", "sortino_ratio", "4f"),
-        ("Calmar Ratio", "calmar_ratio", "4f"),
-        ("Information Ratio", "information_ratio", "4f"),
-    ]
-    for display_name, metric_key, fmt in core_metrics:
-        if metric_key in primary_metrics and metric_key in meta_metrics:
-            primary_val = primary_metrics.get(metric_key, 0)
-            meta_val = meta_metrics.get(metric_key, 0)
-            improvement = calculate_improvement(primary_val, meta_val, metric_key)
-            primary_str = f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
-            meta_str = f"{meta_val:,.2%}" if fmt == "%" else f"{meta_val:,.4f}"
-            improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
-            print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+        print(f"\n{'='*100}")
+        print(f"Meta-Labeling Performance Analysis: {strategy_name}")
+        print(f"{'='*100}")
 
-    # --- Risk Metrics Table ---
-    print(f"\n{'RISK METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}")
-    print("=" * 75)
-    risk_metrics = [
-        ("Max Drawdown", "max_drawdown", "%"),
-        ("Avg Drawdown", "avg_drawdown", "%"),
-        ("Volatility (Ann.)", "volatility", "4f"),
-        ("Downside Volatility", "downside_volatility", "4f"),
-        ("Ulcer Index", "ulcer_index", "4f"),
-        ("VaR (95%)", "var_95", "%"),
-        ("CVaR (95%)", "cvar_95", "%"),
-    ]
-    for display_name, metric_key, fmt in risk_metrics:
-        if metric_key in primary_metrics and metric_key in meta_metrics:
-            primary_val = primary_metrics.get(metric_key, 0)
-            meta_val = meta_metrics.get(metric_key, 0)
-            improvement = calculate_improvement(primary_val, meta_val, metric_key)
-            primary_str = f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
-            meta_str = f"{meta_val:,.2%}" if fmt == "%" else f"{meta_val:,.4f}"
-            improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
-            print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+        # --- Signal Filtering Summary ---
+        print(f"\nSignal Filtering Summary:")
+        print(f"  Total Primary Signals: {results['total_primary_signals']:,}")
+        print(f"  Filtered Signals: {results['filtered_signals']:,}")
+        print(f"  Filter Rate: {meta_metrics['signal_filter_rate']:,.2%}")
+        print(f"  Confidence Threshold: {meta_metrics['confidence_threshold']}")
 
-    # --- Trading Metrics Table ---
-    print(f"\n{'TRADING METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}")
-    print("=" * 75)
-    trading_metrics = [
-        ("Number of Trades", "num_trades", "0f"),
-        ("Trades per Year", "trades_per_year", "1f"),
-        ("Win Rate", "win_rate", "%"),
-        ("Avg Win", "avg_win", "%"),
-        ("Avg Loss", "avg_loss", "%"),
-        ("Best Trade", "best_trade", "%"),
-        ("Worst Trade", "worst_trade", "%"),
-        ("Profit Factor", "profit_factor", "2f"),
-        ("Expectancy", "expectancy", "%"),
-        ("Kelly Criterion", "kelly_criterion", "4f"),
-        ("Max Consecutive Wins", "consecutive_wins", "0f"),
-        ("Max Consecutive Losses", "consecutive_losses", "0f"),
-    ]
-    for display_name, metric_key, fmt in trading_metrics:
-        if metric_key in primary_metrics and metric_key in meta_metrics:
-            primary_val = primary_metrics[metric_key]
-            meta_val = meta_metrics[metric_key]
-            improvement = calculate_improvement(primary_val, meta_val, metric_key)
-
-            if fmt == "%":
-                primary_str, meta_str = f"{primary_val:,.2%}", f"{meta_val:,.2%}"
-            elif fmt == "0f":
-                primary_str, meta_str = f"{primary_val:,.0f}", f"{meta_val:,.0f}"
-            elif fmt == "1f":
-                primary_str, meta_str = f"{primary_val:,.1f}", f"{meta_val:,.1f}"
-            elif fmt == "2f":
-                primary_str, meta_str = f"{primary_val:,.2f}", f"{meta_val:,.2f}"
-            else:
-                primary_str, meta_str = f"{primary_val:,.4f}", f"{meta_val:,.4f}"
-
-            improvement_str = f"{improvement:+,.1f}%" if improvement != float("inf") else "N/A"
-            print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
-
-    # --- Distribution Metrics Table ---
-    print(
-        f"\n{'DISTRIBUTION METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}"
-    )
-    print("=" * 75)
-    dist_metrics = [("Skewness", "skewness", "4f"), ("Kurtosis", "kurtosis", "4f")]
-    for display_name, metric_key, fmt in dist_metrics:
-        if metric_key in primary_metrics and metric_key in meta_metrics:
-            primary_val = primary_metrics[metric_key]
-            meta_val = meta_metrics[metric_key]
-            improvement = calculate_improvement(primary_val, meta_val, metric_key)
-            primary_str = f"{primary_val:,.4f}"
-            meta_str = f"{meta_val:,.4f}"
-            improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
-            print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
-
-    # --- Summary Assessment ---
-    print(f"\n{'SUMMARY ASSESSMENT'}")
-    print("=" * 50)
-    key_improvements = []
-    if "sharpe_ratio" in meta_metrics and "sharpe_ratio" in primary_metrics:
-        sharpe_imp = calculate_improvement(
-            primary_metrics["sharpe_ratio"],
-            meta_metrics["sharpe_ratio"],
-            "sharpe_ratio",
+        # --- Core Performance Metrics Table ---
+        print(
+            f"\n{'CORE PERFORMANCE METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}"
         )
-        key_improvements.append(("Sharpe Ratio", sharpe_imp))
-    if "total_return" in meta_metrics and "total_return" in primary_metrics:
-        return_imp = calculate_improvement(
-            primary_metrics["total_return"],
-            meta_metrics["total_return"],
-            "total_return",
+        print("=" * 75)
+        core_metrics = [
+            ("Total Return", "total_return", "%"),
+            ("Annualized Return", "annualized_return", "%"),
+            ("Sharpe Ratio", "sharpe_ratio", "4f"),
+            ("Sortino Ratio", "sortino_ratio", "4f"),
+            ("Calmar Ratio", "calmar_ratio", "4f"),
+            ("Information Ratio", "information_ratio", "4f"),
+        ]
+        for display_name, metric_key, fmt in core_metrics:
+            if metric_key in primary_metrics and metric_key in meta_metrics:
+                primary_val = primary_metrics.get(metric_key, 0)
+                meta_val = meta_metrics.get(metric_key, 0)
+                improvement = calculate_improvement(primary_val, meta_val, metric_key)
+                primary_str = f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
+                meta_str = f"{meta_val:,.2%}" if fmt == "%" else f"{meta_val:,.4f}"
+                improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
+                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+
+        # --- Risk Metrics Table ---
+        print(f"\n{'RISK METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}")
+        print("=" * 75)
+        risk_metrics = [
+            ("Max Drawdown", "max_drawdown", "%"),
+            ("Avg Drawdown", "avg_drawdown", "%"),
+            ("Volatility (Ann.)", "volatility", "4f"),
+            ("Downside Volatility", "downside_volatility", "4f"),
+            ("Ulcer Index", "ulcer_index", "4f"),
+            ("VaR (95%)", "var_95", "%"),
+            ("CVaR (95%)", "cvar_95", "%"),
+        ]
+        for display_name, metric_key, fmt in risk_metrics:
+            if metric_key in primary_metrics and metric_key in meta_metrics:
+                primary_val = primary_metrics.get(metric_key, 0)
+                meta_val = meta_metrics.get(metric_key, 0)
+                improvement = calculate_improvement(primary_val, meta_val, metric_key)
+                primary_str = f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
+                meta_str = f"{meta_val:,.2%}" if fmt == "%" else f"{meta_val:,.4f}"
+                improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
+                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+
+        # --- Trading Metrics Table ---
+        print(f"\n{'TRADING METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}")
+        print("=" * 75)
+        trading_metrics = [
+            ("Number of Trades", "num_trades", "0f"),
+            ("Trades per Year", "trades_per_year", "1f"),
+            ("Win Rate", "win_rate", "%"),
+            ("Avg Win", "avg_win", "%"),
+            ("Avg Loss", "avg_loss", "%"),
+            ("Best Trade", "best_trade", "%"),
+            ("Worst Trade", "worst_trade", "%"),
+            ("Profit Factor", "profit_factor", "2f"),
+            ("Expectancy", "expectancy", "%"),
+            ("Kelly Criterion", "kelly_criterion", "4f"),
+            ("Max Consecutive Wins", "consecutive_wins", "0f"),
+            ("Max Consecutive Losses", "consecutive_losses", "0f"),
+        ]
+        for display_name, metric_key, fmt in trading_metrics:
+            if metric_key in primary_metrics and metric_key in meta_metrics:
+                primary_val = primary_metrics[metric_key]
+                meta_val = meta_metrics[metric_key]
+                improvement = calculate_improvement(primary_val, meta_val, metric_key)
+
+                if fmt == "%":
+                    primary_str, meta_str = f"{primary_val:,.2%}", f"{meta_val:,.2%}"
+                elif fmt == "0f":
+                    primary_str, meta_str = f"{primary_val:,.0f}", f"{meta_val:,.0f}"
+                elif fmt == "1f":
+                    primary_str, meta_str = f"{primary_val:,.1f}", f"{meta_val:,.1f}"
+                elif fmt == "2f":
+                    primary_str, meta_str = f"{primary_val:,.2f}", f"{meta_val:,.2f}"
+                else:
+                    primary_str, meta_str = f"{primary_val:,.4f}", f"{meta_val:,.4f}"
+
+                improvement_str = f"{improvement:+,.1f}%" if improvement != float("inf") else "N/A"
+                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+
+        # --- Distribution Metrics Table ---
+        print(
+            f"\n{'DISTRIBUTION METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}"
         )
-        key_improvements.append(("Total Return", return_imp))
-    if "max_drawdown" in meta_metrics and "max_drawdown" in primary_metrics:
-        dd_imp = calculate_improvement(
-            primary_metrics["max_drawdown"],
-            meta_metrics["max_drawdown"],
-            "max_drawdown",
-        )
-        key_improvements.append(("Max Drawdown", dd_imp))
+        print("=" * 75)
+        dist_metrics = [("Skewness", "skewness", "4f"), ("Kurtosis", "kurtosis", "4f")]
+        for display_name, metric_key, fmt in dist_metrics:
+            if metric_key in primary_metrics and metric_key in meta_metrics:
+                primary_val = primary_metrics[metric_key]
+                meta_val = meta_metrics[metric_key]
+                improvement = calculate_improvement(primary_val, meta_val, metric_key)
+                primary_str = f"{primary_val:,.4f}"
+                meta_str = f"{meta_val:,.4f}"
+                improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
+                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
 
-    avg_improvement = np.mean([imp for _, imp in key_improvements if imp != float("inf")])
-    if avg_improvement > 10:
-        assessment = "✅ Meta-labeling shows SIGNIFICANT improvement"
-    elif avg_improvement > 5:
-        assessment = "✅ Meta-labeling shows GOOD improvement"
-    elif avg_improvement > 0:
-        assessment = "⚠️  Meta-labeling shows MODEST improvement"
-    else:
-        assessment = "❌ Meta-labeling DOES NOT improve performance"
+        # --- Summary Assessment ---
+        print(f"\n{'SUMMARY ASSESSMENT'}")
+        print("=" * 50)
+        key_improvements = []
+        if "sharpe_ratio" in meta_metrics and "sharpe_ratio" in primary_metrics:
+            sharpe_imp = calculate_improvement(
+                primary_metrics["sharpe_ratio"],
+                meta_metrics["sharpe_ratio"],
+                "sharpe_ratio",
+            )
+            key_improvements.append(("Sharpe Ratio", sharpe_imp))
+        if "total_return" in meta_metrics and "total_return" in primary_metrics:
+            return_imp = calculate_improvement(
+                primary_metrics["total_return"],
+                meta_metrics["total_return"],
+                "total_return",
+            )
+            key_improvements.append(("Total Return", return_imp))
+        if "max_drawdown" in meta_metrics and "max_drawdown" in primary_metrics:
+            dd_imp = calculate_improvement(
+                primary_metrics["max_drawdown"],
+                meta_metrics["max_drawdown"],
+                "max_drawdown",
+            )
+            key_improvements.append(("Max Drawdown", dd_imp))
 
-    print(f"  {assessment}")
-    for metric_name, improvement in key_improvements:
-        if improvement != float("inf"):
-            print(f"  {metric_name} Change: {improvement:+.1f}%")
+        avg_improvement = np.mean([imp for _, imp in key_improvements if imp != float("inf")])
+        if avg_improvement > 10:
+            assessment = "✅ Meta-labeling shows SIGNIFICANT improvement"
+        elif avg_improvement > 5:
+            assessment = "✅ Meta-labeling shows GOOD improvement"
+        elif avg_improvement > 0:
+            assessment = "⚠️  Meta-labeling shows MODEST improvement"
+        else:
+            assessment = "❌ Meta-labeling DOES NOT improve performance"
 
-    if "sharpe_ratio" in meta_metrics and meta_metrics["sharpe_ratio"] > primary_metrics.get(
-        "sharpe_ratio", 0
-    ):
-        print(f"\n✅ Meta-labeling improves risk-adjusted returns")
-    if "signal_filter_rate" in meta_metrics:
-        print(f"\n📊 Signal filtering removed {meta_metrics['signal_filter_rate']:,.1%} of trades")
-        if meta_metrics["signal_filter_rate"] > 0.3:
-            print(f"   High filtering rate suggests meta-model is selective")
+        print(f"  {assessment}")
+        for metric_name, improvement in key_improvements:
+            if improvement != float("inf"):
+                print(f"  {metric_name} Change: {improvement:+.1f}%")
+
+        if "sharpe_ratio" in meta_metrics and meta_metrics["sharpe_ratio"] > primary_metrics.get(
+            "sharpe_ratio", 0
+        ):
+            print(f"\n✅ Meta-labeling improves risk-adjusted returns")
+        if "signal_filter_rate" in meta_metrics:
+            print(
+                f"\n📊 Signal filtering removed {meta_metrics['signal_filter_rate']:,.1%} of trades"
+            )
+            if meta_metrics["signal_filter_rate"] > 0.3:
+                print(f"   High filtering rate suggests meta-model is selective")
+
+    # Get the captured output
+    output_text = output_buffer.getvalue()
+
+    # Print to console
+    print(output_text)
+
+    # Save to file if path provided
+    if save_path:
+        Path(save_path).mkdir(parents=True, exist_ok=True)
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(output_text)
+        print(f"\nOutput saved to: {save_path}")
 
 
 def calculate_improvement(primary_val: float, meta_val: float, metric_key: str) -> float:
@@ -798,125 +851,18 @@ def calculate_improvement(primary_val: float, meta_val: float, metric_key: str) 
     return (meta_val - primary_val) / abs(primary_val) * 100
 
 
-# --- REFINED LOGGING CONFIGURATION ---
-
-# Remove default handlers to ensure full control.
-logger.remove()
-
-# 1. File Logger: Captures detailed DEBUG messages and serializes them to JSON.
-# This file will contain the full, structured data for analysis.
-logger.add(
-    "logs/model_logs_{time:YYYYMMDD}.jsonl",
-    format="{message}",
-    serialize=True,  # Crucial for writing JSON
-    level="DEBUG",  # Captures DEBUG, INFO, WARNING, etc.
-    rotation="500 MB",
-    retention="30 days",
-    compression="zip",
-)
-
-# 2. Console Logger: Captures only INFO messages for a clean, readable output.
-# It will ignore the verbose dictionaries logged at the DEBUG level.
-logger.add(
-    sys.stdout,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-    level="INFO",  # Ignores DEBUG messages
-    colorize=True,
-)
-
-
-# --- REFINED LOGGING FUNCTIONS ---
-
-
-def log_model_configuration(model, X_train, X_test, params=None, strategy_name="Strategy"):
-    """Logs model configuration with dual-level output."""
-    model_metadata = {
-        "event": "model_configuration",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "strategy": strategy_name,
-        "model_type": type(model).__name__,
-        "feature_set": list(X_train.columns),
-        "training_data": {
-            "start": X_train.index.min().isoformat(),
-            "end": X_train.index.max().isoformat(),
-            "samples": len(X_train),
-            "features": X_train.shape[1],
-        },
-        "testing_data": {
-            "start": X_test.index.min().isoformat(),
-            "end": X_test.index.max().isoformat(),
-            "samples": len(X_test),
-        },
-        "hyperparameters": (params if params else getattr(model, "get_params", lambda: {})()),
-        "environment": {"python_version": sys.version, "platform": sys.platform},
-    }
-    # User-friendly message for the console.
-    logger.info(f"Model configured: {strategy_name} ({type(model).__name__})")
-    # Detailed dictionary for the JSON log file.
-    logger.debug(model_metadata)
-
-
-def log_performance_results(results, model=None):
-    """Logs performance results with dual-level output."""
-    performance_log = {
-        "event": "performance_results",
-        "timestamp": datetime.now(timezone("UTC")).isoformat(),
-        "strategy": results["strategy_name"],
-        "confidence_threshold": results["meta_metrics"].get("confidence_threshold", 0.6),
-        "primary_metrics": results["primary_metrics"],
-        "meta_metrics": results["meta_metrics"],
-        "signal_stats": {
-            "total_signals": results["total_primary_signals"],
-            "filtered_signals": results["filtered_signals"],
-            "filter_rate": results["meta_metrics"].get("signal_filter_rate", 0),
-        },
-    }
-    if model and hasattr(model, "feature_importances_"):
-        features = results.get("features", list(range(len(model.feature_importances_))))
-        performance_log["feature_importances"] = dict(
-            zip(features, model.feature_importances_.tolist())
-        )
-
-    # User-friendly message for the console.
-    sharpe = performance_log["meta_metrics"].get("sharpe_ratio", 0)
-    logger.info(f"Performance logged for {results['strategy_name']}. Meta Sharpe: {sharpe:.2f}")
-    # Detailed dictionary for the JSON log file.
-    logger.debug(performance_log)
-
-
-def log_trade_decisions(signals, meta_probabilities, returns, confidence_threshold=0.6):
-    """Logs individual trade decisions with dual-level output."""
-    trade_logs = []
-    for idx, signal in signals.items():
-        if signal != 0:
-            trade = {
-                "event": "trade_decision",
-                "timestamp": idx.isoformat(),
-                "signal": int(signal),
-                "confidence": float(meta_probabilities.get(idx, 0)),
-                "action": (
-                    "take" if meta_probabilities.get(idx, 0) > confidence_threshold else "skip"
-                ),
-                "return": float(returns.get(idx, 0)),
-            }
-            trade_logs.append(trade)
-
-    if trade_logs:
-        # User-friendly message for the console.
-        logger.info(f"Trade decisions logged: {len(trade_logs)} total signals.")
-        # Detailed dictionary for the JSON log file.
-        logger.debug({"batch_event": "trade_decisions", "trades": trade_logs})
+# --- Main Orchestrator Function ---
 
 
 def run_meta_labeling_analysis(
-    signals: pd.Series,
-    y_pred_proba: Union[pd.Series, np.ndarray],
     df: pd.DataFrame,
+    signals: pd.Series,
+    meta_probabilities: Union[pd.Series, np.ndarray],
     confidence_threshold: float = 0.5,
-    timeframe: Optional[str] = None,
     trading_days_per_year: int = 252,
     trading_hours_per_day: int = 24,
     strategy_name: str = "Strategy",
+    save_path: str = None,
 ):
     """
     A wrapper function to run a complete meta-labeling analysis.
@@ -925,28 +871,28 @@ def run_meta_labeling_analysis(
     main `evaluate_meta_labeling_performance` function and then prints the results.
 
     Args:
-        signals: Trading signals from the primary model for the test period.
-        y_pred_proba: Probabilities from the meta-model for the test period.
         df: The full DataFrame containing historical price data.
+        signals: Trading signals from the primary model for the test period.
+        meta_probabilities: Probabilities from the meta-model for the test period.
         confidence_threshold: The probability threshold for filtering trades.
-        timeframe: The timeframe string for annualization.
         strategy_name: The name for the strategy run.
+        save_path: If provided, saves the output to this file path
     """
     # Isolate returns for the test period, including one prior point for shift(1).
     test_start = signals.index[0]
     pre_test_point = df.index[df.index.get_loc(test_start) - 1]
     return_index = signals.index.union([pre_test_point])
-    returns_data = df.loc[return_index, "close"].pct_change().loc[signals.index]
+    returns = df.loc[return_index, "close"].pct_change()
 
     results = evaluate_meta_labeling_performance(
         primary_signals=signals,
-        meta_probabilities=y_pred_proba,
-        returns_data=returns_data,
+        meta_probabilities=meta_probabilities,
+        returns=returns,
         confidence_threshold=confidence_threshold,
-        timeframe=timeframe,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
         strategy_name=strategy_name,
     )
 
+    print_meta_labeling_comparison(results, save_path)
     return results
