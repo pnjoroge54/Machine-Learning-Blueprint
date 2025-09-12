@@ -1,6 +1,7 @@
 import re
 from collections import namedtuple
 from pathlib import Path
+from pprint import pprint
 from typing import List
 
 import numpy as np
@@ -11,16 +12,18 @@ from PIL import Image, ImageDraw, ImageFont
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     accuracy_score,
+    average_precision_score,
     classification_report,
     confusion_matrix,
+    precision_recall_curve,
     roc_auc_score,
     roc_curve,
 )
 
 
-def meta_labelling_reports(model_data, plot_roc=False):
+def meta_labelling_reports(model_data, name="Meta-Model", plot=False):
     """
-    Generate meta-labeling report for primary strategy and meta-model.
+    Generate meta-labeling report for primary strategy and meta-data.
 
     In meta-labeling framework:
     - Primary model generates signals (when to trade)
@@ -34,14 +37,13 @@ def meta_labelling_reports(model_data, plot_roc=False):
             - prob: Meta-model predicted probabilities
             - primary_signals: Primary strategy signals (Bollinger, MA, etc.)
             - w_test: Sample weights (optional)
-        plot_roc: If True, plots the ROC curve.
+        plot: If True, plots the ROC curve.
 
     Returns: None
     """
-    y_test, pred, prob = (
+    y_test, pred = (
         model_data.y_test,
         model_data.pred,
-        model_data.prob,
     )
     # 1. Evaluate Primary Model Performance
     print("\nPRIMARY MODEL PERFORMANCE:")
@@ -60,19 +62,15 @@ def meta_labelling_reports(model_data, plot_roc=False):
     cm = confusion_matrix(y_test, pred)
     print(cm)
 
-    # Plot ROC curve
-    if plot_roc:
-        fpr, tpr, _ = roc_curve(y_test, prob)
-        roc_auc = roc_auc_score(y_test, prob)
+    fig, summary = compare_roc_pr_curves([model_data], model_names=[name], show_baseline=True)
+    print(f"\nSummary Table:")
+    print(summary.round(3).T)
 
-        plt.figure(figsize=(7.5, 5), dpi=100)
-        plt.plot(fpr, tpr, label=f"ROC Curve (AUC = {roc_auc:.2f})", color="blue")
-        plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Random Chance")
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.style.use("dark_background")
-        plt.title("Receiver Operating Characteristic")
-        plt.legend()
+    # Plot ROC curve
+    if plot:
+        fig.show()
+
+    return summary
 
 
 def compare_confusion_matrices(
@@ -122,7 +120,7 @@ def compare_roc_curves(
     fig, ax = plt.subplots(
         nrows, ncols=columns, sharex=sharex, sharey=True, figsize=(7.5, height), dpi=100
     )
-    ax = ax.flatten()
+    ax = np.atleast_1d(ax).flatten()
 
     # Plot ROC curve
     for data, ax, title in zip((model_data), ax, titles):
@@ -141,9 +139,244 @@ def compare_roc_curves(
 
     if fig_title:
         fig.suptitle(fig_title, fontsize=13)
-        plt.subplots_adjust(top=0.9)
+        plt.subplots_adjust(top=0.88)
 
     return fig
+
+
+def compare_pr_curves(
+    model_data: List[tuple],  # namedtuple or similar with y_test and prob
+    titles: List[str] = None,
+    fig_title: str = None,
+    columns: int = 1,
+    height: float = 5,
+):
+    """
+    Compare Precision–Recall curves for multiple models/labeling methods.
+
+    Parameters
+    ----------
+    model_data : list of namedtuple-like
+        Each element must have attributes `y_test` (true labels) and `prob` (predicted scores/probabilities).
+    titles : list of str, optional
+        Titles for each subplot.
+    fig_title : str, optional
+        Overall figure title.
+    columns : int, default=1
+        Number of subplot columns.
+    height : float, default=5
+        Height of the figure in inches.
+    """
+    n = len(model_data)
+    if not titles:
+        titles = [""] * n
+
+    nrows = int(np.ceil(n / columns))
+    sharex = True if nrows <= 2 else False
+    fig, ax = plt.subplots(
+        nrows, ncols=columns, sharex=sharex, sharey=True, figsize=(7.5, height), dpi=100
+    )
+    ax = np.atleast_1d(ax).flatten()
+
+    # Plot PR curves
+    for data, axis, title in zip(model_data, ax, titles):
+        precision, recall, _ = precision_recall_curve(data.y_test, data.prob)
+        ap = average_precision_score(data.y_test, data.prob)
+
+        axis.plot(recall, precision, label=f"PR Curve (AP = {ap:.2f})", color="orange")
+        axis.set_xlabel("Recall")
+        axis.set_ylabel("Precision")
+        axis.set_title(title)
+        axis.legend()
+        axis.grid(True, linestyle="--", alpha=0.6)
+
+        # Baseline: proportion of positives
+        baseline = data.y_test.sum() / len(data.y_test)
+        axis.hlines(baseline, 0, 1, colors="white", linestyles="--", label="Baseline")
+
+    plt.style.use("dark_background")
+    plt.tight_layout()
+
+    if fig_title:
+        fig.suptitle(fig_title, fontsize=13)
+        plt.subplots_adjust(top=0.88)
+
+    return fig
+
+
+from typing import List
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    average_precision_score,
+    f1_score,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
+)
+
+
+def compare_roc_pr_curves(
+    model_data: List[tuple],  # namedtuple-like with y_test and prob
+    model_names: List[str] = None,
+    titles: List[str] = None,
+    fig_title: str = None,
+    columns: int = 1,
+    width: float = 7.5,
+    height: float = 5,
+    metric: str = "f1",  # "f1", "precision", or "recall",
+    show_baseline: bool = False,
+):
+    """
+    Compare ROC and Precision–Recall curves for multiple models/labeling methods,
+    marking the optimal threshold point on the PR curve and returning a summary table
+    with both default and tuned threshold metrics.
+    """
+    n = len(model_data)
+    if not model_names:
+        model_names = [""] * n
+
+    if not titles:
+        titles = [""] * n
+
+    nrows = int(np.ceil(n / columns))
+    sharex = True if nrows <= 2 else False
+    fig, ax = plt.subplots(
+        nrows, ncols=columns, sharex=sharex, sharey=False, figsize=(width, height), dpi=100
+    )
+
+    ax = np.atleast_1d(ax).flatten()
+    summary_rows = []
+
+    for data, axis, title, name in zip(model_data, ax, titles, model_names):
+        # --- ROC ---
+        fpr, tpr, _ = roc_curve(data.y_test, data.prob)
+        auc = roc_auc_score(data.y_test, data.prob)
+        axis.plot(fpr, tpr, label=f"ROC (AUC = {auc:.2f})", color="skyblue", lw=2)
+        axis.plot([0, 1], [0, 1], linestyle="--", color="gray")
+
+        # --- Precision–Recall ---
+        precision, recall, thresholds = precision_recall_curve(data.y_test, data.prob)
+        ap = average_precision_score(data.y_test, data.prob)
+
+        # Metric sweep
+        if metric == "f1":
+            scores = 2 * (precision * recall) / (precision + recall + 1e-9)
+        elif metric == "precision":
+            scores = precision
+        elif metric == "recall":
+            scores = recall
+        else:
+            raise ValueError("Unsupported metric")
+
+        best_idx = np.nanargmax(scores)
+        best_threshold = thresholds[best_idx] if best_idx < len(thresholds) else 1.0
+        best_score = scores[best_idx]
+
+        # Plot PR curve
+        axis.plot(recall, precision, label=f"PR (AP = {ap:.2f})", color="orange", lw=2)
+        axis.scatter(
+            recall[best_idx],
+            precision[best_idx],
+            color="red",
+            s=50,
+            zorder=5,
+            label=f"Best {metric}={best_score:.2f} @ thr={best_threshold:.2f}",
+        )
+
+        # Baseline: proportion of positives
+        if show_baseline:
+            baseline = data.y_test.sum() / len(data.y_test)
+            axis.hlines(
+                baseline, 0, 1, colors="gray", linestyles="-.", label=f"Baseline = {baseline:.2f}"
+            )
+
+        axis.set_xlabel("Recall / FPR")
+        axis.set_ylabel("Precision / TPR")
+        axis.set_title(title)
+        axis.legend()
+        axis.grid(True, linestyle="--", alpha=0.6)
+
+        # --- Default threshold metrics ---
+        y_pred_default = (data.prob >= 0.5).astype(int)
+        default_precision = precision_score(data.y_test, y_pred_default, zero_division=0)
+        default_recall = recall_score(data.y_test, y_pred_default, zero_division=0)
+        default_f1 = f1_score(data.y_test, y_pred_default, zero_division=0)
+
+        # --- Tuned threshold metrics ---
+        y_pred_tuned = (data.prob >= best_threshold).astype(int)
+        tuned_precision = precision_score(data.y_test, y_pred_tuned, zero_division=0)
+        tuned_recall = recall_score(data.y_test, y_pred_tuned, zero_division=0)
+        tuned_f1 = f1_score(data.y_test, y_pred_tuned, zero_division=0)
+
+        summary_rows.append(
+            {
+                "Model": name,
+                "ROC AUC": auc,
+                "AP": ap,
+                "Default Threshold": 0.5,
+                "Default Precision": default_precision,
+                "Default Recall": default_recall,
+                "Default F1": default_f1,
+                "Tuned Threshold": best_threshold,
+                "Tuned Precision": tuned_precision,
+                "Tuned Recall": tuned_recall,
+                "Tuned F1": tuned_f1,
+            }
+        )
+
+    plt.style.use("dark_background")
+    plt.tight_layout()
+
+    if fig_title:
+        fig.suptitle(fig_title, fontsize=13)
+        plt.subplots_adjust(top=0.86)
+
+    summary_df = pd.DataFrame(summary_rows).set_index("Model")
+    return fig, summary_df
+
+
+def plot_multi_pr_curves(y_true_dict, y_score_dict, title="Precision–Recall Comparison"):
+    """
+    Plot Precision–Recall curves for multiple labeling methods on one chart.
+
+    Parameters
+    ----------
+    y_true_dict : dict
+        Mapping of method name -> array-like of true binary labels.
+    y_score_dict : dict
+        Mapping of method name -> array-like of predicted probabilities/scores.
+        Must have the same keys as y_true_dict.
+    title : str
+        Plot title.
+    """
+    plt.figure(figsize=(8, 6))
+
+    for method in y_true_dict:
+        y_true = y_true_dict[method]
+        y_scores = y_score_dict[method]
+
+        precision, recall, _ = precision_recall_curve(y_true, y_scores)
+        ap = average_precision_score(y_true, y_scores)
+
+        plt.plot(recall, precision, lw=2, label=f"{method} (AP = {ap:.3f})")
+
+    # Baseline: proportion of positives
+    all_y = list(y_true_dict.values())[0]
+    baseline = sum(all_y) / len(all_y)
+    plt.hlines(baseline, 0, 1, colors="gray", linestyles="--", label="Baseline")
+
+    plt.xlabel("Recall", fontsize=12)
+    plt.ylabel("Precision", fontsize=12)
+    plt.title(title, fontsize=14)
+    plt.legend(loc="lower left")
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.tight_layout()
+    plt.show()
 
 
 def create_classification_report_image(
@@ -433,23 +666,79 @@ def create_classification_report_image(
     logger.info(f"Successfully generated and saved '{output_filename}'")
 
 
-def meta_labelling_classification_reports(model_data, titles, output_filenames, path):
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
+def meta_labelling_classification_report_images(model_data, titles, output_filenames, dirpath):
+    dirpath = Path(dirpath)
+    dirpath.mkdir(parents=True, exist_ok=True)
 
     for data, title, fname in zip(model_data, titles, output_filenames):
         create_classification_report_image(
             y_true=data.y_test,
             y_pred=np.ones_like(data.pred),
             title=f"{title} Primary Model",
-            output_filename=path / f"{fname}_primary_clf_report.png",
+            output_filename=dirpath / f"{fname}_primary_clf_report.png",
             display=False,
         )
         create_classification_report_image(
             y_true=data.y_test,
             y_pred=data.pred,
             title=f"{title} Meta-Model",
-            output_filename=path / f"{fname}_meta_clf_report.png",
+            output_filename=dirpath / f"{fname}_meta_clf_report.png",
             display=False,
         )
     logger.info("Classification reports saved.")
+
+
+def meta_labelling_classification_report_tables(model_data, methods, dirpath):
+    dirpath = Path(dirpath)
+    dirpath.mkdir(parents=True, exist_ok=True)
+    report_frames = []
+
+    for data, method in zip(model_data, methods):
+        # Replace with actual model predictions per method
+        y_true = data.y_test.values
+        y_pred = data.pred.values
+
+        rpt = classification_report(y_true, y_pred, output_dict=True)
+        df = pd.DataFrame(rpt).iloc[:3, :2].T  # shape: (metrics, classes)
+        # print(df)
+
+        # Add labeling method as top-level index
+        df.index = pd.MultiIndex.from_product([[method], df.index], names=["method", "class"])
+        report_frames.append(df)
+
+    # Concatenate all into one MultiIndex DataFrame
+    combined_df = pd.concat(report_frames)
+
+    # Step 1: Swap index levels so 'metric' is outermost
+    df_swapped = combined_df.swaplevel(0, 1).sort_index()
+
+    # Step 2: Stack columns to long format
+    long_df = df_swapped.stack()
+
+    # Step 3: Unstack labeling_method to compare across methods
+    comparison_df = long_df.unstack(level=1)
+
+    # Step 4: Optional — rename columns for clarity
+    comparison_df.columns = [f"{method}" for method in comparison_df.columns]
+
+    # Step 5: Reset index if needed
+    # comparison_df = comparison_df.reset_index()
+
+    # Step 6: Save as html
+    styled = (
+        comparison_df.style.format("{:.3f}")  # 3 decimal places
+        .set_table_styles(
+            [
+                {
+                    "selector": "th",
+                    "props": [("text-align", "center"), ("background-color", "#f2f2f2")],
+                },
+                {"selector": "td", "props": [("text-align", "center")]},
+            ]
+        )
+        .highlight_max(axis=1, color="lightgreen")  # highlight best per row
+    )
+
+    filename = dirpath / "classification_comparison.html"
+    styled.to_html(filename)
+    logger.info(f"Saved to {filename}")
