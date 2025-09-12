@@ -1,7 +1,10 @@
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller
 
+from ..cache import smart_cacheable
 
+
+@smart_cacheable
 def is_stationary(df: pd.DataFrame, alpha: float = 0.05, verbose: bool = True):
     not_stationary = []
     for col in df:
@@ -11,10 +14,10 @@ def is_stationary(df: pd.DataFrame, alpha: float = 0.05, verbose: bool = True):
 
     if verbose:
         if not_stationary:
-            print("These features are not stationary:")
+            print("\nThe following features are not stationary:")
             for x in not_stationary:
                 print(x)
         else:
-            print("All features are stationary.")
+            print("\nAll features are stationary.")
 
     return not_stationary
