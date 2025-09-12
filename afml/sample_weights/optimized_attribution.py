@@ -309,8 +309,6 @@ def get_weights_by_return_optimized(
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
         ce = ce.reindex(close_series.index).fillna(0)
-        if isinstance(ce, pd.Series):
-            ce = ce.to_frame()
         return ce
 
     # Handle num_conc_events (whether provided or computed)
