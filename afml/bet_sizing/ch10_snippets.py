@@ -9,10 +9,8 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from numba import jit, njit, prange
+from numba import njit, prange
 from scipy.stats import norm
-
-from ..util.multiprocess import mp_pandas_obj
 
 
 def get_signal(prob, num_classes, pred=None):
@@ -53,7 +51,7 @@ def get_signal(prob, num_classes, pred=None):
     return bet_sizes
 
 
-def avg_active_signals(signals, num_threads=1):
+def avg_active_signals(signals):
     """
     SNIPPET 10.2 - BETS ARE AVERAGED AS LONG AS THEY ARE STILL ACTIVE
     Function averages the bet sizes of all concurrently active bets. This function makes use of multiprocessing.
@@ -62,61 +60,31 @@ def avg_active_signals(signals, num_threads=1):
     - **signal** - the bet size
     - **t1** - the closing time of the bet
         And the index must be datetime format
-    :param num_threads: (int) Number of threads to use in multiprocessing, default value is 1
+    :param num_threads: (int) Number of threads to use in multiprocessing.
+        If None, Numba is used, else `mp_pandas_obj`.
     :return: (pandas.Series) The averaged bet sizes
     """
-    # 1) Time points where signals change (either one start or one ends).
-    t_pnts = set(signals["t1"].dropna().values)
-    t_pnts = t_pnts.union(signals.index.values)
-    t_pnts = list(t_pnts)
-    t_pnts.sort()
-    try:
-        out = avg_active_signals_numba(signals)
-    except:
-        out = mp_pandas_obj(
-            mp_avg_active_signals, ("molecule", t_pnts), num_threads, signals=signals
-        )
-    return out
+    # Convert datetimes to nanoseconds
+    signal_times = signals.index.view(np.int64)
+    signal_values = signals["signal"].values
 
+    # Convert end times, handling NaT as maximum time
+    MAX_TIME = np.iinfo(np.int64).max
+    end_times = np.where(signals["t1"].isna(), MAX_TIME, signals["t1"].view(np.int64))
 
-@jit(forceobj=True)
-def mp_avg_active_signals(signals, molecule):
-    """
-    Part of SNIPPET 10.2
-    A function to be passed to the 'mp_pandas_obj' function to allow the bet sizes to be averaged using multiprocessing.
+    # Get all unique evaluation times
+    eval_times = np.unique(np.concatenate((signal_times, signals["t1"].dropna().view(np.int64))))
 
-    At time loc, average signal among those still active.
-    Signal is active if (a) it is issued before or at loc, and (b) loc is before the signal's end time,
-    or end time is still unknown (NaT).
+    # Calculate results
+    results = _calculate_active_signals(signal_times, end_times, signal_values, eval_times)
 
-    :param signals: (pandas.DataFrame) Contains at least the following columns:
-    - **signal** - the bet size
-    - **t1** - the closing time of the bet
-        And the index must be datetime format
-    :param molecule: (list) Indivisible tasks to be passed to 'mp_pandas_obj', in this case a list of datetimes
-    :return: (pandas.Series) The averaged bet size sub-series
-    """
-    out = {}
-    signals_index = signals.index.values
-    t1 = signals["t1"].values
-
-    for loc in molecule:
-        df0 = (signals_index <= loc) & ((loc < t1) | np.isnan(t1))
-        act = signals[df0].index
-        if act.size > 0:
-            # Average active signals if they exist.
-            out[loc] = signals.loc[act, "signal"].mean()
-        else:
-            # Return zero if no signals are active at this time step.
-            out[loc] = 0
-
-    out = pd.Series(out)
-    return out
+    # Convert back to datetime index
+    return pd.Series(results, index=pd.to_datetime(eval_times))
 
 
 # Numba-optimized function to calculate average active signals
-@njit(parallel=True)
-def calculate_active_signals(signal_times, end_times, signal_values, eval_times):
+@njit(parallel=True, cache=True)
+def _calculate_active_signals(signal_times, end_times, signal_values, eval_times):
     """
     Calculate average active signals at evaluation times using parallel processing.
 
@@ -142,32 +110,6 @@ def calculate_active_signals(signal_times, end_times, signal_values, eval_times)
         results[i] = total / count if count > 0 else 0.0
 
     return results
-
-
-def avg_active_signals_numba(signals):
-    """
-    Calculate the average active signals at all relevant time points.
-
-    :param signals: DataFrame with columns 'signal' (bet size) and 't1' (end time)
-    :param num_threads: Number of threads for parallel processing
-    :return: Series of averaged signal values indexed by time
-    """
-    # Convert datetimes to nanoseconds
-    signal_times = signals.index.view(np.int64)
-    signal_values = signals["signal"].values
-
-    # Convert end times, handling NaT as maximum time
-    MAX_TIME = np.iinfo(np.int64).max
-    end_times = np.where(signals["t1"].isna(), MAX_TIME, signals["t1"].view(np.int64))
-
-    # Get all unique evaluation times
-    eval_times = np.unique(np.concatenate((signal_times, signals["t1"].dropna().view(np.int64))))
-
-    # Calculate results
-    results = calculate_active_signals(signal_times, end_times, signal_values, eval_times)
-
-    # Convert back to datetime index
-    return pd.Series(results, index=pd.to_datetime(eval_times))
 
 
 def discrete_signal(signal0, step_size):

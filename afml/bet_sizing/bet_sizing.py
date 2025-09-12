@@ -27,7 +27,6 @@ def bet_size_probability(
     pred=None,
     step_size=0.0,
     average_active=False,
-    num_threads=1,
 ):
     """
     Calculates the bet size using the predicted probability. Note that if 'average_active' is True, the returned
@@ -42,13 +41,12 @@ def bet_size_probability(
     :param step_size: (float) The step size at which the bet size is discretized, default is 0.0 which imposes no
      discretization.
     :param average_active: (bool) Option to average the size of active bets, default value is False.
-    :param num_threads: (int) The number of processing threads to utilize for multiprocessing, default value is 1.
     :return: (pandas.Series) The bet size, with the time index.
     """
     signal_0 = get_signal(prob, num_classes, pred)
     events_0 = signal_0.to_frame("signal").join(events["t1"], how="left")
     if average_active:
-        signal_1 = avg_active_signals(events_0, num_threads)
+        signal_1 = avg_active_signals(events_0)
     else:
         signal_1 = events_0.signal
 
