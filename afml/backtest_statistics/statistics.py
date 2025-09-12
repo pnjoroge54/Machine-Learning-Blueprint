@@ -71,14 +71,14 @@ def average_holding_period(target_positions: pd.Series) -> float:
     position_difference = target_positions.diff()
 
     # Time elapsed from the starting time for each position
-    time_difference = (target_positions.index - target_positions.index[0]) / np.timedelta64(1, "D")
+    time_difference = (target_positions.index - target_positions.index[0]) / np.timedelta64(1, "s")
 
     holding_time, holding_weight = average_holding_period_numba(
         target_positions.values, position_difference.values, time_difference.values
     )
 
     if holding_weight.sum() > 0:  # If there were closed trades at all
-        td = pd.Timedelta((holding_time * holding_weight).sum() / holding_weight.sum(), unit="D")
+        td = pd.Timedelta((holding_time * holding_weight).sum() / holding_weight.sum(), unit="s")
         avg_holding_period = td.round("1s")
     else:
         avg_holding_period = pd.Timedelta(0)
