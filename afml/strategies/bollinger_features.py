@@ -1,8 +1,8 @@
 import pandas as pd
 import pandas_ta as ta
-import talib
 
-from ..cache import smart_cacheable
+from ..cache.selective_cleaner import smart_cacheable
+from ..features.fracdiff import frac_diff_ffd, fracdiff_optimal
 from ..features.moving_averages import calculate_ma_differences
 from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
@@ -14,14 +14,21 @@ def create_bollinger_features(df, lookback_window=10, bb_period=20, bb_std=2):
     """
     Create features for meta-labeling model
     """
-    features = pd.DataFrame(index=df.index)
-
-    features["rel_spread"] = df["spread"] / df["close"]
+    features = df[["close"]]
+    features["spread"] = df["spread"] / df["close"]
 
     # Bollinger features
     bb_feat = df.ta.bbands(bb_period, bb_std)
-    features["bb_bandwidth"] = bb_feat.filter(regex="BBB")
-    features["bb_percentage"] = bb_feat.filter(regex="BBP")
+    features[["bb_lower", "bb_upper"]] = bb_feat.iloc[:, :2]
+    features[["bb_bandwidth", "bb_percentage"]] = bb_feat.iloc[:, -2:]
+
+    # Fractionally_differenced prices
+    d0 = fracdiff_optimal(features["close"], verbose=True)[1]
+    d1 = fracdiff_optimal(features["bb_lower"], verbose=True)[1]
+    d2 = fracdiff_optimal(features["bb_upper"], verbose=True)[1]
+    d = max(d0, d1, d2)
+    ffd_cols = ["close", "bb_lower", "bb_upper"]
+    features[ffd_cols] = frac_diff_ffd(features[ffd_cols], d)
 
     # Price-based features
     lagged_ret = get_lagged_returns(df.close, lags=[1, 5, 10], nperiods=3)
@@ -52,30 +59,23 @@ def create_bollinger_features(df, lookback_window=10, bb_period=20, bb_std=2):
     features["tr"] = df.ta.true_range()
     features["atr"] = df.ta.atr(14)
 
-    windows = (5, 10, 20, 50, 100, 200)
-
     # Moving average differences
+    windows = (5, 10, 20, 50, 100, 200)
     ma_diffs = calculate_ma_differences(df.close, windows)
     ma_diffs = ma_diffs.div(features["atr"], axis=0)  # Normalize by ATR
     features = features.join(ma_diffs)
 
     # Momentum
     features["rsi"] = df.ta.rsi()
-    stochrsi = df.ta.stochrsi()
-    features["stoch_rsi_k"] = stochrsi.iloc[:, 0]  # Stochastic RSI %K
-    features["stoch_rsi_d"] = stochrsi.iloc[:, 1]
+    features[["stoch_rsi_k", "stoch_rsi_d"]] = df.ta.stochrsi().iloc[:, :2]
 
     # Trend
-    adx = df.ta.adx()  # ADX
-    adx.columns = [
-        x.split("_")[0].lower() for x in adx.columns
-    ]  # Rename columns to match convention
-    adx["dm_net"] = adx["dmp"] - adx["dmn"]
-    features = features.join(adx)  # Concatenate ADX columns [['adx', 'dm_net']]
-    features["macd"], _, features["macd_hist"] = talib.MACD(
-        df.close, fastperiod=12, slowperiod=26, signalperiod=9
-    )
+    features[["adx", "dmp", "dmn"]] = df.ta.adx()
+    features["dm_net"] = features["dmp"] - features["dmn"]
+    features[["macd", "macdh"]] = df.ta.macd().iloc[:, :2]
 
+    # Abbreviate "returns" to "ret" in columns
+    features.columns = features.columns.str.replace(r"returns", "ret", regex=True)
     features = optimize_dtypes(features, verbose=False)  # Conserve memory
 
     return features
