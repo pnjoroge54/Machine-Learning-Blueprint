@@ -6,6 +6,7 @@ to some event horizon, say a day.
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 from numba import njit
 
 
@@ -143,6 +144,7 @@ def cusum_filter(raw_time_series, threshold, time_stamps: bool = True):
 
     # Call the Numba-jitted core function 🚀
     event_indices_values = _cusum_filter_numba_core(log_returns_np, thresholds_np, index_values_np)
+    logger.info(f"{len(event_indices_values):,} CUSUM-filtered events")
 
     if time_stamps:
         # pd.Index can correctly form DatetimeIndex if original index was datetime-like
@@ -169,6 +171,7 @@ def z_score_filter(raw_time_series, mean_window, std_window, z_score=3, time_sta
         >= raw_time_series.rolling(window=mean_window).mean()
         + z_score * raw_time_series.rolling(window=std_window).std()
     ].index
+    logger.info(f"{len(t_events):,} Z-Score filtered events")
     if time_stamps:
         event_timestamps = pd.DatetimeIndex(t_events)
         return event_timestamps
