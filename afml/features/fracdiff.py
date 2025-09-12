@@ -451,7 +451,7 @@ def fracdiff_optimal(
         log_msg = " (log-transformed)" if use_log else ""
         msg = (
             f"d = {d} makes {series.name if series.name else 'series'}{log_msg} stationary for ADF test (α={alpha}). "
-            f"Corr(y, y_fracdiff) = {diff_adf.loc[best_d, 'corr']:.4f}."
+            f"ρ(y, y_fracdiff) = {diff_adf.loc[best_d, 'corr']:.4f}"
         )
         logger.info(msg)
 
