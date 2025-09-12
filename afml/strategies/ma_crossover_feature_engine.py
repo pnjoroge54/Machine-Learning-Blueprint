@@ -10,7 +10,7 @@ from ..features.fractals import (
     calculate_enhanced_fractals,
     calculate_fractal_trend_features,
 )
-from ..labeling.trend_scanning import get_bins_from_trend
+from ..labeling.trend_scanning import trend_scanning_labels
 from ..util.misc import optimize_dtypes
 
 
@@ -423,7 +423,7 @@ class ForexFeatureEngine:
     def _calculate_linear_regression_features(
         self, close: pd.Series, period: Tuple[int]
     ) -> Dict[str, pd.Series]:
-        lr_results = get_bins_from_trend(
+        lr_results = trend_scanning_labels(
             close, span=period, volatility_threshold=0.3, lookforward=False
         )
         if lr_results.shape[1] > 0:

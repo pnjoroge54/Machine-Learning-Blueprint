@@ -5,7 +5,6 @@ import random
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from itertools import product
 from multiprocessing import Pool
 from os import cpu_count
 from pathlib import Path
@@ -23,7 +22,8 @@ from ..cache import memory
 from ..labeling.performance_metrics import calculate_label_metrics
 from ..labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
 from ..util.volatility import get_period_vol
-from .strategies import BaseStrategy, get_entries
+from .signal_processing import get_entries
+from .strategies import BaseStrategy
 
 
 def get_dynamic_seed() -> int:
