@@ -139,11 +139,11 @@ def get_lagged_returns(
 
 
 def get_return_dist_features(close, window=10):
-    """Distribution of return features"""
+    """Distribution of log-return features"""
     df = pd.DataFrame(index=close.index)
     ret = np.log(close).diff()
     sma_returns = ret.rolling(window, min_periods=3)
-    df["returns_normalized"] = (ret - sma_returns.mean()) / sma_returns.std()
+    df["returns_norm"] = (ret - sma_returns.mean()) / sma_returns.std()
     df[f"returns_skew"] = sma_returns.skew()
-    df[f"returns_kurtosis"] = sma_returns.kurt()
+    df[f"returns_kurt"] = sma_returns.kurt()
     return df
