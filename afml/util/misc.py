@@ -290,7 +290,7 @@ def value_counts_data(
     if as_percentage:
         df["proportion"] = series.value_counts(normalize=True)
     if verbose:
-        print(f"\n{series.name} value counts:\n{df}\n")
+        print(f"\n{df}\n")
     return df
 
 
