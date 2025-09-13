@@ -9,11 +9,14 @@ Implements statistics related to:
 """
 
 import warnings
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 from numba import njit, prange
 from scipy.stats import norm
+
+from afml import cache
 
 
 def timing_of_flattening_and_flips(target_positions: pd.Series) -> pd.DatetimeIndex:
@@ -71,22 +74,21 @@ def average_holding_period(target_positions: pd.Series) -> float:
     position_difference = target_positions.diff()
 
     # Time elapsed from the starting time for each position
-    time_difference = (target_positions.index - target_positions.index[0]) / np.timedelta64(1, "s")
+    time_difference = (target_positions.index - target_positions.index[0]) / np.timedelta64(1, "D")
 
     holding_time, holding_weight = average_holding_period_numba(
         target_positions.values, position_difference.values, time_difference.values
     )
 
     if holding_weight.sum() > 0:  # If there were closed trades at all
-        td = pd.Timedelta((holding_time * holding_weight).sum() / holding_weight.sum(), unit="s")
-        avg_holding_period = td.round("1s")
+        avg_holding_period = (holding_time * holding_weight).sum() / holding_weight.sum()
     else:
-        avg_holding_period = pd.Timedelta(0)
+        avg_holding_period = np.nan
 
     return avg_holding_period
 
 
-@njit
+@njit(cache=True)
 def average_holding_period_numba(target_positions, position_difference, time_difference):
     holding_time = np.empty(target_positions.size - 1, dtype=np.float64)
     holding_weight = np.empty(target_positions.size - 1, dtype=np.float64)
