@@ -3,6 +3,7 @@ from typing import Union
 
 import matplotlib.lines as mlines
 import mplfinance as mpf
+import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
@@ -17,24 +18,27 @@ from .strategies import BollingerStrategy
 
 
 @smart_cacheable
-def create_bollinger_features(df, lookback_window=10, bb_period=20, bb_std=2):
+def create_bollinger_features(
+    df: pd.DataFrame, lookback_window: int = 10, bb_period: int = 20, bb_std: float = 2
+):
     """
     Create features for meta-labeling model
     """
-    features = df[["close"]]
+    features = pd.DataFrame(index=df.index)
+    features["close"] = df["close"]
     features["spread"] = df["spread"] / df["close"]
 
     # Bollinger features
-    bb_feat = df.ta.bbands(bb_period, bb_std)
-    features[["bb_lower", "bb_upper"]] = bb_feat.iloc[:, :2]
-    features[["bb_bandwidth", "bb_percentage"]] = bb_feat.iloc[:, -2:]
+    bb_cols = ["bb_lower", "bb_mid", "bb_upper", "bb_bandwidth", "bb_percentage"]
+    features[bb_cols] = df.ta.bbands(bb_period, bb_std)
+    # features[["bb_bandwidth", "bb_percentage"]] = bb_feat.iloc[:, -2:]
 
     # Fractionally_differenced prices
-    d0 = fracdiff_optimal(features["close"], verbose=True)[1]
-    d1 = fracdiff_optimal(features["bb_lower"], verbose=True)[1]
-    d2 = fracdiff_optimal(features["bb_upper"], verbose=True)[1]
-    d = max(d0, d1, d2)
-    ffd_cols = ["close", "bb_lower", "bb_upper"]
+    ffd_cols = ["close"] + bb_cols[:3]
+    d = 0
+    for col in ffd_cols:
+        d_ = fracdiff_optimal(features[col], verbose=True)[1]
+        d = max(d, d_)
     features[ffd_cols] = frac_diff_ffd(features[ffd_cols], d)
 
     # Price-based features
@@ -93,35 +97,33 @@ def plot_bbands(
     start: Union[str, datetime.datetime],
     end: Union[str, datetime.datetime],
     window: int = 20,
-    std0: float = 1.5,
-    std1: float = None,
+    std: float = 1.5,
     width: float = 7.5,
     height: float = 5,
     linewidth: float = 1,
     markersize: int = 40,
 ):
     """
-    Plots a financial chart with Bollinger Bands and custom trading signals.
+    Plots a financial chart with Bollinger Bands and custom trading labels.
 
     Args:
         data (pd.DataFrame): The DataFrame containing OHLCV data.
         start (Union[str, datetime.datetime]): The start date for the plot.
         end (Union[str, datetime.datetime]): The end date for the plot.
         window (int): The lookback period for the Bollinger Bands.
-        std0 (float): The number of standard deviations for the first set of bands.
-        std1 (float, optional): The number of standard deviations for the second set of bands.
+        std (float): The number of standard deviations for the first set of bands.
         width (float): The width of the plot figure in inches.
         height (float): The height of the plot figure in inches.
         linewidth (float): The line width for the bands.
     """
     df = data.loc[start:end, ["open", "high", "low", "close"]].copy()
-    std0 = float(std0)
+    std = float(std)
 
     # Compute first set of bands
-    df.ta.bbands(window, std0, append=True)
-    upper_col = f"BBU_{window}_{std0}"
-    lower_col = f"BBL_{window}_{std0}"
-    mid_col = f"BBM_{window}_{std0}"
+    df.ta.bbands(window, std, append=True)
+    upper_col = f"BBU_{window}_{std}"
+    lower_col = f"BBL_{window}_{std}"
+    mid_col = f"BBM_{window}_{std}"
 
     # We remove the 'label' keyword as it is not supported in this version.
     upper = mpf.make_addplot(df[upper_col], color="lightgreen", width=linewidth)
@@ -129,49 +131,32 @@ def plot_bbands(
     mid = mpf.make_addplot(df[mid_col], color="orange", width=linewidth)
     bands = [upper, lower, mid]
 
-    # Optional second set of bands
-    linewidth1 = linewidth * 1.5
-    if std1:
-        std1 = float(std1)
-        df.ta.bbands(window, std1, append=True)
-        # We remove the 'label' keyword from these plots as well.
-        upper1 = mpf.make_addplot(df[f"BBU_{window}_{std1}"], color="blue", width=linewidth1)
-        lower1 = mpf.make_addplot(df[f"BBL_{window}_{std1}"], color="blue", width=linewidth1)
-        bands += [upper1, lower1]
-
     # --- ENTRY/EXIT SIGNALS ---
-    signals, t_events = get_entries(strategy=BollingerStrategy(window, std0), data=df)
-    signals = signals.loc[t_events]
+    side, t_events = get_entries(
+        strategy=BollingerStrategy(window, std), data=df, on_crossover=True
+    )
+    entries = side.loc[t_events]
 
-    # Long entry: close crosses above lower band
-    long_entry = signals[signals == 1]
-    # long_entry = (df["close"].shift(1) < df[lower_col].shift(1)) & (df["close"] > df[lower_col])
+    # Long entry: close crosses below lower band
+    long_entry = entries == 1
 
-    # Long exit: close crosses below upper band
-    long_exit = (df["close"].shift(1) > df[upper_col].shift(1)) & (df["close"] < df[upper_col])
+    # Short entry: close crosses above upper band
+    short_entry = entries == -1
 
-    # Short entry: close crosses below upper band
-    # short_entry = (df["close"].shift(1) > df[upper_col].shift(1)) & (df["close"] < df[upper_col])
-    short_entry = signals[signals == -1]
-    # Short exit: close crosses above lower band
-    short_exit = (df["close"].shift(1) < df[lower_col].shift(1)) & (df["close"] > df[lower_col])
-
-    # Marker plots with labels for legend
-    # We remove the 'label' keyword and will create the legend manually.
-    entry_plot = mpf.make_addplot(
+    long_entry_plot = mpf.make_addplot(
         df["close"].where(long_entry),
         type="scatter",
         markersize=markersize,
         marker="^",
         color="lime",
     )
-    exit_plot = mpf.make_addplot(
-        df["close"].where(long_exit),
-        type="scatter",
-        markersize=markersize,
-        marker="v",
-        color="red",
-    )
+    # exit_plot = mpf.make_addplot(
+    #     df["close"].where(long_exit),
+    #     type="scatter",
+    #     markersize=markersize,
+    #     marker="v",
+    #     color="red",
+    # )
     short_entry_plot = mpf.make_addplot(
         df["close"].where(short_entry),
         type="scatter",
@@ -179,15 +164,15 @@ def plot_bbands(
         marker="v",
         color="orange",
     )
-    short_exit_plot = mpf.make_addplot(
-        df["close"].where(short_exit),
-        type="scatter",
-        markersize=markersize,
-        marker="^",
-        color="cyan",
-    )
+    # short_exit_plot = mpf.make_addplot(
+    #     df["close"].where(short_exit),
+    #     type="scatter",
+    #     markersize=markersize,
+    #     marker="^",
+    #     color="cyan",
+    # )
 
-    bands += [entry_plot, exit_plot, short_entry_plot, short_exit_plot]
+    bands += [long_entry_plot, short_entry_plot]
 
     # --- STYLE ---
     my_dark_style = mpf.make_mpf_style(
@@ -220,20 +205,8 @@ def plot_bbands(
     bands_handles = axes[0].lines
 
     # Get handles and labels for the line plots (Bollinger Bands)
-    if std1:
-        labels.extend(
-            [
-                f"Upper Band ({std0}σ)",
-                f"Lower Band ({std0}σ)",
-                "Middle Band",
-                f"Upper Band ({std1}σ)",
-                f"Lower Band ({std1}σ)",
-            ]
-        )
-        handles.extend(bands_handles)
-    else:
-        labels.extend([f"Upper Band ({std0}σ)", f"Lower Band ({std0}σ)", "Middle Band"])
-        handles.extend(bands_handles)
+    labels.extend([f"Upper Band ({std}σ)", f"Lower Band ({std}σ)", "Middle Band"])
+    handles.extend(bands_handles)
 
     # Create dummy line handles for the scatter markers to ensure correct order
     long_entry_handle = mlines.Line2D(
