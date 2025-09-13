@@ -21,7 +21,7 @@ from ..sampling.optimized_concurrent import (
 
 
 # Snippet 3.2, page 45, Triple Barrier Labeling Method
-def apply_pt_sl_on_t1_optimized(close, events, pt_sl):
+def apply_pt_sl_on_t1_optimized(close: pd.Series, events: pd.DataFrame, pt_sl: list):
     """
     Advances in Financial Machine Learning, Snippet 3.2, page 45.
 
@@ -102,13 +102,13 @@ def _find_barrier_hits(close_val, event_locs, t1_locs, trgt, side, pt_sl_arr):
         event_side = side[i]
 
         # Set profit-taking and stop-loss levels for the current event
-        pt = np.log(1 + pt_level * trgt[i]) if pt_level > 0 else np.inf
-        sl = np.log(1 - sl_level * trgt[i]) if sl_level > 0 else -np.inf
+        pt = pt_level * trgt[i] if pt_level > 0 else np.inf
+        sl = -sl_level * trgt[i] if sl_level > 0 else -np.inf
 
         # Iterate through the price path for the event
         for j in range(start_loc + 1, end_loc + 1):
             # Calculate path-return
-            ret = np.log(close_val[j] / start_price) * event_side
+            ret = (close_val[j] / start_price - 1) * event_side
 
             # Check for stop-loss hit (if not already found)
             if sl_hit_locs[i] == -1 and ret <= sl:
@@ -225,6 +225,8 @@ def get_events(
     - index: Event start times
     - t1: Event end times
     - trgt: Target volatility
+    - pt: Take-profit target
+    - sl: Stop-loss target
     - side: Optional. Algo's position side
     """
 
@@ -247,6 +249,7 @@ def get_events(
     # Create a new df with [v_barrier, target, side] and drop rows that are NA in target
     events = pd.concat({"t1": vertical_barrier_times, "trgt": target, "side": side}, axis=1)
     events = events.dropna(subset=["trgt"])
+    events[["pt", "sl"]] = np.full((events.shape[0], 2), pt_sl, dtype="int8")
 
     # Apply Triple Barrier
     first_touch_dates = apply_pt_sl_on_t1_optimized(close, events, pt_sl)
@@ -275,7 +278,7 @@ def barrier_touched(ret, target, pt_sl):
     :param pt_sl: (np.array) Profit-taking and stop-loss multiples
     :return: (np.array) Labels
     """
-    N = ret.shape[0]  # Number of events
+    N = len(ret)  # Number of events
     store = np.empty(N, dtype=np.int8)  # Store labels in an array
 
     profit_taking_multiple = pt_sl[0]
@@ -283,8 +286,8 @@ def barrier_touched(ret, target, pt_sl):
 
     # Iterate through the DataFrame and check if the vertical barrier was reached
     for i in prange(N):
-        pt_level_reached = ret[i] > np.log(1 + profit_taking_multiple * target[i])
-        sl_level_reached = ret[i] < np.log(1 - stop_loss_multiple * target[i])
+        pt_level_reached = ret[i] > profit_taking_multiple * target[i]
+        sl_level_reached = ret[i] < -stop_loss_multiple * target[i]
 
         if ret[i] > 0.0 and pt_level_reached:
             # Top barrier reached
@@ -300,7 +303,7 @@ def barrier_touched(ret, target, pt_sl):
 
 
 # Snippet 3.4 -> 3.7, page 51, Labeling for Side & Size with Meta Labels
-def get_bins(triple_barrier_events, close, vertical_barrier_zero=False, pt_sl=None):
+def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
     """
     Advances in Financial Machine Learning, Snippet 3.7, page 51.
 
@@ -325,13 +328,15 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False, pt_sl=No
         - Case 1: If 'side' not in events → `bin ∈ {-1, 1}` (label by price action)
         - Case 2: If 'side' is present    → `bin ∈ {0, 1}`  (label by PnL — meta-labeling)
     :param close: (pd.Series) Close prices
-    :param vertical_barrier_zero: (bool) If True, sets bin to 0 only for events where the vertical barrier is touched first; otherwise, labeling is determined by the sign of the return.
-    :param pt_sl: (list) Profit-taking and stop-loss multiples
+    :param vertical_barrier_zero: (bool) If True, sets bin to 0 only for events where the vertical barrier is touched first;
+     otherwise, labeling is determined by the sign of the return.
     :return: (pd.DataFrame)
     Events DataFrame with the following columns:
     - index: Event start times
     - t1: Event end times
     - trgt: Target volatility
+    - pt: Take-profit target
+    - sl: Stop-loss target
     - side: Optional. Algo's position side
     - ret: Returns of the event
     - bin: Labels for the event, where 1 is a positive return, -1 is a negative return, and 0 is a vertical barrier hit
@@ -343,18 +348,16 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False, pt_sl=No
     prices = close.reindex(all_dates, method="bfill")
 
     # 2. Create out DataFrame
-    out_df = events[["t1"]].copy()
-    out_df["ret"] = np.log(prices.loc[events["t1"].array].array / prices.loc[events.index])
-    out_df["trgt"] = events["trgt"]
+    out_df = events[["t1", "trgt"]].copy()
+    out_df["ret"] = prices.loc[events["t1"].array].array / prices.loc[events.index] - 1
 
-    # Meta labeling: Events that were correct will have pos returns
+    # Meta labeling: Events that were correct will have positive returns
     if "side" in events:
         out_df["ret"] *= events["side"]  # meta-labeling
 
     if vertical_barrier_zero:
         # Label 0 when vertical barrier reached
-        pt_sl = [1, 1] if pt_sl is None else [pt_sl[0], pt_sl[1]]
-        pt_sl = np.array(pt_sl, dtype=float)
+        pt_sl = events[["pt", "sl"]].iloc[0].values
         out_df["bin"] = barrier_touched(out_df["ret"].values, out_df["trgt"].values, pt_sl)
     else:
         # Label is the sign of the return
@@ -368,7 +371,6 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False, pt_sl=No
     if "side" in triple_barrier_events.columns:
         out_df["side"] = events["side"].astype("int8")
 
-    out_df["ret"] = np.exp(out_df["ret"]) - 1  # Convert log returns to simple returns
     return out_df
 
 
@@ -390,7 +392,7 @@ def drop_labels(triple_barrier_events, min_pct=0.05):
         if df0.min() > min_pct or df0.shape[0] < 3:
             break
 
-        logger.info(f"dropped label: {df0.idxmin()} - {df0.min():.4%}")
+        logger.info(f"Dropped label: {df0.idxmin()} - {df0.min():.4%}")
         triple_barrier_events = triple_barrier_events[triple_barrier_events["bin"] != df0.idxmin()]
 
     return triple_barrier_events
@@ -407,6 +409,7 @@ def triple_barrier_labels(
     min_ret: float = 0.0,
     min_pct: float = 0.05,
     vertical_barrier_zero: bool = False,
+    drop: bool = True,
     verbose: bool = True,
 ):
     """
@@ -423,6 +426,7 @@ def triple_barrier_labels(
     :param vertical_barrier_zero: Default is False, which sets out['ret'] value in get_bins() to the sign of
             price return when vertical barrier is touched,
             else, if True, sets it to 0 when vertical barrier is touched.
+    :param drop: Drop labels that occur < min_pct.
     :param verbose: Log outputs if True.
     :return: (pd.DataFrame)
     Events DataFrame with the following columns:
@@ -451,16 +455,17 @@ def triple_barrier_labels(
         print(f"get_events done after {timedelta(seconds=round(time.perf_counter() - time0))}.")
         time1 = time.perf_counter()
 
-    events = get_bins(events, close, vertical_barrier_zero, pt_sl)
+    events = get_bins(events, close, vertical_barrier_zero)
     if verbose:
         print(f"get_bins done after {timedelta(seconds=round(time.perf_counter() - time1))}.")
         time1 = time.perf_counter()
 
-    if side_prediction is not None:
+    if drop:
         events = drop_labels(events, min_pct)
-
-    if verbose:
-        print(f"drop_labels done after {timedelta(seconds=round(time.perf_counter() - time1))}.")
+        if verbose:
+            print(
+                f"drop_labels done after {timedelta(seconds=round(time.perf_counter() - time1))}."
+            )
 
     if verbose:
         N, n_events = close.shape[0], events.shape[0]
