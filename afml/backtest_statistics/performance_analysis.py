@@ -5,8 +5,11 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from loguru import logger
 from numba import njit
 from scipy.stats import kurtosis, skew
+
+from afml.bet_sizing.bet_sizing import bet_size_probability
 
 from .statistics import (
     all_bets_concentration,
@@ -322,8 +325,8 @@ def calculate_performance_metrics(
     # --- Input Validation and Sanitization ---
     if not returns.index.isin(data_index).all():
         raise ValueError("Returns index must be fully contained within data index.")
-    if positions.index != returns.index:
-        raise ValueError("Positions must have the same index as returns.")
+    # if positions.index != returns.index:
+    #     raise ValueError("Positions must have the same index as returns.")
 
     # If data is too short or has no variance, return a dict of zeros.
     if len(returns) < 2 or returns.std() == 0:
@@ -438,7 +441,7 @@ def calculate_performance_metrics(
     # --- Trade Stats (if positions are provided) ---
     total_periods = len(data_index)
 
-    if positions:
+    if positions is not None:
         metrics["avg_trade_duration"] = average_holding_period(positions)
         bet_frequency = timing_of_flattening_and_flips(positions).shape[0]
         metrics["bet_frequency"] = bet_frequency
@@ -506,13 +509,15 @@ def analyze_trading_behavior(positions: pd.Series, returns: pd.Series) -> dict:
 
 
 def evaluate_meta_labeling_performance(
-    primary_signals: pd.Series,
-    meta_probabilities: pd.Series,
-    returns: pd.Series,
+    data_index: pd.DatetimeIndex,
+    events: pd.DataFrame,
+    prob: pd.Series,
     confidence_threshold: float = 0.5,
     trading_days_per_year: int = 252,
     trading_hours_per_day: int = 24,
     strategy_name: str = "Strategy",
+    step_size: float = 0.0,
+    average_active: bool = False,
 ) -> dict:
     """
     Evaluates and compares the performance of a primary strategy against a
@@ -525,7 +530,7 @@ def evaluate_meta_labeling_performance(
 
     Args:
         primary_signals: A Series of trading signals from the primary model.
-        meta_probabilities: A Series or array of probabilities from the meta-model.
+        prob: A Series or array of probabilities from the meta-model.
         returns: A Series of the underlying asset's returns.
         confidence_threshold: The minimum probability required to take a trade.
         trading_days_per_year: The number of trading days in a year.
@@ -536,58 +541,53 @@ def evaluate_meta_labeling_performance(
         A dictionary containing the performance metrics for both strategies,
         their return series, and other comparison metadata.
     """
-    # Align returns data with the signal index for accurate backtesting.
-    aligned_returns = returns.reindex(primary_signals.index, fill_value=0)
-
-    # --- 1. Primary Strategy Performance ---
-    primary_positions = primary_signals.copy()
-    # Calculate returns by multiplying the previous period's position by the current period's return.
-    primary_returns = (primary_positions.shift(1) * aligned_returns).dropna()
-
-    # --- 2. Meta-Labeled Strategy Performance ---
-    meta_positions = primary_signals.copy()
-
-    # Ensure probabilities are a Series aligned with the primary signals index.
-    aligned_probs = meta_probabilities.reindex(primary_signals.index, fill_value=0.5)
 
     # Clip probabilities to avoid issues with log(0) or division by zero in z-score.
-    adjusted_meta_prob = aligned_probs.clip(lower=1e-6, upper=1 - 1e-6)
+    prob = prob.clip(lower=1e-6, upper=1 - 1e-6).reindex(events.index)
 
     # Filter trades: Set position to 0 for trades below the confidence threshold.
-    confident_trades = aligned_probs > confidence_threshold
-    meta_positions[~confident_trades] = 0
+    meta_positions = (prob.reindex(events.index) > confidence_threshold).astype("int8")
 
-    # --- Bet Sizing Logic ---
-    # Convert the model's probability into a z-score.
-    z_scores = (adjusted_meta_prob - 0.5) / (adjusted_meta_prob * (1 - adjusted_meta_prob)) ** 0.5
-    # Map the z-score to a bet size from -1 to 1 using the normal CDF, creating a sigmoid-like sizing.
-    bet_sizes_raw = 2 * stats.norm.cdf(z_scores) - 1
+    # # --- Bet Sizing Logic ---
+    bet_sizes_raw = bet_size_probability(
+        events,
+        prob,
+        num_classes=2,
+        pred=None,
+        step_size=step_size,
+        average_active=average_active,
+    )
 
     # Apply the calculated bet size to the signals that were not filtered out.
     active_signal_indices = meta_positions != 0
-    meta_positions.loc[active_signal_indices] *= np.abs(bet_sizes_raw[active_signal_indices])
+    meta_positions.loc[active_signal_indices] *= bet_sizes_raw.loc[active_signal_indices]
+
+    primary_returns = events["ret"]
+    side = events["side"]
+
+    # primary_returns = returns * bet_sizes_raw
 
     # Calculate meta-strategy returns with the new, dynamically sized positions.
-    meta_returns = (meta_positions.shift(1) * aligned_returns).dropna()
+    meta_returns = meta_positions * primary_returns.loc[active_signal_indices]
 
     # --- 3. Performance Calculation ---
     primary_metrics = calculate_performance_metrics(
         returns=primary_returns,
-        data_index=returns.index,
-        positions=primary_positions,
+        data_index=data_index,
+        positions=side,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
     )
     meta_metrics = calculate_performance_metrics(
         returns=meta_returns,
-        data_index=returns.index,
-        positions=meta_positions,
+        data_index=data_index,
+        positions=side.loc[active_signal_indices],
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
     )
 
     # --- 4. Meta-Specific Metrics ---
-    total_signals = len(primary_signals[primary_signals != 0])
+    total_signals = len(events)
     filtered_signals = len(meta_positions[meta_positions != 0])
     # The percentage of trades that were filtered out by the meta-model.
     meta_metrics["signal_filter_rate"] = (
@@ -598,7 +598,7 @@ def evaluate_meta_labeling_performance(
     # Information Ratio: Measures the meta-model's ability to generate excess return per unit of tracking error.
     excess_returns = meta_returns - primary_returns.reindex(meta_returns.index, fill_value=0)
     _, periods_per_year = get_annualization_factors(
-        data_index=excess_returns.index,
+        data_index=data_index,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
     )
@@ -698,7 +698,7 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
         print("=" * 75)
         trading_metrics = [
             ("Number of Trades", "num_trades", "0f"),
-            ("Trades per Year", "trades_per_year", "1f"),
+            ("Trades per Year", "trades_per_year", "0f"),
             ("Win Rate", "win_rate", "%"),
             ("Avg Win", "avg_win", "%"),
             ("Avg Loss", "avg_loss", "%"),
@@ -843,6 +843,8 @@ def calculate_improvement(primary_val: float, meta_val: float, metric_key: str) 
         "var_95",
         "cvar_95",
         "ulcer_index",
+        "skewness",
+        "kurtosis",
     ]
     if metric_key in lower_is_better:
         return (primary_val - meta_val) / abs(primary_val) * 100
@@ -855,13 +857,15 @@ def calculate_improvement(primary_val: float, meta_val: float, metric_key: str) 
 
 
 def run_meta_labeling_analysis(
-    df: pd.DataFrame,
-    signals: pd.Series,
-    meta_probabilities: Union[pd.Series, np.ndarray],
+    data_index: pd.DatetimeIndex,
+    events: pd.DataFrame,
+    prob: Union[pd.Series, np.ndarray],
     confidence_threshold: float = 0.5,
     trading_days_per_year: int = 252,
     trading_hours_per_day: int = 24,
     strategy_name: str = "Strategy",
+    average_active: bool = False,
+    step_size: float = 0.0,
     save_path: str = None,
 ):
     """
@@ -873,26 +877,35 @@ def run_meta_labeling_analysis(
     Args:
         df: The full DataFrame containing historical price data.
         signals: Trading signals from the primary model for the test period.
-        meta_probabilities: Probabilities from the meta-model for the test period.
+        prob: Probabilities from the meta-model for the test period.
         confidence_threshold: The probability threshold for filtering trades.
         strategy_name: The name for the strategy run.
         save_path: If provided, saves the output to this file path
     """
-    # Isolate returns for the test period, including one prior point for shift(1).
-    test_start = signals.index[0]
-    pre_test_point = df.index[df.index.get_loc(test_start) - 1]
-    return_index = signals.index.union([pre_test_point])
-    returns = df.loc[return_index, "close"].pct_change()
-
     results = evaluate_meta_labeling_performance(
-        primary_signals=signals,
-        meta_probabilities=meta_probabilities,
-        returns=returns,
+        data_index=data_index,
+        events=events,
+        prob=prob,
         confidence_threshold=confidence_threshold,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
         strategy_name=strategy_name,
+        step_size=step_size,
+        average_active=average_active,
     )
 
     print_meta_labeling_comparison(results, save_path)
     return results
+
+
+def get_optimal_threshold(model_data):
+    from sklearn.metrics import precision_recall_curve
+
+    y_true, prob = model_data.y_test, model_data.prob
+    precision, recall, thresholds = precision_recall_curve(y_true, prob)
+    score = 2 * (precision * recall) / (precision + recall + 1e-9)  # f1-score
+    best_idx = np.nanargmax(score)
+    best_threshold = thresholds[best_idx] if best_idx < len(thresholds) else 1.0
+    best_score = score[best_idx]
+    logger.info(f"Optimal threshold is {best_threshold:.4f} for F1-score of {best_score:.4f}")
+    return round(best_threshold, 4)
