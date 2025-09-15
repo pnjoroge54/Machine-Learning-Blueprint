@@ -1,4 +1,5 @@
 import warnings
+from os import cpu_count
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -9,8 +10,12 @@ from loguru import logger
 from numba import njit
 from scipy.stats import kurtosis, skew
 
-from afml.bet_sizing.bet_sizing import bet_size_probability
-
+from ..bet_sizing.bet_sizing import (
+    bet_size_budget,
+    bet_size_dynamic,
+    bet_size_probability,
+    bet_size_reserve,
+)
 from .statistics import (
     all_bets_concentration,
     average_holding_period,
@@ -66,8 +71,8 @@ def get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd.
     else:
         trade_end_times = returns.index.get_indexer(trade_end_times)
         trade_returns, trade_durations = _get_trades_numba_core(
-            returns.to_numpy(),
-            positions.to_numpy(),
+            returns.values,
+            positions.values,
             trade_end_times,
         )
         trade_durations = [returns.index[x[1]] - returns.index[x[0]] for x in trade_durations]
@@ -442,7 +447,10 @@ def calculate_performance_metrics(
     total_periods = len(data_index)
 
     if positions is not None:
-        metrics["avg_trade_duration"] = average_holding_period(positions)
+        hp = average_holding_period(positions)
+        metrics["avg_trade_duration"] = (
+            pd.Timedelta(days=round(hp, 3)) if hp > 0 else hp
+        )  # Rounded so output doesn't include nanoseconds
         bet_frequency = timing_of_flattening_and_flips(positions).shape[0]
         metrics["bet_frequency"] = bet_frequency
         metrics["bets_per_year"] = int(
@@ -509,15 +517,15 @@ def analyze_trading_behavior(positions: pd.Series, returns: pd.Series) -> dict:
 
 
 def evaluate_meta_labeling_performance(
-    data_index: pd.DatetimeIndex,
+    close: pd.Series,
     events: pd.DataFrame,
-    prob: pd.Series,
+    meta_probabilities: pd.Series,
     confidence_threshold: float = 0.5,
     trading_days_per_year: int = 252,
     trading_hours_per_day: int = 24,
     strategy_name: str = "Strategy",
-    step_size: float = 0.0,
-    average_active: bool = False,
+    bet_sizing: str = None,
+    **kwargs,
 ) -> dict:
     """
     Evaluates and compares the performance of a primary strategy against a
@@ -529,9 +537,12 @@ def evaluate_meta_labeling_performance(
         threshold and sizes them according to the meta-model's probability.
 
     Args:
-        primary_signals: A Series of trading signals from the primary model.
-        prob: A Series or array of probabilities from the meta-model.
-        returns: A Series of the underlying asset's returns.
+        close: A Series of prices that cover the period encapsulated in events.
+        events: A DataFrame of trade events that contains at least the columns 't1' and 'side'.
+            - index: Event start times
+            - t1: Event end times, i.e., the time of first barrier touch
+            - side: Trade direction
+        meta_probabilities: A Series or array of probabilities from the meta-model.
         confidence_threshold: The minimum probability required to take a trade.
         trading_days_per_year: The number of trading days in a year.
         trading_hours_per_day: The number of trading hours per day.
@@ -541,52 +552,67 @@ def evaluate_meta_labeling_performance(
         A dictionary containing the performance metrics for both strategies,
         their return series, and other comparison metadata.
     """
+    primary_positions = events["side"].copy()
+    all_dates = events.index.union(other=events["t1"].array).drop_duplicates()
+    prices = close.reindex(all_dates, method="bfill")
 
-    # Clip probabilities to avoid issues with log(0) or division by zero in z-score.
-    prob = prob.clip(lower=1e-6, upper=1 - 1e-6).reindex(events.index)
+    returns = prices.loc[events["t1"].array].array / prices.loc[events.index] - 1
+    primary_returns = returns * primary_positions
 
     # Filter trades: Set position to 0 for trades below the confidence threshold.
-    meta_positions = (prob.reindex(events.index) > confidence_threshold).astype("int8")
+    aligned_probs = meta_probabilities.reindex(events.index, fill_value=0.5)
+    meta_positions = primary_positions.copy()
 
-    # # --- Bet Sizing Logic ---
-    bet_sizes_raw = bet_size_probability(
-        events,
-        prob,
-        num_classes=2,
-        pred=None,
-        step_size=step_size,
-        average_active=average_active,
-    )
+    # Filter trades: Set position to 0 for trades below the confidence threshold.
+    confident_trades = aligned_probs > confidence_threshold
+    meta_positions = meta_positions[confident_trades]
+    meta_events = events[confident_trades].copy()
+    t1 = meta_events.t1
+    meta_prob = aligned_probs[confident_trades]
+
+    # --- Bet Sizing Logic ---
+    if bet_sizing is None:
+        bet_sizes_raw = meta_positions
+    elif bet_sizing == "probability":
+        bet_sizes_raw = bet_size_probability(
+            meta_events,
+            meta_prob,
+            num_classes=2,
+            pred=meta_positions,
+            step_size=kwargs.get("step_size", 0),
+            average_active=kwargs.get("average_active", False),
+        ).abs()
+    elif bet_sizing == "budget":
+        bets = bet_size_budget(t1, meta_positions)
+        bet_sizes_raw = bets["bet_size"]
+    elif bet_sizing == "reserve":
+        bets = bet_size_reserve(t1, meta_positions, num_workers=cpu_count())
+        bet_sizes_raw = bets["bet_size"]
 
     # Apply the calculated bet size to the signals that were not filtered out.
-    active_signal_indices = meta_positions != 0
-    meta_positions.loc[active_signal_indices] *= bet_sizes_raw.loc[active_signal_indices]
-
-    primary_returns = events["ret"]
-    side = events["side"]
-
-    # primary_returns = returns * bet_sizes_raw
+    meta_positions *= bet_sizes_raw
 
     # Calculate meta-strategy returns with the new, dynamically sized positions.
-    meta_returns = meta_positions * primary_returns.loc[active_signal_indices]
+    meta_returns = (meta_positions * returns).dropna()
 
-    # --- 3. Performance Calculation ---
+    # --- Performance Calculation ---
+    data_index = close.loc[events.index[0] : events["t1"].max()].index
     primary_metrics = calculate_performance_metrics(
         returns=primary_returns,
         data_index=data_index,
-        positions=side,
+        positions=primary_positions,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
     )
     meta_metrics = calculate_performance_metrics(
         returns=meta_returns,
         data_index=data_index,
-        positions=side.loc[active_signal_indices],
+        positions=meta_positions,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
     )
 
-    # --- 4. Meta-Specific Metrics ---
+    # --- Meta-Specific Metrics ---
     total_signals = len(events)
     filtered_signals = len(meta_positions[meta_positions != 0])
     # The percentage of trades that were filtered out by the meta-model.
@@ -857,16 +883,16 @@ def calculate_improvement(primary_val: float, meta_val: float, metric_key: str) 
 
 
 def run_meta_labeling_analysis(
-    data_index: pd.DatetimeIndex,
+    close: pd.Series,
     events: pd.DataFrame,
-    prob: Union[pd.Series, np.ndarray],
+    meta_probabilities: pd.Series,
     confidence_threshold: float = 0.5,
     trading_days_per_year: int = 252,
     trading_hours_per_day: int = 24,
     strategy_name: str = "Strategy",
-    average_active: bool = False,
-    step_size: float = 0.0,
     save_path: str = None,
+    bet_sizing: str = None,
+    **kwargs,
 ):
     """
     A wrapper function to run a complete meta-labeling analysis.
@@ -875,23 +901,30 @@ def run_meta_labeling_analysis(
     main `evaluate_meta_labeling_performance` function and then prints the results.
 
     Args:
-        df: The full DataFrame containing historical price data.
+        close: The full Series of historical price data.
+        events: A DataFrame of trade events that contains at least the columns 't1' and 'side'.
+            - index: Event start times
+            - t1: Event end times, i.e., the time of first barrier touch
+            - side: Trade direction
         signals: Trading signals from the primary model for the test period.
-        prob: Probabilities from the meta-model for the test period.
+        meta_probabilities: Probabilities from the meta-model for the test period.
         confidence_threshold: The probability threshold for filtering trades.
         strategy_name: The name for the strategy run.
         save_path: If provided, saves the output to this file path
+        bet_sizing: Method used to size bets.
+            Options are 'probability', 'budget', 'dynamic', 'reserve'.
+        kwargs: Optional arguments passed to bet sizing functions.
     """
     results = evaluate_meta_labeling_performance(
-        data_index=data_index,
-        events=events,
-        prob=prob,
-        confidence_threshold=confidence_threshold,
-        trading_days_per_year=trading_days_per_year,
-        trading_hours_per_day=trading_hours_per_day,
-        strategy_name=strategy_name,
-        step_size=step_size,
-        average_active=average_active,
+        close.copy(),
+        events.copy(),
+        meta_probabilities.copy(),
+        confidence_threshold,
+        trading_days_per_year,
+        trading_hours_per_day,
+        strategy_name,
+        bet_sizing,
+        **kwargs,
     )
 
     print_meta_labeling_comparison(results, save_path)
