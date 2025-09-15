@@ -1,4 +1,8 @@
-from .bollinger_features import create_bollinger_features
+from .bollinger_features import (
+    create_bollinger_features,
+    plot_bbands,
+    plot_bbands_dual_bbp_bw,
+)
 from .genetic_optimizer import (
     ParetoOptimizer,
     SingleObjectiveOptimizer,
@@ -13,4 +17,8 @@ from .ma_whipsaw_ratio import (
 )
 from .signal_processing import get_entries
 from .strategies import BaseStrategy, BollingerStrategy, MACrossoverStrategy
-from .training import train_meta_model
+from .training import (
+    get_optimal_threshold,
+    get_trend_scanning_meta_labels,
+    train_meta_model,
+)

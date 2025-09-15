@@ -8,6 +8,8 @@ import pandas as pd
 from numba import njit, prange
 from scipy.stats import moment, norm
 
+from afml import cache
+
 from .ch10_snippets import (
     avg_active_signals,
     bet_size,
@@ -53,7 +55,7 @@ def bet_size_probability(
     if abs(step_size) > 0:
         signal_1 = discrete_signal(signal0=signal_1, step_size=abs(step_size))
 
-    return signal_1
+    return signal_1.rename("bet_size")
 
 
 def bet_size_dynamic(
@@ -235,7 +237,7 @@ def confirm_and_cast_to_df(d_vars):
     return events
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _get_concurrent_sides_numba(events_index, events_t1, sides):
     n = len(events_index)
     active_long = np.zeros(n, dtype=np.int32)

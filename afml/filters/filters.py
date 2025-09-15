@@ -4,6 +4,8 @@ used to filter events where a structural break occurs. This event is then used t
 to some event horizon, say a day.
 """
 
+from typing import Union
+
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -53,7 +55,9 @@ def _cusum_filter_numba_core(
     return t_events_val
 
 
-def cusum_filter(raw_time_series, threshold, time_stamps: bool = True):
+def cusum_filter(
+    raw_time_series: pd.Series, threshold: Union[float, int, pd.Series], time_stamps: bool = True
+):
     """
     Advances in Financial Machine Learning, Snippet 2.4, page 39.
 
@@ -154,7 +158,13 @@ def cusum_filter(raw_time_series, threshold, time_stamps: bool = True):
         return event_indices_values
 
 
-def z_score_filter(raw_time_series, mean_window, std_window, z_score=3, time_stamps=True):
+def z_score_filter(
+    raw_time_series: pd.Series,
+    mean_window: int,
+    std_window: int,
+    z_score: float = 3,
+    time_stamps: bool = True,
+):
     """
     Filter which implements z_score filter
     (https://stackoverflow.com/questions/22583391/peak-signal-detection-in-realtime-timeseries-data)

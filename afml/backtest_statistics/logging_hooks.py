@@ -1,5 +1,6 @@
 # logging_hooks.py
 
+from pathlib import Path
 import sys
 from datetime import datetime
 
@@ -17,7 +18,7 @@ logger.remove()
 # 1. File Logger: Captures detailed DEBUG messages and serializes them to JSON.
 # This file will contain the full, structured data for analysis.
 logger.add(
-    "logs/model_logs_{time:YYYYMMDD}.jsonl",
+    Path().cwd().parent / "backtest_logs/model_logs_{time:YYYYMMDD}.jsonl",
     format="{message}",
     serialize=True,  # Crucial for writing JSON
     level="DEBUG",  # Captures DEBUG, INFO, WARNING, etc.
