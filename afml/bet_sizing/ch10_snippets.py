@@ -29,7 +29,10 @@ def get_signal(prob, num_classes, pred=None):
     if prob.shape[0] == 0:
         return pd.Series(dtype="float64")
 
-    # 1) Generate signals from multinomial classification (one-vs-rest).
+    # Clip probabilities to avoid issues with log(0) or division by zero in z-score.
+    prob = prob.clip(lower=1e-6, upper=1 - 1e-6)
+
+    # Generate signals from multinomial classification (one-vs-rest).
     bet_sizes = (prob - 1 / num_classes) / (prob * (1 - prob)) ** 0.5
 
     # Allow for bet size to be returned with or without side.
@@ -38,7 +41,7 @@ def get_signal(prob, num_classes, pred=None):
         bet_sizes = pred * (2 * norm.cdf(bet_sizes) - 1)
     else:
         # signal = size only
-        bet_sizes = bet_sizes.apply(lambda s: 2 * norm.cdf(s) - 1)
+        bet_sizes = pd.Series(2 * norm.cdf(bet_sizes) - 1, index=prob.index)
 
     # Note 1: In the book, this function contains a conditional statement checking for a column named 'side',
     # then executes what is essentially the above line. This has been removed as it appears to be redundant
@@ -79,7 +82,7 @@ def avg_active_signals(signals):
     results = _calculate_active_signals(signal_times, end_times, signal_values, eval_times)
 
     # Convert back to datetime index
-    return pd.Series(results, index=pd.to_datetime(eval_times))
+    return pd.Series(results, index=pd.to_datetime(eval_times), name="signal")
 
 
 # Numba-optimized function to calculate average active signals
