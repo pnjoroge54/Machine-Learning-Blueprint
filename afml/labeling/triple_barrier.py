@@ -86,8 +86,7 @@ def _find_barrier_hits(close_val, event_locs, t1_locs, trgt, side, pt_sl_arr):
     sl_level = pt_sl_arr[1]
 
     # Use arrays of int64 to store integer index locations of hits
-    sl_hit_locs = np.full(event_locs.shape[0], -1, dtype=np.int64)
-    pt_hit_locs = np.full(event_locs.shape[0], -1, dtype=np.int64)
+    sl_hit_locs, pt_hit_locs = np.full((2, event_locs.shape[0]), -1, dtype=np.int64)
 
     # Numba can parallelize this loop automatically
     for i in prange(event_locs.shape[0]):
@@ -126,7 +125,9 @@ def _find_barrier_hits(close_val, event_locs, t1_locs, trgt, side, pt_sl_arr):
 
 
 # Snippet 3.4 page 49, Adding a Vertical Barrier
-def add_vertical_barrier(t_events, close, num_bars=0, **time_delta_kwargs):
+def add_vertical_barrier(
+    t_events: pd.DatetimeIndex, close: pd.Series, num_bars: int = 0, **time_delta_kwargs
+):
     """
     Advances in Financial Machine Learning, Enhanced Implementation.
 
@@ -192,13 +193,13 @@ def add_vertical_barrier(t_events, close, num_bars=0, **time_delta_kwargs):
 
 # Snippet 3.3 -> 3.6 page 50, Getting the Time of the First Touch, with Meta Labels
 def get_events(
-    close,
-    t_events,
-    pt_sl,
-    target,
-    min_ret,
-    vertical_barrier_times=False,
-    side_prediction=None,
+    close: pd.Series,
+    t_events: pd.DatetimeIndex,
+    pt_sl: list,
+    target: pd.Series,
+    min_ret: float = 0.0,
+    vertical_barrier_times: pd.Series = None,
+    side_prediction: pd.Series = None,
 ):
     """
     Advances in Financial Machine Learning, Snippet 3.6 page 50.
@@ -218,7 +219,7 @@ def get_events(
         of the barrier. In this program this is daily volatility series.
     :param min_ret: (float) The minimum target return required for running a triple barrier search.
     :param vertical_barrier_times: (pd.Series) Timestamps of the vertical barriers.
-        We pass a False when we want to disable vertical barriers.
+        We pass None when we want to disable vertical barriers.
     :param side_prediction: (pd.Series) Side of the bet (long/short) as decided by the primary model
     :param verbose: (bool) Flag to report progress on asynch jobs
     :return: (pd.DataFrame) Triple-barrier events with the following columns:
@@ -235,7 +236,7 @@ def get_events(
     target = target[target > min_ret]  # min_ret
 
     # 2. Get vertical barrier (max holding period)
-    if vertical_barrier_times is False:
+    if vertical_barrier_times is None:
         vertical_barrier_times = pd.Series(pd.NaT, index=t_events, dtype=t_events.dtype)
 
     # 3. Form events object, apply stop loss on vertical barrier
@@ -403,7 +404,7 @@ def triple_barrier_labels(
     close: pd.Series,
     target: pd.Series,
     t_events: pd.DatetimeIndex,
-    vertical_barrier_times: bool = False,
+    vertical_barrier_times: pd.Series = None,
     side_prediction: pd.Series = None,
     pt_sl: list = [1, 1],
     min_ret: float = 0.0,
@@ -480,7 +481,7 @@ def triple_barrier_labels(
 
 
 @smart_cacheable
-def get_event_weights(triple_barrier_events, close, verbose=False):
+def get_event_weights(triple_barrier_events: pd.DataFrame, close: pd.Series, verbose: bool = False):
     """
     :param triple_barrier_events: (pd.DataFrame) Triple-barrier events DataFrame with the following structure:
     - **index**: pd.DatetimeIndex of event start times
