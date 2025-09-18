@@ -11,21 +11,20 @@ from sklearn.metrics import (
     recall_score,
 )
 
-from ..cache import cacheable
-from ..data_structures.bars import make_bars
-from ..labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
-
+from ..backtester.reporting import (
+    print_meta_labeling_comparison,
+    run_meta_labeling_analysis,
+)
+from ..cache import smart_cacheable
 from ..cross_validation import (
     PurgedKFold,
     PurgedSplit,
     ml_cross_val_score,
     probability_weighted_accuracy,
 )
+from ..data_structures.bars import make_bars
+from ..labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
 from .logging_hooks import LoggingHooks
-from .performance_analysis import (
-    print_meta_labeling_comparison,
-    run_meta_labeling_analysis,
-)
 from .research_framework import (
     ExperimentHook,
     ExperimentRunner,
@@ -78,10 +77,10 @@ def load_my_data(
     return df, features, labels
 
 
-def get_train_test_split(df, labels, test_size=0.3):
+def get_train_test_split(features, labels, test_size=0.3):
     # Create your features (X) and split data
     print("Hook: Splitting data into train/test sets...")
-    X = df.replace([np.inf, -np.inf], np.nan).dropna()
+    X = features.replace([np.inf, -np.inf], np.nan).dropna()
     y = labels["bin"].loc[X.index]
     w = labels["w"].loc[X.index]  # Sample weights
     t1 = labels["t1"].loc[X.index]  # barrier touch timestamps
@@ -253,6 +252,9 @@ if __name__ == "__main__":
     final_experiment = runner.run(my_experiment)
 
     # You can now access all results from the final_experiment object
+    print("\nAccess final results:")
+    print(f"Sharpe (Primary): {final_experiment.results['primary_metrics']['sharpe_ratio']:.4f}")
+    print(f"Sharpe (Meta): {final_experiment.results['meta_metrics']['sharpe_ratio']:.4f}")
     print("\nAccess final results:")
     print(f"Sharpe (Primary): {final_experiment.results['primary_metrics']['sharpe_ratio']:.4f}")
     print(f"Sharpe (Meta): {final_experiment.results['meta_metrics']['sharpe_ratio']:.4f}")

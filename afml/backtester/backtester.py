@@ -3,7 +3,7 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 
-from afml.backtest_statistics.performance_analysis import (
+from ..backtest_statistics.performance_analysis import (
     analyze_trading_behavior,
     calculate_performance_metrics,
 )
