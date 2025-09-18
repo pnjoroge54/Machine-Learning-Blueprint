@@ -8,7 +8,6 @@ from datetime import datetime
 from multiprocessing import Pool
 from os import cpu_count
 from pathlib import Path
-from pprint import pprint
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -17,9 +16,12 @@ from deap import algorithms, base, creator, tools
 from loguru import logger
 from numba import get_num_threads, set_num_threads
 
-from ..backtest_statistics.performance_analysis import lower_is_better
+from ..backtest_statistics.performance_analysis import (
+    calculate_performance_metrics,
+    get_positions_from_events,
+    lower_is_better,
+)
 from ..cache import memory
-from ..labeling.performance_metrics import calculate_label_metrics
 from ..labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
 from ..util.volatility import get_period_vol
 from .signal_processing import get_entries
@@ -151,7 +153,7 @@ class TripleBarrierEvaluator:
             self.threshold = None
 
         self.primary_signals, self.t_events = get_entries(
-            strategy, data, filter_events, self.threshold, on_crossover
+            strategy, data, self.threshold, on_crossover
         )
 
         # Strategy-specific objective weights
@@ -231,8 +233,14 @@ class TripleBarrierEvaluator:
         self, events: pd.DataFrame, data_fingerprint: str
     ) -> pd.Series:
         """Compute performance metrics from strategy returns"""
-        return calculate_label_metrics(
-            self.target.index, self.primary_signals, events, self.trading_hours_per_day
+        returns = events["ret"]
+        positions = get_positions_from_events(self.target.index, events)
+        return calculate_performance_metrics(
+            returns,
+            self.target.index,
+            positions,
+            self.trading_days_per_year,
+            self.trading_hours_per_day,
         )
 
     def calculate_strategy_metrics(self, events: pd.DataFrame) -> pd.Series:
@@ -737,11 +745,11 @@ def get_optimal_triple_barrier_labels(
     best_params = select_knee_point(pareto_front)
 
     if best_params:
-        logger.info("\nOptimal solution (Knee Point):")
-        pprint(best_params)
-        print(
+        msg = (
             f"{' '.join(evaluator.objective.title().split('_'))} Fitness Parameters: {objectives}"
+            f"\nOptimal solution (Knee Point): \n{best_params}"
         )
+        logger.info(msg)
         save_optimization_results(config, best_params, pareto_front)
         events = evaluator.evaluate_performance(
             pt=best_params.profit_taking,
