@@ -8,10 +8,12 @@ from typing import List, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.stats as stats
+from loguru import logger
 from numba import njit, prange
-from scipy.stats import t
 
 from ..cache import smart_cacheable
+from ..util.misc import value_counts_data
 
 
 @njit(parallel=True, cache=True)
@@ -205,7 +207,7 @@ def trend_scanning_labels(
 
     # Filter labels by t-value
     alpha = 0.05  # 95% confidence
-    t_critical = t.ppf(1 - alpha / 2, N - 1)  # two-tailed test
+    t_critical = stats.t.ppf(1 - alpha / 2, N - 1)  # two-tailed test
     tval_abs = np.abs(opt_tval)
     mask = (tval_abs > 1e-6) & (tval_abs > t_critical)
     bins = np.where(mask, np.sign(opt_tval), 0).astype("int8")
@@ -230,6 +232,66 @@ def trend_scanning_labels(
     df["t_value"] = df["t_value"].clip(lower=-t_max, upper=t_max)
 
     return df
+
+
+def get_trend_scanning_meta_labels(
+    close: pd.Series,
+    side_prediction: pd.Series,
+    t_events: pd.DatetimeIndex,
+    span: Union[List[int], Tuple[int, int]] = (5, 20),
+    volatility_threshold: float = 0.1,
+    use_log: bool = True,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    Generate meta-labels using trend-scanning labels and existing side predictions.
+
+    Parameters
+    ----------
+    close : pd.Series
+        Time-indexed price series.
+    side_prediction : pd.Series
+        Primary model's side predictions (1 for long, -1 for short).
+    t_events : pd.DatetimeIndex
+        Index of event start times to align with trend events.
+    span : Union[List[int], Tuple[int, int]], default=(5, 20)
+        Window span for trend scanning.
+    volatility_threshold : float, default=0.1
+        Volatility threshold for trend scanning.
+    use_log : bool, default=True
+        Use log prices for trend scanning.
+    verbose : bool, default=False
+        Verbosity flag.
+
+    Returns
+    -------
+    pd.DataFrame
+        Meta-labeled events with columns:
+        - t1: End time of trend
+        - ret: Return adjusted for side prediction
+        - bin: Meta-label (1 if correct prediction, 0 otherwise)
+        - side: Original side prediction
+    """
+    # Generate trend-scanning labels
+    trend_events = trend_scanning_labels(
+        close, span, volatility_threshold, use_log=use_log, verbose=verbose
+    )
+    logger.info(f"Trend-Scanning (σ = {volatility_threshold})")
+
+    # Align with t_events
+    t_events = t_events.intersection(trend_events.index)
+    trend_events = trend_events.reindex(t_events)
+
+    # Apply meta-labeling logic
+    trend_events["side"] = side_prediction.reindex(t_events)
+    trend_events["ret"] *= trend_events["side"]  # Adjust returns for side
+    trend_events["bin"] = np.where((trend_events["side"] == trend_events["bin"]), 1, 0).astype(
+        "int8"
+    )
+    if verbose:
+        value_counts_data(trend_events.bin, verbose=True)
+
+    return trend_events
 
 
 def plot_trend_labels(close, trend_labels, title="Trend Labels", view="bin"):
