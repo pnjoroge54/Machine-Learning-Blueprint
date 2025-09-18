@@ -17,8 +17,3 @@ from .ma_whipsaw_ratio import (
 )
 from .signal_processing import get_entries
 from .strategies import BaseStrategy, BollingerStrategy, MACrossoverStrategy
-from .training import (
-    get_optimal_threshold,
-    get_trend_scanning_meta_labels,
-    train_meta_model,
-)
