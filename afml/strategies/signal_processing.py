@@ -10,7 +10,6 @@ from .strategies import BaseStrategy
 def get_entries(
     strategy: BaseStrategy,
     data: pd.DataFrame,
-    filter_events: bool = False,
     filter_threshold: Union[float, pd.Series] = None,
     on_crossover: bool = True,
 ) -> Tuple[pd.Series, pd.DatetimeIndex]:
@@ -36,15 +35,10 @@ def get_entries(
         data (pd.DataFrame): Market data DataFrame. Must contain 'close' column if
                             filter_events=True. Index must be DatetimeIndex.
 
-        filter_events (bool, optional): Whether to apply CUSUM event filtering.
-                                       If True, only signals occurring during significant
-                                       price movements (determined by filter_threshold)
-                                       are considered. Defaults to False.
-
         filter_threshold (Union[float, pd.Series], optional): Threshold for CUSUM filter.
                                                              - If float: Fixed threshold
                                                              - If Series: Dynamic threshold
-                                                             Only used if filter_events=True.
+                                                             Only used if not None.
                                                              Defaults to None.
 
         on_crossover (bool, optional): Signal filtering mode. Defaults to True.
@@ -60,88 +54,14 @@ def get_entries(
                                - 1: Long position
                                - -1: Short position
                                - 0: No position/flat
-                               Forward-filled to maintain positions between signals.
 
             - t_events (pd.DatetimeIndex): Timestamps where new positions were initiated.
                                           These represent actual trade entry points,
                                           not every signal occurrence.
 
-    Usage Examples:
-
-        # Basic usage - get trading positions
-        >>> strategy = BollingerMeanReversionStrategy()
-        >>> side, t_events = get_entries(strategy, data)
-        >>> print(f"Generated {len(t_events)} trades")
-        >>> print(f"Days with positions: {(side != 0).sum()}")
-
-        # Performance analysis
-        >>> returns = (side.shift(1) * data['close'].pct_change()).dropna()
-        >>> total_return = (1 + returns).prod() - 1
-
-        # With CUSUM filtering for significant price moves only
-        >>> side, t_events = get_entries(strategy, data,
-        ...                             filter_events=True,
-        ...                             filter_threshold=0.02)
-
-        # Include all signals (not recommended for most cases)
-        >>> side, t_events = get_entries(strategy, data, on_crossover=False)
-
-    Signal Processing Logic:
-
-        1. **Raw Signal Generation**: Calls strategy.generate_signals(data)
-        2. **Signal Filtering**: Applied in order of priority:
-           a) CUSUM filtering (if filter_events=True)
-           b) Crossover filtering (if on_crossover=True)
-        3. **Position Creation**: Forward-fills signals to create continuous positions
-
-        Filter Behavior:
-        - filter_events=True, on_crossover=True: Most selective (recommended)
-        - filter_events=False, on_crossover=True: Standard crossover mode
-        - filter_events=False, on_crossover=False: Least selective
-        - filter_events=True, on_crossover=False: CUSUM only
-
-    Performance Considerations:
-
-        - Vectorized operations for computational efficiency
-        - CUSUM filter adds computational overhead but improves signal quality
-        - on_crossover=True significantly reduces number of trade events
-
-    Common Patterns:
-
-        # Standard backtesting workflow
-        >>> strategy = MovingAverageCrossoverStrategy()
-        >>> side, t_events = get_entries(strategy, data)
-        >>>
-        >>> # Calculate returns using positions (NOT raw signals)
-        >>> returns = (side.shift(1) * data['close'].pct_change()).dropna()
-        >>>
-        >>> # Analyze individual trades
-        >>> trade_ends = timing_of_flattening_and_flips(side)
-        >>>
-        >>> # Performance metrics
-        >>> metrics = calculate_performance_metrics(returns, data.index, positions=side)
-
-        # Signal quality analysis
-        >>> raw_signals = strategy.generate_signals(data)
-        >>> side, t_events = get_entries(strategy, data)
-        >>>
-        >>> signal_utilization = len(t_events) / (raw_signals != 0).sum()
-        >>> print(f"Signal utilization: {signal_utilization:.1%}")
-
-    Raises:
-        Exception: If data doesn't contain 'close' column when filter_events=True
-        TypeError: If filter_threshold is not float or pd.Series when filter_events=True
-
-    Notes:
-        - The returned 'side' series is what should be used for performance calculations
-        - The returned 't_events' represents trade initiation times, useful for analysis
-        - For meta-learning applications, use raw strategy signals for label creation
-        - For backtesting and performance analysis, always use the returned 'side' series
-        - Position changes can be analyzed using timing_of_flattening_and_flips(side)
-
     See Also:
         timing_of_flattening_and_flips(): Analyzes position exit/reversal events
-        calculate_performance_metrics(): Computes strategy performance using positions
+        get_positions_from_events(): Gets target positions from events with columns "side" and "t1"
         cusum_filter(): Event filtering based on cumulative price movements
 
     References:
@@ -152,9 +72,9 @@ def get_entries(
     signal_mask = primary_signals != 0
 
     # Vectorized CUSUM filter application
-    if filter_events:
+    if filter_threshold is not None:
         try:
-            close = data.close
+            close = data["close"].copy()
         except Exception as e:
             logger.error(f"Check your data: {e}")
 
@@ -166,24 +86,22 @@ def get_entries(
 
         filtered_events = cusum_filter(close, filter_threshold)
         signal_mask &= primary_signals.index.isin(filtered_events)
+        thres = (
+            f" (threshold = {filter_threshold:.4%})" if isinstance(filter_threshold, float) else ""
+        )
+        msg = f" selected by CUSUM filter{thres}"
     else:
         # Vectorized signal change detection
         if on_crossover:
             signal_mask &= primary_signals != primary_signals.shift()
+            msg = " generated from crossovers"
+        else:
+            msg = ""
 
     t_events = primary_signals.index[signal_mask]
+    n = len(t_events)
+    logger.info(
+        f"{strategy.get_strategy_name()} | {n:,} ({n / sum(primary_signals != 0):.2%}) trade events{msg}."
+    )
 
-    side = pd.Series(index=data.index, name="side")
-    side.loc[t_events] = primary_signals.loc[t_events]
-    side = side.ffill().fillna(0).astype("int8")
-
-    if filter_events:
-        s = " generated by CUSUM filter"
-    elif on_crossover:
-        s = " generated by crossover"
-    else:
-        s = ""
-
-    logger.info(f"Generated {len(t_events):,} trade events{s}.")
-
-    return side, t_events
+    return primary_signals, t_events
