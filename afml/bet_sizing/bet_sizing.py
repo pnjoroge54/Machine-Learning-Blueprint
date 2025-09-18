@@ -8,8 +8,6 @@ import pandas as pd
 from numba import njit, prange
 from scipy.stats import moment, norm
 
-from afml import cache
-
 from .ch10_snippets import (
     avg_active_signals,
     bet_size,
