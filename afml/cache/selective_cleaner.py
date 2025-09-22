@@ -529,6 +529,7 @@ def clear_changed_ml_functions():
         "afml.clustering",
         "afml.feature_importance",
         "afml.cross_validation",
+        "afml.backtester",
     ]
     return selective_cache_clear(modules=ml_modules)
 
@@ -540,7 +541,7 @@ def clear_changed_labeling_functions():
 
 def clear_changed_features_functions():
     """Clear cache for changed feature functions."""
-    return selective_cache_clear(modules=["afml.features"])
+    return selective_cache_clear(modules=["afml.features", "afml.strategies"])
 
 
 # Export new functionality
