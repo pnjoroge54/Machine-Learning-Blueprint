@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 from numba import njit
 from scipy.stats import kurtosis, skew
 
@@ -509,32 +510,30 @@ def analyze_trading_behavior(positions: pd.Series, returns: pd.Series) -> dict:
 
 
 def get_positions_from_events(
-    close_index: pd.DatetimeIndex,
-    events: pd.DataFrame,
+    data_index: pd.DatetimeIndex,
+    events_t1: pd.Series,
+    sides: pd.Series,
 ):
     """
-    Calculate performance metrics for a labeling strategy.
+    Create series of target positions from event positions.
     Parameters
     ----------
-    close_index : pd.DatetimeIndex
+    data_index : pd.DatetimeIndex
         DateTime index of data.
-    events : pd.DataFrame
-        DataFrame containing the events with a DateTime index and a 'ret' column for returns.
+    events_t1 : pd.Series
+        End times of events
+    sides: pd.Series
+        Trade direction
 
     Returns
     -------
     pd.Series
-        Series containing the calculated performance metrics.
+        Series containing the target positions for data_index.
     """
-    if events.empty:
-        raise ValueError("Events DataFrame is empty.")
-
-    # Create series of target positions from event positions
-    positions = events["side"].reindex(close_index).copy()
-    end_times = events["t1"][~events["t1"].isin(events.index)]
+    positions = sides.reindex(data_index)
+    end_times = events_t1.index.difference(events_t1)
     positions.loc[end_times] = 0  # End of trade
     positions = positions.ffill().fillna(0)
-
     return positions
 
 
@@ -574,9 +573,9 @@ def evaluate_meta_labeling_performance(
         A dictionary containing the performance metrics for both strategies,
         their return series, and other comparison metadata.
     """
-    events = events.dropna(subset=["t1"]).copy()
 
     # Calculate returns
+    events = events.dropna(subset=["t1"])
     all_dates = events.index.union(other=events["t1"].array).drop_duplicates()
     prices = close.reindex(all_dates, method="bfill")
     returns = prices.loc[events["t1"].array].array / prices.loc[events.index] - 1
@@ -586,50 +585,53 @@ def evaluate_meta_labeling_performance(
     aligned_probs = meta_probabilities.reindex(events.index, fill_value=0.5)
     confident_trades = aligned_probs > confidence_threshold
     meta_prob = aligned_probs[confident_trades]
-    meta_events = events[confident_trades].copy()
+    meta_events = events[confident_trades]
 
     # --- Bet Sizing Logic ---
     if bet_sizing is None:
-        bet_sizes = pd.Series(1, index=meta_events.index, dtype="int8")
+        bets = meta_events.side.copy()
+        bet_sizing = "none"
     elif bet_sizing == "probability":
-        bet_sizes = bet_size_probability(
+        bets = bet_size_probability(
             meta_events, meta_prob, num_classes=2, pred=meta_events["side"], **kwargs
         )
     elif bet_sizing == "budget":
         bets = bet_size_budget(meta_events["t1"], meta_events["side"])
-        bet_sizes = bets["bet_size"]
+        bets = bets["bet_size"]
     elif bet_sizing == "reserve":
         bets = bet_size_reserve(meta_events["t1"], meta_events["side"], **kwargs)
-        bet_sizes = bets["bet_size"]
+        bets = bets["bet_size"]
+    msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
+    msg = msg + f"\n{kwargs}" if kwargs else msg
+    logger.info(msg)
 
     # Apply the calculated bet size to the signals that were not filtered out.
-    meta_events["side"] *= bet_sizes.abs()
-    meta_returns = (returns * meta_events["side"]).dropna()
+    meta_returns = (returns * bets).dropna()
 
     # --- Performance Calculation ---
-    primary_positions = get_positions_from_events(close.index, events)
-    meta_positions = get_positions_from_events(close.index, meta_events)
-
-    # primary_positions = events["side"]
-    # meta_positions = meta_events["side"]
+    data_index = close.index
+    primary_positions = get_positions_from_events(data_index, events["t1"], events["side"])
+    meta_positions = get_positions_from_events(data_index, meta_events["t1"], meta_events["side"])
 
     primary_metrics = calculate_performance_metrics(
         primary_returns,
-        close.index,
+        data_index,
         primary_positions,
         trading_days_per_year,
         trading_hours_per_day,
     )
     meta_metrics = calculate_performance_metrics(
         meta_returns,
-        close.index,
+        data_index,
         meta_positions,
         trading_days_per_year,
         trading_hours_per_day,
     )
+
     # --- Meta-Specific Metrics ---
     total_signals = len(events)
     filtered_signals = len(meta_events)
+
     # The percentage of trades that were filtered out by the meta-model.
     meta_metrics["signal_filter_rate"] = (
         1 - (filtered_signals / total_signals) if total_signals > 0 else 0
@@ -639,7 +641,7 @@ def evaluate_meta_labeling_performance(
     # Information Ratio: Measures the meta-model's ability to generate excess return per unit of tracking error.
     excess_returns = meta_returns - primary_returns.reindex(meta_returns.index, fill_value=0)
     _, periods_per_year = get_annualization_factors(
-        data_index=close.index,
+        data_index=data_index,
         trading_days_per_year=trading_days_per_year,
         trading_hours_per_day=trading_hours_per_day,
     )
