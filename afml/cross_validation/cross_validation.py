@@ -6,7 +6,7 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from sklearn.base import ClassifierMixin
+from sklearn.base import BaseEstimator
 from sklearn.metrics import log_loss
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection._split import _BaseKFold
@@ -149,7 +149,7 @@ class PurgedSplit:
 
 # noinspection PyPep8Naming
 def ml_cross_val_score(
-    classifier: ClassifierMixin,
+    classifier: BaseEstimator,
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
@@ -179,7 +179,7 @@ def ml_cross_val_score(
         scores_array = ml_cross_val_score(classifier, X, y, cv_gen, sample_weight_train=sample_train,
                                           sample_weight_score=sample_score, scoring=accuracy_score)
 
-    :param classifier: (ClassifierMixin) A scikit-learn Classifier object instance.
+    :param classifier: (BaseEstimator) A scikit-learn Classifier object instance.
     :param X: (pd.DataFrame) The dataset of records to evaluate.
     :param y: (pd.Series) The labels corresponding to the X dataset.
     :param cv_gen: (BaseCrossValidator) Cross Validation generator object instance.
