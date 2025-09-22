@@ -482,19 +482,24 @@ def triple_barrier_labels(
 
 @smart_cacheable
 def get_event_weights(triple_barrier_events: pd.DataFrame, close: pd.Series, verbose: bool = False):
-    """
-    :param triple_barrier_events: (pd.DataFrame) Triple-barrier events DataFrame with the following structure:
-    - **index**: pd.DatetimeIndex of event start times
-    - **t1**: (pd.Series) Event end times
-    - **trgt**: (pd.Series) Target volatility
-    - **pt**: (pd.Series) Profit-taking multiple
-    - **sl**: (pd.Series) Stop-loss multiple
-    - **side**: (pd.Series, optional) Algo's position side
-    :param close: (pd.Series) Close prices
-    :param verbose: (bool) Log outputs if True.
-    :return: (pd.DataFrame) Events DataFrame with additional columns:
-        - **tW**: Average uniqueness of the event (time-weighted)
-        - **w**: Sample weights scaled by time-decay & return-weighted attribution
+    """Calculate event weights and average uniqueness for triple-barrier events.
+    Args:
+        triple_barrier_events (pd.DataFrame): Triple-barrier events DataFrame with the following structure:
+            - index (pd.DatetimeIndex): Event start times.
+            - t1 (pd.Series): Event end times.
+            - trgt (pd.Series): Target volatility.
+            - pt (pd.Series): Profit-taking multiple.
+            - sl (pd.Series): Stop-loss multiple.
+            - side (pd.Series, optional): Algo's position side.
+        close (pd.Series): Close prices indexed by datetime.
+        verbose (bool, optional): If True, log outputs for debugging. Default is False.
+    Returns:
+        pd.DataFrame: Events DataFrame with additional columns:
+            - tW: Average uniqueness of the event (time-weighted).
+            - w: Sample weights from return-weighted attribution.
+    Notes:
+        - This function estimates the uniqueness of each event and assigns sample weights based on return attribution.
+        - Requires helper functions: get_num_conc_events_optimized, get_av_uniqueness_from_triple_barrier_optimized, and get_weights_by_return_optimized.
     """
     events = triple_barrier_events.copy()
 
