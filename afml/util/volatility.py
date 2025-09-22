@@ -9,7 +9,7 @@ import pandas as pd
 
 
 # Snippet 3.1, page 44, Daily Volatility Estimates
-def get_daily_vol(close, lookback=100):
+def get_daily_vol(close: pd.Series, lookback: int = 100):
     """
     Advances in Financial Machine Learning, Snippet 3.1, page 44.
 
@@ -67,7 +67,7 @@ def get_period_vol(close: pd.Series, lookback: int = 100, **time_delta_kwargs) -
 
     # Align current and previous closes
     curr_idx = close.index[close.shape[0] - prev_idx.shape[0] :]
-    prev_close = close.iloc[prev_idx - 1].values
+    prev_close = close.iloc[prev_idx - 1].array
 
     ret = close.loc[curr_idx] / prev_close - 1
     vol = ret.ewm(span=lookback).std()
