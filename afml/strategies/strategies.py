@@ -107,7 +107,7 @@ class MACrossoverStrategy(BaseStrategy):
         return signals
 
     def get_strategy_name(self) -> str:
-        return f"MACrossover_fast{self.fast_window}_slow{self.slow_window}"
+        return f"MACrossover_{self.fast_window}_{self.slow_window}"
 
     def get_objective(self) -> str:
         return self.objective
