@@ -17,11 +17,17 @@ from .reporting import (
     compare_roc_curves,
     compare_roc_pr_curves,
     create_classification_report_image,
-    meta_labelling_classification_report_images,
-    meta_labelling_classification_report_tables,
-    meta_labelling_reports,
+    labeling_reports,
+    meta_labeling_classification_report_images,
+    meta_labeling_classification_report_tables,
+    meta_labeling_reports,
     print_meta_labeling_comparison,
     run_meta_labeling_analysis,
 )
 from .research_framework import ExperimentHook, ExperimentRunner, ResearchExperiment
-from .training import ModelData, get_optimal_threshold, train_meta_model
+from .training import (
+    ModelData,
+    get_optimal_threshold,
+    train_model,
+    train_model_with_trend,
+)
