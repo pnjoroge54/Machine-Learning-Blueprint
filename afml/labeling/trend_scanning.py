@@ -13,7 +13,11 @@ from loguru import logger
 from numba import njit, prange
 
 from ..cache import smart_cacheable
-from ..util.misc import value_counts_data
+from ..labeling.triple_barrier import (
+    drop_labels,
+    get_event_weights,
+    triple_barrier_labels,
+)
 
 
 @njit(parallel=True, cache=True)
@@ -85,7 +89,7 @@ def trend_scanning_labels(
     The method incorporates volatility-based masking to avoid spurious signals in low-volatility regimes.
     This implementation offers a robust, leakage-proof trend-scanning label generator with:
       - Expanding, data-adaptive volatility thresholding
-      - Full feature masking (t-value, slope, R²) in low-vol regimes
+      - Full feature masking (t-value, slope, R²) in low-volatility regimes
       - Boundary protection to avoid look-ahead leaks
       - Support for both look-forward and look-backward scan
 
@@ -116,14 +120,14 @@ def trend_scanning_labels(
         Chosen optimal horizon (argmax |t-value|).
         - slope : float
         Estimated slope over that window.
-        - tval : float
+        - t_value : float
         t-stat for the slope (clipped to ±min(var, 20)).
         - r_squared : float
         Goodness-of-fit (zero if below vol threshold).
         - ret : float
         Hold-period return over the chosen window.
         - bin : int8
-        Sign of `tval` (-1, 0, +1), zero if |tval|≈0.
+        Sign of `t_value` (-1, 0, +1), zero if |t_value|≈0.
 
     Notes
     -----
@@ -203,7 +207,7 @@ def trend_scanning_labels(
     # Map to timestamps and returns
     t1_arr = close.index[t1_idx]
     a, b = (event_idx, t1_idx) if lookforward else (t1_idx, event_idx)
-    rets = close.iloc[b].values / close.iloc[a].values - 1
+    rets = close.iloc[b].array / close.iloc[a].array - 1
 
     # Filter labels by t-value
     alpha = 0.05  # 95% confidence
@@ -236,10 +240,15 @@ def trend_scanning_labels(
 
 def get_trend_scanning_meta_labels(
     close: pd.Series,
+    target: pd.Series,
     side_prediction: pd.Series,
     t_events: pd.DatetimeIndex,
+    vertical_barrier_times: pd.Series,
+    sl: float = 1.0,
+    min_ret: float = 0.0,
     span: Union[List[int], Tuple[int, int]] = (5, 20),
     volatility_threshold: float = 0.1,
+    min_pct: float = 0.05,
     use_log: bool = True,
     verbose: bool = False,
 ) -> pd.DataFrame:
@@ -250,14 +259,23 @@ def get_trend_scanning_meta_labels(
     ----------
     close : pd.Series
         Time-indexed price series.
+    target : pd.Series
+        Target volatility used to label events with triple-barrier method.
     side_prediction : pd.Series
         Primary model's side predictions (1 for long, -1 for short).
     t_events : pd.DatetimeIndex
         Index of event start times to align with trend events.
+    vertical_barrier_times : pd.Series
+        Times for vertical barriers in triple-barrier method.
+    sl: float, Stop-loss multiple
+    min_ret : float, default=0.0
+        Minimum return threshold for labeling.
     span : Union[List[int], Tuple[int, int]], default=(5, 20)
         Window span for trend scanning.
     volatility_threshold : float, default=0.1
         Volatility threshold for trend scanning.
+    min_pct : float, default=0.05
+        A fraction used to decide if the observation occurs less than that fraction.
     use_log : bool, default=True
         Use log prices for trend scanning.
     verbose : bool, default=False
@@ -266,35 +284,65 @@ def get_trend_scanning_meta_labels(
     Returns
     -------
     pd.DataFrame
-        Meta-labeled events with columns:
-        - t1: End time of trend
-        - ret: Return adjusted for side prediction
-        - bin: Meta-label (1 if correct prediction, 0 otherwise)
-        - side: Original side prediction
+        Meta-labeled events indexed by the valid subset of `close.index`. Columns:
+        - t1 : End of the event window.
+        - window : Chosen optimal horizon (argmax |t-value|).
+        - t_value : t-stat for the slope (clipped to ±min(var, 20)).
+        - side : Original side prediction.
+        - trgt : Target volatility.
+        - ret : Return adjusted for side prediction
+        - ts_bin : Sign of `t_value` (-1, 0, +1), zero if |t_value|≈0.
+        - bin : Meta-labels from triple-barrier method (1, 0).
+        - tW: Average uniqueness of the event (time-weighted).
+        - w: Sample weights from return-weighted attribution.
     """
     # Generate trend-scanning labels
     trend_events = trend_scanning_labels(
         close, span, volatility_threshold, use_log=use_log, verbose=verbose
     )
+    trend_events = drop_labels(trend_events, min_pct)
     logger.info(f"Trend-Scanning (σ = {volatility_threshold})")
 
-    # Align with t_events
-    t_events = t_events.intersection(trend_events.index)
-    trend_events = trend_events.reindex(t_events)
-
     # Apply meta-labeling logic
-    trend_events["side"] = side_prediction.reindex(t_events)
-    trend_events["ret"] *= trend_events["side"]  # Adjust returns for side
-    trend_events["bin"] = np.where((trend_events["side"] == trend_events["bin"]), 1, 0).astype(
-        "int8"
+    pt_sl = [0, sl]
+    tb_events = triple_barrier_labels(
+        close,
+        target,
+        t_events,
+        vertical_barrier_times,
+        side_prediction,
+        pt_sl,
+        min_ret,
+        min_pct,
+        verbose=verbose,
     )
-    if verbose:
-        value_counts_data(trend_events.bin, verbose=True)
+    tb_events = get_event_weights(tb_events, close, verbose)
+    trend_events = (
+        tb_events.drop(columns=["bin"])
+        .join(trend_events[["window", "t_value", "bin"]], how="inner")
+        .rename(columns={"bin": "ts_bin"})
+    )
+
+    mask = trend_events["side"] == trend_events["ts_bin"]
+    trend_events["bin"] = np.where(mask, 1, 0).astype("int8")
+    columns = [
+        "t1",
+        "window",
+        "t_value",
+        "side",
+        "trgt",
+        "ret",
+        "ts_bin",
+        "bin",
+        "tW",
+        "w",
+    ]
+    trend_events = trend_events[columns]
 
     return trend_events
 
 
-def plot_trend_labels(close, trend_labels, title="Trend Labels", view="bin"):
+def plot_trend_labels(close, trend_labels, title="Trend-Scanning Labels", view="bin"):
     """
     Plot the close prices with trend labels.
 
@@ -305,19 +353,23 @@ def plot_trend_labels(close, trend_labels, title="Trend Labels", view="bin"):
     return: None
     """
     plt.figure(figsize=(7.5, 5), dpi=100)
-    plt.plot(close.index, close.values, label="Close Price", color="lightgray")
+    # plt.plot(close.index, close.values, linewidth=1.5, color="lightgray")
     scatter = plt.scatter(
         trend_labels.index,
         close.loc[trend_labels.index].values,
         c=trend_labels[view].values,
-        cmap="plasma",
-        s=20,
+        cmap="coolwarm_r",
+        s=40,
         edgecolors="black",
         linewidths=0.5,
         alpha=0.7,
     )
-    plt.colorbar(scatter, label=f"Trend {view.title()}")
+
+    plt.colorbar(scatter, label=f"trend {view}")
+    plt.style.use("dark_background")
     plt.title(title)
-    plt.xlabel("Date")
-    plt.ylabel("Close Price")
+    plt.show()
+    plt.colorbar(scatter, label=f"trend {view}")
+    plt.style.use("dark_background")
+    plt.title(title)
     plt.show()
