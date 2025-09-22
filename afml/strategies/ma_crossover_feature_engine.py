@@ -5,7 +5,6 @@ import pandas as pd
 import pandas_ta as ta
 import talib
 
-from ..features.fracdiff import fracdiff_optimal
 from ..features.fractals import (
     calculate_enhanced_fractals,
     calculate_fractal_trend_features,
@@ -29,7 +28,6 @@ class ForexFeatureEngine:
         self,
         price_data: pd.DataFrame,
         volume_data: Optional[pd.Series] = None,
-        use_ffd: bool = False,
         additional_pairs: Optional[Dict[str, pd.DataFrame]] = None,
     ) -> pd.DataFrame:
         """
@@ -38,7 +36,6 @@ class ForexFeatureEngine:
         Parameters:
         price_data: DataFrame with OHLC columns
         volume_data: Series with volume data (if available, often limited in forex)
-        use_ffd: Return fractionally differentiated MA and Bollinger prices
         additional_pairs: Dict of related currency pair OHLC data for correlation features
 
         Returns:
@@ -46,50 +43,48 @@ class ForexFeatureEngine:
         """
 
         features = pd.DataFrame(index=price_data.index)
-        close = price_data["close"]
-        if use_ffd:
-            self.close_ffd = fracdiff_optimal(close)[0]
+        all_features = []
+        close = price_data["close"].copy()
 
         # Core MA Features
-        ma_features = self._calculate_ma_features(price_data, use_ffd)
-        features = pd.concat([features, ma_features], axis=1)
+        ma_features = self._calculate_ma_features(price_data)
+        all_features += [ma_features]
 
         # Volatility & Range Features (Critical for Forex)
-        vol_features = self._calculate_volatility_features(price_data, use_ffd)
-        features = pd.concat([features, vol_features], axis=1)
+        vol_features = self._calculate_volatility_features(price_data)
+        all_features += [vol_features]
 
         # Trend Strength Features
         trend_features = self._calculate_trend_features(price_data)
-        features = pd.concat([features, trend_features], axis=1)
+        all_features += [trend_features]
 
         # Session-Based Features (Forex-Specific)
         session_features = self._calculate_session_features(price_data)
-        features = pd.concat([features, session_features], axis=1)
+        all_features += [session_features]
 
         # Currency Strength Features
         if additional_pairs:
             strength_features = self._calculate_currency_strength_features(close, additional_pairs)
-            features = pd.concat([features, strength_features], axis=1)
+            all_features += [strength_features]
 
         # Risk Environment Features
         risk_features = self._calculate_risk_environment_features(price_data)
-        features = pd.concat([features, risk_features], axis=1)
+        all_features += [risk_features]
 
         # Time-Based Features (Important for 24h markets)
         time_features = self._calculate_time_features(price_data.index)
-        features = pd.concat([features, time_features], axis=1)
+        all_features += [time_features]
 
         # Market Structure Features
         structure_features = self._calculate_market_structure_features(price_data)
-        features = pd.concat([features, structure_features], axis=1)
+        all_features += [structure_features]
 
+        features = features.join(all_features)
         features = optimize_dtypes(features)
 
-        return features.fillna(method="ffill").fillna(0)
+        return features.ffill().fillna(0)
 
-    def _calculate_ma_features(
-        self, price_data: pd.DataFrame, use_ffd: bool = False
-    ) -> pd.DataFrame:
+    def _calculate_ma_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
         """Core moving average features optimized for forex"""
         close = price_data["close"]
         features = pd.DataFrame(index=close.index)
@@ -128,16 +123,9 @@ class ForexFeatureEngine:
             ma_alignment *= np.where(mas[ma_periods[i]] > mas[ma_periods[i + 1]], 1, -1)
         features["ma_ribbon_aligned"] = ma_alignment
 
-        # Use fractionally differenced prices
-        if use_ffd:
-            for period in ma_periods:
-                features[f"ma_{period}"] = self.close_ffd.rolling(period).mean()
-
         return features
 
-    def _calculate_volatility_features(
-        self, price_data: pd.DataFrame, use_ffd: bool = False
-    ) -> pd.DataFrame:
+    def _calculate_volatility_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
         """Volatility features critical for forex risk management"""
         features = pd.DataFrame(index=price_data.index)
 
@@ -177,12 +165,6 @@ class ForexFeatureEngine:
         bb_std_val = bb["BBM_20_2.0"]
         features["bb_squeeze"] = bb_std_val / (bb_std_val.rolling(50).mean() + 1e-8)
 
-        # Use fractionally differenced prices
-        if use_ffd:
-            bb_ffd = ta.bbands(self.close_ffd, length=20, std=2)
-            features["bb_upper"] = bb_ffd["BBU_20_2.0"]
-            features["bb_lower"] = bb_ffd["BBL_20_2.0"]
-
         return features
 
     def _calculate_trend_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
@@ -202,7 +184,7 @@ class ForexFeatureEngine:
         features["efficiency_ratio_30"] = self._calculate_efficiency_ratio(close, 30)
 
         # Linear Regression Features
-        lr_features = self._calculate_linear_regression_features(close, period=(5, 100))
+        lr_features = self._calculate_linear_regression_features(close, period=(5, 50))
         for key, value in lr_features.items():
             features[key] = value
 
@@ -423,15 +405,12 @@ class ForexFeatureEngine:
     def _calculate_linear_regression_features(
         self, close: pd.Series, period: Tuple[int]
     ) -> Dict[str, pd.Series]:
-        lr_results = trend_scanning_labels(
-            close, span=period, volatility_threshold=0.3, lookforward=False
+        lr_results = trend_scanning_labels(close, span=period, lookforward=False).drop(
+            columns=["t1", "bin"]
         )
-        if lr_results.shape[1] > 0:
-            lr_results = lr_results[["window", "rsquared", "t_value"]]
-        else:
-            lr_results = pd.DataFrame(
-                0, index=close.index, columns=["window", "rsquared", "t_value"]
-            )
+
+        if lr_results.empty:
+            lr_results = pd.DataFrame(0, index=close.index, columns=lr_results.columns)
         lr_results.columns = [f"trend_{col}" for col in lr_results.columns]
         return lr_results.to_dict(orient="series")
 
