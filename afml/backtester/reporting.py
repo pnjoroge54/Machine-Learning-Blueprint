@@ -1,8 +1,8 @@
 import re
 from pathlib import Path
-from pprint import pprint
 from typing import List
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -25,7 +25,39 @@ from ..backtest_statistics.performance_analysis import (
 from .training import ModelData, get_optimal_threshold
 
 
-def meta_labelling_reports(model_data, name="Meta-Model", plot=False):
+def labeling_reports(model_data, name="Primary Model"):
+    """
+    Generate meta-labeling report for primary strategy and meta-data.
+
+    In meta-labeling framework:
+    - Primary model generates signals (when to trade)
+    - Meta-model filters signals (which trades to take)
+    - Evaluation focuses on primary model's signal periods
+
+    Args:
+        model_data: Object containing test data and predictions with attributes:
+            - y_test: True labels (whether primary signals were profitable)
+            - pred: Meta-model predictions (filtered signals)
+            - prob: Meta-model predicted probabilities
+            - primary_signals: Primary strategy signals (Bollinger, MA, etc.)
+            - w_test: Sample weights (optional)
+
+    Returns: None
+    """
+    y_test, pred = (
+        model_data.y_test,
+        model_data.pred,
+    )
+
+    print(f"\nMODEL PERFORMANCE:")
+    print("-" * 53)
+    print(classification_report(y_test, pred))
+    print("\nConfusion Matrix:")
+    cm = confusion_matrix(y_test, pred)
+    print(cm)
+
+
+def meta_labeling_reports(model_data, name="Meta-Model", plot=False):
     """
     Generate meta-labeling report for primary strategy and meta-data.
 
@@ -202,22 +234,6 @@ def compare_pr_curves(
         plt.subplots_adjust(top=0.88)
 
     return fig
-
-
-from typing import List
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from sklearn.metrics import (
-    average_precision_score,
-    f1_score,
-    precision_recall_curve,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-    roc_curve,
-)
 
 
 def compare_roc_pr_curves(
@@ -629,7 +645,7 @@ def create_classification_report_image(
     logger.info(f"Successfully generated and saved '{output_filename}'")
 
 
-def meta_labelling_classification_report_images(model_data, titles, output_filenames, dirpath):
+def meta_labeling_classification_report_images(model_data, titles, output_filenames, dirpath):
     dirpath = Path(dirpath)
     dirpath.mkdir(parents=True, exist_ok=True)
 
@@ -651,7 +667,7 @@ def meta_labelling_classification_report_images(model_data, titles, output_filen
     logger.info("Classification reports saved.")
 
 
-def meta_labelling_classification_report_tables(model_data, methods, dirpath):
+def meta_labeling_classification_report_tables(model_data, methods, dirpath):
     dirpath = Path(dirpath)
     dirpath.mkdir(parents=True, exist_ok=True)
     report_frames = []
@@ -787,8 +803,10 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
         print(f"\n{'TRADING METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}")
         print("=" * 75)
         trading_metrics = [
-            ("Number of Trades", "num_trades", "0f"),
-            ("Trades per Year", "trades_per_year", "0f"),
+            ("Number of Bets", "bet_frequency", "0f"),
+            ("Bets per Year", "bets_per_year", "0f"),
+            # ("Number of Trades", "num_trades", "0f"),
+            # ("Trades per Year", "trades_per_year", "0f"),
             ("Win Rate", "win_rate", "%"),
             ("Avg Win", "avg_win", "4%"),
             ("Avg Loss", "avg_loss", "4%"),
@@ -865,6 +883,9 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
             key_improvements.append(("Max Drawdown", dd_imp))
 
         avg_improvement = np.mean([imp for _, imp in key_improvements if imp != float("inf")])
+        print(f"avg_improvement: {avg_improvement}")
+        print([imp for _, imp in key_improvements if imp != float("inf")])
+
         if avg_improvement > 10:
             assessment = "✅ Meta-labeling shows SIGNIFICANT improvement"
         elif avg_improvement > 5:
@@ -985,9 +1006,9 @@ def run_meta_labeling_analysis(
         kwargs: Optional arguments passed to bet sizing functions.
     """
     results = evaluate_meta_labeling_performance(
-        events.copy(),
-        meta_probabilities.copy(),
-        close.copy(),
+        events,
+        meta_probabilities,
+        close,
         confidence_threshold,
         trading_days_per_year,
         trading_hours_per_day,
