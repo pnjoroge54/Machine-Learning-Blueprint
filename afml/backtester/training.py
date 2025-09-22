@@ -28,6 +28,7 @@ class ModelData:
     :var pred: Model predictions for the test set
     :var prob: Predicted probabilities for the positive class
     :var events: Event metadata associated with test samples
+    :var columns: Feature columns used in training
     """
 
     fit: BaseEstimator
@@ -37,13 +38,14 @@ class ModelData:
     pred: pd.Series
     prob: pd.Series
     events: pd.DataFrame
+    columns: pd.Index
 
 
-def train_meta_model(
+def train_model(
     model: BaseEstimator,
-    features: pd.DataFrame,
-    labels: pd.DataFrame,
-    lag: bool = True,
+    events: pd.DataFrame,
+    X: pd.DataFrame,
+    y: pd.Series = None,
     test_size: float = 0.3,
     weighting: Union[str, None] = None,
     time_decay: float = 1,
@@ -55,8 +57,7 @@ def train_meta_model(
     Args:
         model (BaggingClassifier): A scikit-learn compatible classifier.
         features (pd.DataFrame): Feature matrix indexed by timestamps.
-        labels (pd.DataFrame): Event labels with required columns depending on labeling method.
-        lag (bool, optional): If True, shifts features by one time step to prevent leakage. Defaults to True.
+        events (pd.DataFrame): Labeled events with required columns depending on labeling method.
         test_size (float, optional): Fraction of data to reserve for testing. Defaults to 0.3.
         weighting (str or None, optional): Sample weighting method. Options:
             - "return": Use return-based or t-value-based weights.
@@ -69,30 +70,25 @@ def train_meta_model(
         ModelData: A dataclass containing model fit, test data, predictions, probabilities, and event metadata.
     """
     # Prepare features and target
-    X = features.replace([np.inf, -np.inf], np.nan).copy()
-    X = X.shift() if lag else X
-    X = X.join(labels["side"]).dropna()
-
-    cont = labels.loc[X.index]
-    y = cont["bin"]  # Event labels
-    t1 = cont["t1"]  # Event end-times
+    data_index = X.index
+    X = X.reindex(events.index).replace([np.inf, -np.inf], np.nan).dropna()
+    cont = events.loc[X.index]
+    y = cont["bin"] if y is None else y
     w = pd.Series(1, index=y.index, name="w")  # Sample weights
+    a, b = data_index.get_indexer([cont.index[0], cont["t1"].max()])
+    data_index = data_index[a : b + 1]
 
     # Assign sample weights
-    if weighting == "return":
-        if "w" in cont:
-            w = cont["w"]
-            logger.info("Samples weighted by return attribution.")
-        elif "t_value" in cont:
-            w = cont["t_value"].abs()
-            logger.info("Samples weighted by t-value.")
-        else:
-            logger.info("Samples are equally weighted.")
-
+    if weighting == "return" and "w" in cont:
+        w = cont["w"]
+        logger.info("Samples weighted by return attribution.")
+    elif weighting == "t_value" and "t_value" in cont:
+        w = cont["t_value"].abs()
+        logger.info("Samples weighted by t_value.")
     elif weighting == "time":
         w = get_weights_by_time_decay_optimized(
             triple_barrier_events=cont,
-            close_series_index=features.index,
+            close_series_index=data_index,
             decay=time_decay,
             linear=linear_decay,
             av_uniqueness=(cont["tW"] if "tW" in cont else None),
@@ -101,7 +97,7 @@ def train_meta_model(
         logger.info("Samples are equally weighted.")
 
     # Split data
-    train, test = PurgedSplit(t1, test_size).split(X)
+    train, test = PurgedSplit(cont["t1"], test_size).split(X)
     X_train, X_test, y_train, y_test, w_train, w_test = (
         X.iloc[train],
         X.iloc[test],
@@ -134,7 +130,108 @@ def train_meta_model(
     # Validation events data
     events = cont.iloc[test]
 
-    return ModelData(fit, X_test, y_test, w_test, pred, prob, events)
+    return ModelData(fit, X_test, y_test, w_test, pred, prob, events, X.columns)
+
+
+def train_model_with_trend(
+    model: BaseEstimator,
+    ts_model_data: ModelData,
+    X: pd.DataFrame,
+    events: pd.DataFrame,
+    test_size: float = 0.3,
+    weighting: Union[str, None] = None,
+    time_decay: float = 1,
+    linear_decay: bool = False,
+    agreement_only: bool = True,
+) -> ModelData:
+    """
+    Trains a meta-model using BOTH trend-scanning and triple-barrier labels.
+
+    Args:
+        model (BaseEstimator): A scikit-learn compatible classifier.
+        X (pd.DataFrame): Feature matrix indexed by timestamps.
+        events (pd.DataFrame): Must contain:
+            - 'bin': triple-barrier label (+1/-1/0 or binary)
+            - 'ts_bin': trend-scanning label (+1/-1/0)
+            - 't1': event end times
+            - Optional: 'w' (sample weights), 'tW' (average uniqueness)
+        test_size (float): Fraction of data for testing.
+        weighting (str or None): 'return', 'time', or None.
+        time_decay (float): Decay factor for time-based weighting.
+        linear_decay (bool): Use linear instead of exponential decay.
+        agreement_only (bool): If True, only keep samples where bin == ts_bin != 0.
+
+    Returns:
+        ModelData: Dataclass with fit, test data, predictions, probabilities, and event` metadata.
+    """
+    # Get index from features before modification
+    if weighting == "time":
+        data_index = X.index
+
+    # --- Prepare features and target ---
+    ts_events = ts_model_data.events  # Events used to train trend-scanning model
+    t_events = events.index.intersection(ts_events.index)
+    X = X.reindex(t_events).replace([np.inf, -np.inf], np.nan).dropna()
+    cont = events.loc[X.index]
+
+    ts_fit = ts_model_data.fit  # Trained trend-scanning model
+    X["ts_bin"] = ts_fit.predict(X[ts_model_data.columns])
+    X["ts_prob"] = ts_fit.predict_proba(X[ts_model_data.columns])[:, 1]
+
+    if agreement_only:
+        mask = cont["side"] == X["ts_bin"]
+        cont = cont.loc[mask]
+        X = X.loc[mask]
+
+    # Combined meta-label: could be agreement, or any custom logic
+    y = cont["bin"]  # or pd.Series(np.sign(cont["tb_bin"] + cont["ts_bin"]), index=cont.index)
+
+    # --- Sample weights ---
+    w = pd.Series(1, index=y.index, name="w")
+    if weighting == "return" and "w" in cont:
+        w = cont["w"]
+        logger.info("Samples weighted by return attribution.")
+    elif weighting == "time":
+        w = get_weights_by_time_decay_optimized(
+            triple_barrier_events=cont,
+            close_series_index=data_index,
+            decay=time_decay,
+            linear=linear_decay,
+            av_uniqueness=(cont["tW"] if "tW" in cont else None),
+        )
+    else:
+        logger.info("Samples are equally weighted.")
+
+    # --- Purged split ---
+    train, test = PurgedSplit(cont["t1"], test_size).split(X)
+    X_train, X_test, y_train, y_test, w_train, w_test = (
+        X.iloc[train],
+        X.iloc[test],
+        y.iloc[train],
+        y.iloc[test],
+        w.iloc[train],
+        w.iloc[test],
+    )
+
+    # New instance of model to prevent errors from expected column names
+    model = clone(model)
+
+    # --- Bagging uniqueness adjustment ---
+    if isinstance(model, BaggingClassifier) and "tW" in cont:
+        av_uniqueness = cont["tW"].iloc[train].mean()
+        model.set_params(max_samples=av_uniqueness)
+
+    # --- Fit ---
+    logger.info(f"Training on {X_train.shape[0]:,} samples...")
+    fit = model.fit(X_train, y_train, sample_weight=w_train)
+
+    # --- Predict ---
+    pred = pd.Series(fit.predict(X_test), index=X_test.index, name="pred")
+    prob = pd.Series(fit.predict_proba(X_test)[:, 1], index=X_test.index, name="prob")
+
+    events = cont.iloc[test]
+
+    return ModelData(fit, X_test, y_test, w_test, pred, prob, events, X.columns)
 
 
 def get_optimal_threshold(model_data: ModelData) -> dict:
@@ -142,7 +239,7 @@ def get_optimal_threshold(model_data: ModelData) -> dict:
     Computes the optimal classification threshold that maximizes F1-score.
 
     Args:
-        model_data (ModelData): Output from `train_meta_model`, containing:
+        model_data (ModelData): Output from `train_model`, containing:
             - y_test (pd.Series): True binary labels.
             - prob (pd.Series): Predicted probabilities.
             - sample_weight (pd.Series): Sample weights for test set.
