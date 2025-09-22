@@ -15,9 +15,7 @@ from .strategies import BollingerStrategy
 
 
 @smart_cacheable
-def create_bollinger_features(
-    df: pd.DataFrame, lookback_window: int = 10, bb_period: int = 20, bb_std: float = 2
-):
+def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: float = 2):
     """
     Create features for meta-labeling model
     """
@@ -25,35 +23,30 @@ def create_bollinger_features(
     features["spread"] = df["spread"] / df["close"]
 
     # --- 1. Returns Features ---
-    lagged_ret = get_lagged_returns(df.close, lags=[1, 5, 10], nperiods=3)
-    features = features.join(lagged_ret)
-
     # Yang-Zhang Volatility
-    features["vol"] = get_yang_zhang_vol(df.open, df.high, df.low, df.close, window=5)
-    features[f"vol_{bb_period}"] = get_yang_zhang_vol(
-        df.open, df.high, df.low, df.close, window=bb_period
-    )
-    for t in range(1, 6):
-        features[f"vol_lag_{t}"] = features["vol"].shift(t)
+    features["vol"] = get_yang_zhang_vol(df.open, df.high, df.low, df.close, window=bb_period)
 
-    features[lagged_ret.columns] = lagged_ret.div(features["vol"], axis=0)  # Normalize returns
-
-    # Autocorrelations
-    features["autocorr"] = rolling_autocorr_numba(
-        features["returns"].to_numpy(), lookback=lookback_window
-    )
-    for t in range(1, 6):
-        features[f"autocorr_{t}"] = features["autocorr"].shift(t)
-
+    # Hourly EWM(num_hours) Volatility
     for num_hours in (1, 4, 24):
         features[f"H{num_hours}_vol"] = get_period_vol(
-            df.close, lookback=lookback_window, hours=num_hours
+            df.close, lookback=bb_period, hours=num_hours
         )
     features.columns = features.columns.str.replace("H24", "D1")
 
+    # Lagged returns normalized by volatility
+    lagged_ret = get_lagged_returns(df.close, lags=[1, 5, 10], nperiods=3)
+    features = features.join(lagged_ret.div(features["vol"], axis=0))  # Normalize returns
+
     # Distribution
-    features["returns_skew"] = features["returns"].rolling(lookback_window).skew()
-    features["returns_kurt"] = features["returns"].rolling(lookback_window).kurt()
+    features["returns_skew"] = features["returns"].rolling(bb_period).skew()
+    features["returns_kurt"] = features["returns"].rolling(bb_period).kurt()
+
+    # Autocorrelations of normalized returns
+    features["autocorr"] = rolling_autocorr_numba(
+        features["returns"].to_numpy(), lookback=bb_period
+    )
+    for t in range(1, 6):
+        features[f"autocorr_{t}"] = features["autocorr"].shift(t)
 
     # --- 2. Technical Analysis Features ---
     # Bollinger Bands
@@ -61,7 +54,7 @@ def create_bollinger_features(
 
     # Volatility
     tr = df.ta.true_range()
-    atr = df.ta.atr(14)
+    atr = df.ta.atr()
 
     # Momentum
     rsi = df.ta.rsi()
@@ -81,15 +74,18 @@ def create_bollinger_features(
     ma_diffs = ma_diffs.div(atr, axis=0)  # Normalize by ATR
     features = features.join(ma_diffs)
 
-    # --- 4. Formatting ---
+    # --- 4. Add side prediction after lagging other features ---
+    signals = BollingerStrategy(bb_period, bb_std).generate_signals(df)
+    features = features.shift().join(signals)
+
+    # --- 5. Formatting ---
     # Abbreviate "returns" to "ret" in columns
-    features.columns = features.columns.str.replace(r"returns", "ret", regex=True)
-    features.columns = features.columns.str.lower()
+    features.columns = features.columns.str.lower().str.replace("returns", "ret", regex=True)
 
     # Conserve memory
     features = optimize_dtypes(features, verbose=False)
 
-    return features
+    return features.dropna()
 
 
 def plot_bbands(
