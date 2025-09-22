@@ -147,8 +147,7 @@ def _get_average_uniqueness_optimized(label_endtime, num_conc_events):
     """
     Optimized version of average uniqueness calculation for parallel processing.
 
-    This function is designed to work with mp_pandas_obj and provides performance
-    improvements through:
+    This function  provides performance improvements through:
 
     - Parallel processing of uniqueness calculations via Numba
     - Vectorized operations for mathematical computations
@@ -189,7 +188,7 @@ def _get_average_uniqueness_optimized(label_endtime, num_conc_events):
         end_indices[i] = close_index.get_loc(t_out) + 1
 
     # Get concurrent events as numpy array
-    concurrent_counts = num_conc_events.values
+    concurrent_counts = num_conc_events.to_numpy()
 
     # Use Numba-optimized function for heavy computation
     uniqueness = _compute_uniqueness_numba(start_indices, end_indices, concurrent_counts, n_events)
@@ -202,9 +201,17 @@ def _get_average_uniqueness_optimized(label_endtime, num_conc_events):
 # =============================================================================
 
 
-def get_num_conc_events_optimized(close_series_index, label_endtime, verbose=False):
+def get_num_conc_events_optimized(
+    close_series_index: pd.DatetimeIndex, label_endtime: pd.Series, verbose: bool = False
+):
     """
-    Optimized version of concurrent events calculation using Numba.
+    Advances in Financial Machine Learning, Snippet 4.1, page 60.
+
+    Estimating the Uniqueness of a Label
+
+    This function uses close series prices and label endtime (when the first barrier is touched) to compute the number
+    of concurrent events per bar.
+
 
     This function provides significant performance improvements over the original
     implementation by using vectorized operations and parallel processing.
@@ -225,7 +232,7 @@ def get_num_conc_events_optimized(close_series_index, label_endtime, verbose=Fal
 
     Parameters:
     -----------
-    close_series_index : pd.Index
+    close_series_index : pd.DatetimeIndex
         Close prices index
     label_endtime : pd.Series
         Label endtime series (t1 for triple barrier events)
@@ -250,21 +257,15 @@ def get_num_conc_events_optimized(close_series_index, label_endtime, verbose=Fal
     # Handle missing values efficiently using vectorized operations
     relevant_events = label_endtime.fillna(close_series_index[-1])
 
-    if len(relevant_events) == 0:
-        return pd.Series(0, index=close_series_index)
-
     max_end_time = relevant_events.max()
     relevant_events = relevant_events.loc[:max_end_time]
 
-    if len(relevant_events) == 0:
-        return pd.Series(0, index=close_series_index)
-
     # Convert to numpy arrays for Numba processing
-    start_times = relevant_events.index.values.astype(np.int64)
-    end_times = relevant_events.values.astype(np.int64)
+    start_times = relevant_events.index.to_numpy(np.int64)
+    end_times = relevant_events.to_numpy(np.int64)
 
     # Find the relevant time range for counting using efficient search
-    time_index = close_series_index.values.astype(np.int64)
+    time_index = close_series_index.to_numpy(np.int64)
     start_idx = 0
     end_idx = close_series_index.searchsorted(max_end_time, side="right")
 
@@ -289,10 +290,10 @@ def get_num_conc_events_optimized(close_series_index, label_endtime, verbose=Fal
 
 
 def get_av_uniqueness_from_triple_barrier_optimized(
-    triple_barrier_events,
-    close_series_index,
-    num_conc_events=None,
-    verbose=False,
+    triple_barrier_events: pd.DataFrame,
+    close_series_index: pd.DatetimeIndex,
+    num_conc_events: pd.Series = None,
+    verbose: bool = False,
 ):
     """
     Optimized orchestrator for deriving average sample uniqueness from triple barrier events.
