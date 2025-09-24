@@ -1,9 +1,8 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-import talib
 
 from ..features.fractals import (
     calculate_enhanced_fractals,
@@ -11,6 +10,7 @@ from ..features.fractals import (
 )
 from ..labeling.trend_scanning import trend_scanning_labels
 from ..util.misc import optimize_dtypes
+from ..util.volatility import get_yang_zhang_vol
 
 
 class ForexFeatureEngine:
@@ -27,6 +27,7 @@ class ForexFeatureEngine:
     def calculate_all_features(
         self,
         price_data: pd.DataFrame,
+        lr_period: Tuple[int] = (5, 20),
         volume_data: Optional[pd.Series] = None,
         additional_pairs: Optional[Dict[str, pd.DataFrame]] = None,
     ) -> pd.DataFrame:
@@ -35,6 +36,7 @@ class ForexFeatureEngine:
 
         Parameters:
         price_data: DataFrame with OHLC columns
+        lr_period: Range of periods scanned for linear regression trend features
         volume_data: Series with volume data (if available, often limited in forex)
         additional_pairs: Dict of related currency pair OHLC data for correlation features
 
@@ -44,7 +46,9 @@ class ForexFeatureEngine:
 
         features = pd.DataFrame(index=price_data.index)
         all_features = []
+
         close = price_data["close"].copy()
+        self.returns = close.pct_change()
 
         # Core MA Features
         ma_features = self._calculate_ma_features(price_data)
@@ -55,7 +59,7 @@ class ForexFeatureEngine:
         all_features += [vol_features]
 
         # Trend Strength Features
-        trend_features = self._calculate_trend_features(price_data)
+        trend_features = self._calculate_trend_features(price_data, lr_period)
         all_features += [trend_features]
 
         # Session-Based Features (Forex-Specific)
@@ -82,10 +86,13 @@ class ForexFeatureEngine:
         features = features.join(all_features)
         features = optimize_dtypes(features)
 
-        return features.ffill().fillna(0)
+        return features.ffill().shift().fillna(0)
 
     def _calculate_ma_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
         """Core moving average features optimized for forex"""
+        open_price = price_data["open"]
+        high = price_data["high"]
+        low = price_data["low"]
         close = price_data["close"]
         features = pd.DataFrame(index=close.index)
 
@@ -95,7 +102,7 @@ class ForexFeatureEngine:
         # Calculate MAs
         mas = {}
         for period in ma_periods:
-            mas[period] = close.rolling(period).mean()
+            mas[period] = price_data.ta.sma(period)
             features[f"ma_{period}"] = mas[period]
 
         # MA Crossover Signals
@@ -104,10 +111,16 @@ class ForexFeatureEngine:
         features["ma_50_200_cross"] = np.where(mas[50] > mas[200], 1, -1)
 
         # MA Spreads (normalized by ATR)
-        atr = self._calculate_atr(price_data)
-        features["ma_spread_10_20"] = (mas[10] - mas[20]) / (atr + 1e-8)
-        features["ma_spread_20_50"] = (mas[20] - mas[50]) / (atr + 1e-8)
-        features["ma_spread_50_200"] = (mas[50] - mas[200]) / (atr + 1e-8)
+        # atr = price_data.ta.atr(14)
+        # features["ma_spread_10_20"] = (mas[10] - mas[20]) / (atr + 1e-8)
+        # features["ma_spread_20_50"] = (mas[20] - mas[50]) / (atr + 1e-8)
+        # features["ma_spread_50_200"] = (mas[50] - mas[200]) / (atr + 1e-8)
+
+        # MA Spreads (normalized by Yang-Zhang volatility)
+        yz_vol = get_yang_zhang_vol(open_price, high, low, close, window=14)
+        features["ma_spread_10_20"] = (mas[10] - mas[20]) / (yz_vol + 1e-8)
+        features["ma_spread_20_50"] = (mas[20] - mas[50]) / (yz_vol + 1e-8)
+        features["ma_spread_50_200"] = (mas[50] - mas[200]) / (yz_vol + 1e-8)
 
         # MA Slopes (trend strength)
         for period in [20, 50]:
@@ -129,22 +142,26 @@ class ForexFeatureEngine:
         """Volatility features critical for forex risk management"""
         features = pd.DataFrame(index=price_data.index)
 
-        close = price_data["close"]
+        open_price = price_data["open"]
         high = price_data["high"]
         low = price_data["low"]
+        close = price_data["close"]
 
         # ATR (multiple periods)
-        features["atr_14"] = self._calculate_atr(price_data, 14)
-        features["atr_21"] = self._calculate_atr(price_data, 21)
+        features["atr_14"] = price_data.ta.atr(14)
+        features["atr_21"] = price_data.ta.atr(21)
 
         # ATR Regime
         atr_ma = features["atr_14"].rolling(50).mean()
         features["atr_regime"] = features["atr_14"] / (atr_ma + 1e-8)
 
-        # Realized Volatility
-        returns = close.pct_change()
-        features["realized_vol_10"] = returns.rolling(10).std() * np.sqrt(252)
-        features["realized_vol_20"] = returns.rolling(20).std() * np.sqrt(252)
+        # Realized Volatility (annualized)
+        features["realized_vol_10"] = get_yang_zhang_vol(
+            open_price, high, low, close, window=10
+        ) * np.sqrt(252)
+        features["realized_vol_20"] = get_yang_zhang_vol(
+            open_price, high, low, close, window=20
+        ) * np.sqrt(252)
 
         # Volatility of Volatility
         features["vol_of_vol"] = features["realized_vol_20"].rolling(20).std()
@@ -155,7 +172,7 @@ class ForexFeatureEngine:
         features["hl_range_regime"] = features["hl_range"] / (features["hl_range_ma"] + 1e-8)
 
         # Bollinger Bands
-        bb = ta.bbands(close, length=20, std=2)
+        bb = price_data.ta.bbands(length=20, std=2)
         features = features.assign(
             bb_upper=bb["BBU_20_2.0"],
             bb_lower=bb["BBL_20_2.0"],
@@ -167,7 +184,9 @@ class ForexFeatureEngine:
 
         return features
 
-    def _calculate_trend_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_trend_features(
+        self, price_data: pd.DataFrame, lr_period: Tuple[int]
+    ) -> pd.DataFrame:
         """Trend strength and quality features"""
         features = pd.DataFrame(index=price_data.index)
 
@@ -175,18 +194,17 @@ class ForexFeatureEngine:
         high = price_data["high"]
         low = price_data["low"]
 
-        # ADX (Average Directional Index)
-        adx_features = self._calculate_adx(high, low, close)
-        features = pd.concat([features, adx_features], axis=1)
-
         # Efficiency Ratio (trending vs ranging)
         features["efficiency_ratio_14"] = self._calculate_efficiency_ratio(close, 14)
         features["efficiency_ratio_30"] = self._calculate_efficiency_ratio(close, 30)
 
+        # ADX (Average Directional Index)
+        adx_features = price_data.ta.adx(14)
+        adx_features.columns = adx_features.columns.str.lower()
+
         # Linear Regression Features
-        lr_features = self._calculate_linear_regression_features(close, period=(5, 50))
-        for key, value in lr_features.items():
-            features[key] = value
+        lr_features = self._calculate_linear_regression_features(close, lr_period)
+        features = features.join([adx_features, lr_features])
 
         # Momentum Features
         features["roc_10"] = close.pct_change(10)
@@ -197,7 +215,7 @@ class ForexFeatureEngine:
         features["hh_ll_20"] = self._calculate_hh_ll_count(high, low, 20)
 
         # Trend Persistence
-        returns = close.pct_change()
+        returns = self.returns
         features["trend_persistence"] = returns.rolling(20).apply(
             lambda x: (x > 0).sum() / len(x) if len(x) > 0 else 0.5
         )
@@ -218,19 +236,25 @@ class ForexFeatureEngine:
         features["session_overlap"] = ((hour >= 13) & (hour < 16)).astype(int)  # London-NY overlap
 
         # Session-based volatility
-        close = price_data["close"]
-        returns = close.pct_change()
 
         # Calculate session-specific volatility patterns
         for session in ["asian_session", "london_session", "ny_session"]:
             session_mask = features[session] == 1
             if session_mask.sum() > 0:
-                session_vol = returns[session_mask].rolling(20, min_periods=1).std()
+                # session_vol = returns[session_mask].rolling(20).std()
+                df = price_data[session_mask]
+                session_vol = get_yang_zhang_vol(df.open, df.high, df.low, df.close, window=20)
                 features[f"{session}_vol"] = session_vol.reindex(price_data.index, method="ffill")
 
+        open_price = price_data["open"]
+        high = price_data["high"]
+        low = price_data["low"]
+        close = price_data["close"]
+
         # Current session relative volatility
-        current_vol = returns.rolling(10).std()
-        features["session_vol_ratio"] = current_vol / (returns.rolling(50).std() + 1e-8)
+        current_vol = get_yang_zhang_vol(open_price, high, low, close, window=10)
+        vol_50 = get_yang_zhang_vol(open_price, high, low, close, window=50)
+        features["session_vol_ratio"] = current_vol / (vol_50 + 1e-8)
 
         return features
 
@@ -275,7 +299,7 @@ class ForexFeatureEngine:
         # Correlation with major pairs (if available)
         if "EURUSD" in additional_pairs and self.pair_name != "EURUSD":
             eurusd_returns = additional_pairs["EURUSD"]["close"].pct_change()
-            pair_returns = close.pct_change()
+            pair_returns = self.returns
             features["correlation_eurusd"] = pair_returns.rolling(50).corr(eurusd_returns)
 
         return features
@@ -283,9 +307,7 @@ class ForexFeatureEngine:
     def _calculate_risk_environment_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
         """Risk environment and market stress indicators"""
         features = pd.DataFrame(index=price_data.index)
-
-        close = price_data["close"]
-        returns = close.pct_change()
+        returns = self.returns
 
         # Risk-on/Risk-off proxy using return patterns
         features["return_skew_20"] = returns.rolling(20).skew()
@@ -380,22 +402,6 @@ class ForexFeatureEngine:
         return features
 
     # Helper functions
-    def _calculate_atr(self, price_data: pd.DataFrame, period: int = 14) -> pd.Series:
-        """Average True Range calculation"""
-        return price_data.ta.atr(period)
-
-    def _calculate_adx(
-        self, high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
-    ) -> pd.DataFrame:
-        """ADX calculation"""
-        features = pd.DataFrame(index=close.index)
-
-        features["adx"] = talib.ADX(high, low, close, period)
-        features["plus_di"] = talib.PLUS_DI(high, low, close, period)
-        features["minus_di"] = talib.MINUS_DI(high, low, close, period)
-
-        return features
-
     def _calculate_efficiency_ratio(self, close: pd.Series, period: int) -> pd.Series:
         """Efficiency Ratio (directional movement / total movement)"""
         direction = abs(close - close.shift(period))
@@ -404,15 +410,12 @@ class ForexFeatureEngine:
 
     def _calculate_linear_regression_features(
         self, close: pd.Series, period: Tuple[int]
-    ) -> Dict[str, pd.Series]:
+    ) -> pd.DataFrame:
         lr_results = trend_scanning_labels(close, span=period, lookforward=False).drop(
             columns=["t1", "bin"]
         )
-
-        if lr_results.empty:
-            lr_results = pd.DataFrame(0, index=close.index, columns=lr_results.columns)
         lr_results.columns = [f"trend_{col}" for col in lr_results.columns]
-        return lr_results.to_dict(orient="series")
+        return lr_results
 
     def _calculate_hh_ll_count(self, high: pd.Series, low: pd.Series, period: int) -> pd.Series:
         """Count of higher highs and lower lows"""
@@ -458,38 +461,3 @@ class ForexFeatureEngine:
         )
 
         return features
-
-
-# Example usage
-if __name__ == "__main__":
-    # Generate sample forex data
-    np.random.seed(42)
-    dates = pd.date_range("2023-01-01", periods=1000, freq="H")
-
-    # Simulate realistic forex price movements
-    returns = np.random.normal(0, 0.0005, 1000)  # Small forex-like returns
-    price = 1.1000 + np.cumsum(returns)
-
-    # Create realistic OHLC
-    price_df = pd.DataFrame(index=dates)
-    price_df["close"] = price
-    price_df["open"] = price_df["close"].shift(1).fillna(price[0])
-    price_df["high"] = price_df[["open", "close"]].max(axis=1) + np.random.uniform(0, 0.0002, 1000)
-    price_df["low"] = price_df[["open", "close"]].min(axis=1) - np.random.uniform(0, 0.0002, 1000)
-
-    # Initialize feature engine
-    engine = ForexFeatureEngine("EURUSD")
-
-    # Calculate features
-    features = engine.calculate_all_features(price_df)
-
-    print(f"Generated {features.shape[1]} features for {features.shape[0]} observations")
-    print(f"\nFeature columns:")
-    for i, col in enumerate(features.columns):
-        print(f"{i+1:2d}. {col}")
-
-    print(f"\nSample of first 5 rows and 10 columns:")
-    print(features.iloc[:5, :10].round(4))
-
-    print(f"\nSample of first 5 rows and 10 columns:")
-    print(features.iloc[:5, :10].round(4))
