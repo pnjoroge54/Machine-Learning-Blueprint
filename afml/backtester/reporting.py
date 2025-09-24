@@ -667,7 +667,9 @@ def meta_labeling_classification_report_images(model_data, titles, output_filena
     logger.info("Classification reports saved.")
 
 
-def meta_labeling_classification_report_tables(model_data, methods, dirpath):
+def meta_labeling_classification_report_tables(
+    model_data: List[ModelData], methods: List[str], title: str, dirpath: str = "../reports"
+):
     dirpath = Path(dirpath)
     dirpath.mkdir(parents=True, exist_ok=True)
     report_frames = []
@@ -678,8 +680,8 @@ def meta_labeling_classification_report_tables(model_data, methods, dirpath):
         y_pred = data.pred.values
 
         rpt = classification_report(y_true, y_pred, output_dict=True)
-        df = pd.DataFrame(rpt).iloc[:3, :2].T  # shape: (metrics, classes)
-        # print(df)
+        n_classes = np.unique(y_true).size
+        df = pd.DataFrame(rpt).iloc[:4, :n_classes].T  # shape: (metrics, classes)
 
         # Add labeling method as top-level index
         df.index = pd.MultiIndex.from_product([[method], df.index], names=["method", "class"])
@@ -718,9 +720,10 @@ def meta_labeling_classification_report_tables(model_data, methods, dirpath):
         .highlight_max(axis=1, color="lightgreen")  # highlight best per row
     )
 
-    filename = dirpath / "classification_comparison.html"
+    filename = dirpath / f"{title}_classification_comparison.html"
     styled.to_html(filename)
     logger.info(f"Saved to {filename}")
+    print(f"\n{comparison_df.round(3)}")
 
 
 def print_meta_labeling_comparison(results: dict, save_path: str = None):

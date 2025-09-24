@@ -3,13 +3,10 @@ from typing import Union
 
 import numpy as np
 import pandas as pd
-from feature_engine.selection import DropDuplicateFeatures
 from loguru import logger
 from sklearn.base import BaseEstimator, clone
 from sklearn.ensemble import BaggingClassifier
-from sklearn.metrics import f1_score, precision_recall_curve
-
-from afml.cache.selective_cleaner import smart_cacheable
+from sklearn.metrics import precision_recall_curve
 
 from ..cross_validation.cross_validation import PurgedSplit
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
@@ -75,8 +72,6 @@ def train_model(
     cont = events.loc[X.index]
     y = cont["bin"] if y is None else y
     w = pd.Series(1, index=y.index, name="w")  # Sample weights
-    a, b = data_index.get_indexer([cont.index[0], cont["t1"].max()])
-    data_index = data_index[a : b + 1]
 
     # Assign sample weights
     if weighting == "return" and "w" in cont:
@@ -84,6 +79,10 @@ def train_model(
         logger.info("Samples weighted by return attribution.")
     elif weighting == "t_value" and "t_value" in cont:
         w = cont["t_value"].abs()
+        y = y[y != 0]  # Remove zero labels for t-value weighting to speed up training
+        X = X.loc[y.index]
+        w = w.loc[y.index]
+        cont = cont.loc[y.index]
         logger.info("Samples weighted by t_value.")
     elif weighting == "time":
         w = get_weights_by_time_decay_optimized(
