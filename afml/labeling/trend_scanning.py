@@ -210,10 +210,8 @@ def trend_scanning_labels(
     rets = close.iloc[b].array / close.iloc[a].array - 1
 
     # Filter labels by t-value
-    alpha = 0.05  # 95% confidence
-    t_critical = stats.t.ppf(1 - alpha / 2, N - 1)  # two-tailed test
     tval_abs = np.abs(opt_tval)
-    mask = (tval_abs > 1e-6) & (tval_abs > t_critical)
+    mask = tval_abs > 1e-6
     bins = np.where(mask, np.sign(opt_tval), 0).astype("int8")
 
     # Assemble DataFrame
@@ -229,11 +227,6 @@ def trend_scanning_labels(
         },
         index=pd.Index(valid_indices),
     )
-
-    # Clip t-values as before
-    tval_var = df["t_value"].var()
-    t_max = tval_var if tval_var < 20 else 20
-    df["t_value"] = df["t_value"].clip(lower=-t_max, upper=t_max)
 
     return df
 
