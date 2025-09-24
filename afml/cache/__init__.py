@@ -334,8 +334,36 @@ from .selective_cleaner import (
 )
 
 # =============================================================================
-# 10) EXPORTS
+# 10) AUTO-RELOAD FUNCTIONALITY (Optional)
 # =============================================================================
+
+try:
+    from .auto_reload import auto_cacheable, jupyter_auto_setup, setup_auto_reloading
+
+    AUTO_RELOAD_AVAILABLE = True
+    logger.debug("Auto-reload functionality available")
+except ImportError:
+    AUTO_RELOAD_AVAILABLE = False
+    logger.debug("Auto-reload not available (install watchdog for file watching)")
+
+    # Provide fallbacks that work with your existing system
+    def auto_cacheable(func):
+        """Fallback: use smart_cacheable instead."""
+        return smart_cacheable(func)
+
+    def setup_auto_reloading(*args, **kwargs):
+        logger.info("Auto-reload not available - using standard selective cache clearing")
+        return None
+
+    def jupyter_auto_setup():
+        logger.info("Auto-reload not available - using standard caching")
+        return None
+
+
+# =============================================================================
+# 11) EXPORTS
+# =============================================================================
+
 
 __all__ = [
     # Core caching
@@ -354,7 +382,7 @@ __all__ = [
     "clear_afml_cache",
     # Directory info
     "CACHE_DIRS",
-    # NEW: Selective cache management
+    # Selective cache management
     "selective_cache_clear",
     "smart_cacheable",
     "cache_maintenance",
@@ -362,4 +390,9 @@ __all__ = [
     "clear_changed_ml_functions",
     "clear_changed_labeling_functions",
     "clear_changed_features_functions",
+    # Auto-reload functionality
+    "auto_cacheable",
+    "setup_auto_reloading",
+    "jupyter_auto_setup",
+    "AUTO_RELOAD_AVAILABLE",
 ]
