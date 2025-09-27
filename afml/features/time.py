@@ -182,7 +182,7 @@ def get_time_features(
 
     # Generate features
     cyclical_feat = encode_cyclical_features(
-        df, n_terms=n_terms, extra_fourier_features=extra_features
+        df.index, n_terms=n_terms, extra_fourier_features=extra_features
     )
     if forex:
         session_feat = trading_session_encoded_features(df.index)
