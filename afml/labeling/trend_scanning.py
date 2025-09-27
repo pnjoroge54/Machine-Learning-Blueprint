@@ -8,16 +8,10 @@ from typing import List, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
-from loguru import logger
+import statsmodels.api as sm
 from numba import njit, prange
 
 from ..cache import smart_cacheable
-from ..labeling.triple_barrier import (
-    drop_labels,
-    get_event_weights,
-    triple_barrier_labels,
-)
 
 
 @njit(parallel=True, cache=True)
@@ -76,7 +70,7 @@ def _window_stats_numba(y, window_length):
 def trend_scanning_labels(
     close: pd.Series,
     span: Union[List[int], Tuple[int, int]] = (5, 20),
-    volatility_threshold: float = 0.1,
+    volatility_threshold: float = 0.0,
     lookforward: bool = True,
     use_log: bool = True,
     verbose: bool = False,
@@ -100,7 +94,7 @@ def trend_scanning_labels(
     span : list[int] or tuple(int, int), default=(5, 20)
         If list, exact window lengths to scan. If tuple `(min, max)`, uses
         `range(min, max)` as horizons.
-    volatility_threshold : float, default=0.1
+    volatility_threshold : float, default=0.0
         Quantile level (0-1) on the expanding rolling std of log-prices. Windows
         below this vol threshold are zero-masked.
     lookforward : bool, default=True
@@ -261,4 +255,57 @@ def plot_trend_labels(close, trend_labels, title="Trend-Scanning Labels", view="
     plt.colorbar(scatter, label=f"trend {view}")
     plt.style.use("dark_background")
     plt.title(title)
+    plt.show()
+
+
+def t_val_linreg(close):
+    # tValue from a linear trend
+    x = np.ones((close.shape[0], 2))
+    x[:, 1] = np.arange(close.shape[0])
+    ols = sm.OLS(close, x).fit()
+    return ols.tvalues[1]
+
+
+def plot_event_tvalues(df, event_start, span, symbol, timeframe):
+    """
+    Plot histogram of event t-values.
+
+    param df: DataFrame with OHLC data.
+    param event_start: Start time of the event.
+    param span: Span of window lengths used in trend scanning.
+    return: None
+    """
+    # Compute t-values for multiple horizons starting at event_start
+    hrzns = list(range(*span)) if isinstance(span, tuple) else span
+    y = df["close"].loc[event_start:]
+    t_values = []
+
+    for h in hrzns:
+        y_window = y.iloc[:h]
+        t = t_val_linreg(y_window)
+        t_values.append(t)
+
+    # Find the horizon with the strongest signal
+    best_idx = int(np.nanargmax(np.abs(t_values)))
+    best_h = hrzns[best_idx]
+    best_t = t_values[best_idx]
+
+    # Plot
+    plt.style.use("dark_background")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 6), dpi=100)
+    y.iloc[: max(span)].plot(
+        ax=ax1, lw=1.5, legend=True, xlabel="", ylabel="Close", label=f"{symbol} {timeframe}"
+    )
+
+    ax2.plot(hrzns, t_values, marker="o")
+    ax2.axhline(0, color="white", lw=1)
+    ax2.axvline(
+        best_h, color="red", linestyle="--", label=f"Best horizon = {best_h}, t={best_t:.2f}"
+    )
+    ax2.set_xlabel("Horizon (bars)")
+    ax2.set_ylabel("t-value")
+    ax2.legend()
+
+    fig.suptitle(f"T-values across horizons for event starting {event_start}", fontsize=14)
+    plt.tight_layout()
     plt.show()
