@@ -4,7 +4,6 @@ import pandas as pd
 
 def trading_session_encoded_features(
     datetime_index: pd.DatetimeIndex,
-    n_terms: int = 3,  # Number of Fourier harmonics to include for the hour feature
 ) -> pd.DataFrame:
     """
     Creates Boolean flags and Fourier-encoded hour features for forex trading sessions based on UTC time.
@@ -20,25 +19,10 @@ def trading_session_encoded_features(
 
     Args:
         datetime_index: Input datetime index (naive or timezone-aware)
-        n_terms: Number of Fourier harmonics to include for the hour feature within each session.
-                 For k=1, you get sin(2*pi*hour/24) and cos(2*pi*hour/24).
-                 For k=2, you get sin(2*pi*2*hour/24) and cos(2*pi*2*hour/24), and so on.
 
     Returns:
         DataFrame with session flags (int8) and encoded hour features (float64).
     """
-    # Handle empty input
-    if datetime_index.empty:
-        # Define columns for an empty DataFrame to match expected output structure
-        base_cols = ["is_Sydney", "is_Tokyo", "is_London", "is_New_York"]
-        encoded_cols = []
-        session_names = ["Sydney", "Tokyo", "London", "New_York"]
-        for session_name in session_names:
-            for k in range(1, n_terms + 1):
-                encoded_cols.append(f"{session_name}_hour_sin_h{k}")
-                encoded_cols.append(f"{session_name}_hour_cos_h{k}")
-        return pd.DataFrame(columns=base_cols + encoded_cols)
-
     # Convert to UTC. If the index is naive, assume it is UTC.
     if datetime_index.tz is not None:
         dt_utc = datetime_index.tz_convert("UTC")
@@ -66,15 +50,6 @@ def trading_session_encoded_features(
         },  # 13:00 to 21:59 UTC
     }
 
-    # Pre-calculate all hour harmonics for the full 24-hour cycle
-    hour_cycle_length = 24
-    hour_sin_terms = {}
-    hour_cos_terms = {}
-    for k in range(1, n_terms + 1):
-        radians_k = 2 * np.pi * k * hours / hour_cycle_length
-        hour_sin_terms[k] = np.sin(radians_k)
-        hour_cos_terms[k] = np.cos(radians_k)
-
     # Process each session to create flags and encoded features
     for session_name, params in sessions.items():
         start_hour = params["start"]
@@ -88,21 +63,25 @@ def trading_session_encoded_features(
             is_session = (hours >= start_hour) & (hours < end_hour)
 
         # Add the binary session flag to the results DataFrame
-        out[f"is_{session_name}"] = is_session.astype("int8")
+        out[f"{session_name.replace('New_York', 'ny').lower()}_session"] = is_session.astype("int8")
 
-        # Create encoded hour features for the active session
-        # These features will be 0 when the session is inactive,
-        # and represent the cyclical hour when active.
-        for k in range(1, n_terms + 1):
-            out[f"{session_name}_hour_sin_h{k}"] = hour_sin_terms[k] * is_session
-            out[f"{session_name}_hour_cos_h{k}"] = hour_cos_terms[k] * is_session
+    out["session_overlap"] = np.where(out.sum(axis=1) > 1, 1, 0)
+
+    # Key forex timing patterns
+    day_of_week = datetime_index.dayofweek.values
+    day_of_month = datetime_index.day.values
+    month = datetime_index.month.values
+
+    out["friday_ny_close"] = ((day_of_week == 4) & (hours >= 21)).astype(int)
+    out["sunday_open"] = ((day_of_week == 6) & (hours <= 2)).astype(int)
+    out["month_end"] = (day_of_month >= 28).astype(int)
+    out["quarter_end"] = ((month % 3 == 0) & (day_of_month >= 28)).astype(int)
 
     return out
 
 
 def encode_cyclical_features(
-    df: pd.DataFrame,
-    dt_col: str = None,
+    datetime_index: pd.DatetimeIndex,
     n_terms: int = 3,
     extra_fourier_features: list = None,
 ) -> pd.DataFrame:
@@ -124,25 +103,16 @@ def encode_cyclical_features(
         DataFrame with added cyclical features
     """
     # Input validation
-    if not isinstance(df, pd.DataFrame):
-        raise TypeError("Input must be a pandas DataFrame")
+    if not isinstance(datetime_index, pd.DatetimeIndex):
+        raise ValueError("datetime_index must be a pandas DatetimeIndex")
 
-    # Handle datetime source
-    if dt_col:
-        dt_series = pd.to_datetime(df[dt_col])
-    elif isinstance(df.index, pd.DatetimeIndex):
-        dt_series = df.index.to_series()
-    else:
-        raise TypeError("Must provide dt_col or have a DatetimeIndex")
-
-    out = pd.DataFrame(index=df.index)
+    out = pd.DataFrame(index=datetime_index)
 
     # Feature configuration
     features = {
-        "minute": (dt_series.dt.minute, 60),
-        "hour": (dt_series.dt.hour, 24),
-        "dayofweek": (dt_series.dt.dayofweek, 7),
-        "dayofyear": (dt_series.dt.dayofyear, 366),
+        "hour": (datetime_index.dt.hour, 24),
+        "dayofweek": (datetime_index.dt.dayofweek, 7),
+        "dayofyear": (datetime_index.dt.dayofyear, 366),
     }
 
     # Process features
@@ -170,7 +140,7 @@ def encode_cyclical_features(
 
 
 def get_time_features(
-    df: pd.DataFrame, timeframe: str, n_terms: int = 3, bar_type: str = "time"
+    df: pd.DataFrame, timeframe: str, n_terms: int = 3, bar_type: str = "time", forex: bool = True
 ) -> pd.DataFrame:
     """
     Creates comprehensive time features for financial data.
@@ -186,6 +156,7 @@ def get_time_features(
         timeframe: Timeframe used to generate bars
         n_terms: Fourier harmonics to generate
         bar_type: Bar type ('time' or other)
+        forex: If asset trades according to forex sessions (24H)
 
     Returns:
         DataFrame with added time features
@@ -204,23 +175,26 @@ def get_time_features(
 
     # Frequency-based feature optimization
     timeframe = timeframe.upper()
-    if timeframe.startswith(("B", "D", "W", "MN")):
-        extra_features = []
-    elif timeframe.startswith("H"):
+    if timeframe.startswith(("H", "D", "W", "MN")):
         extra_features = []
     elif timeframe.startswith("M"):
-        extra_features = ["minute"]
+        extra_features = ["hour"]
 
     # Generate features
     cyclical_feat = encode_cyclical_features(
         df, n_terms=n_terms, extra_fourier_features=extra_features
     )
-    session_feat = trading_session_encoded_features(df.index, n_terms)
-    to_drop = (
-        session_feat.columns[session_feat.columns.str.startswith("is_")].to_list()
-        + cyclical_feat.columns[cyclical_feat.columns.str.startswith("hour_")].to_list()
-    )
-    df = pd.concat([cyclical_feat, session_feat], axis=1).drop(columns=to_drop)
-    df.columns = df.columns.str.lower()
+    if forex:
+        session_feat = trading_session_encoded_features(df.index)
+        # Add session volatility
+        returns = np.log(df["close"]).diff()
+        for session in session_feat:
+            session_mask = session_feat[session] == 1
+            if session_mask.sum() > 0:
+                session_vol = returns[session_mask].rolling(20, min_periods=1).std()
+                session_feat[f"{session}_vol"] = session_vol.reindex(df.index, method="ffill")
+    else:
+        session_feat = pd.DataFrame()
 
+    df = pd.concat([cyclical_feat, session_feat], axis=1)
     return df
