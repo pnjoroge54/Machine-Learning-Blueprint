@@ -162,17 +162,6 @@ class DataFrameFormatter:
 
 
 def optimize_dtypes(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
-    """
-    Optimize the dtypes of a DataFrame by downcasting numeric types and converting
-    object columns with low cardinality to categoricals.
-
-    :param df: The input DataFrame to optimize.
-    :type df: pd.DataFrame
-    :param verbose: Whether to print memory usage stats before and after optimization.
-    :type verbose: bool
-    :return: A new DataFrame with optimized dtypes.
-    :rtype: pd.DataFrame
-    """
     optimized_df = df.copy()
     start_mem = optimized_df.memory_usage(deep=True).sum() / 1024**2
 
@@ -182,8 +171,15 @@ def optimize_dtypes(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
         if pd.api.types.is_numeric_dtype(col_dtype):
             if pd.api.types.is_integer_dtype(col_dtype):
                 optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="integer")
+            
             elif pd.api.types.is_float_dtype(col_dtype):
-                optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="float")
+                # Simple check: no NaNs and all values are whole numbers
+                if not optimized_df[col].isna().any() and (optimized_df[col] == optimized_df[col].round()).all():
+                    optimized_df[col] = optimized_df[col].astype('int64')
+                    optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="integer")
+                else:
+                    optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="float")
+        
         elif pd.api.types.is_object_dtype(col_dtype):
             num_unique_values = optimized_df[col].nunique()
             num_total_values = len(optimized_df[col])
@@ -194,10 +190,7 @@ def optimize_dtypes(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
 
     if verbose:
         reduction_pct = 100 * (start_mem - end_mem) / start_mem
-        print(
-            f"Memory usage reduced from {start_mem:.2f} MB to {end_mem:.2f} MB "
-            f"({reduction_pct:.1f}% reduction)"
-        )
+        print(f"Memory usage reduced from {start_mem:.2f} MB to {end_mem:.2f} MB ({reduction_pct:.1f}% reduction)")
 
     return optimized_df
 
