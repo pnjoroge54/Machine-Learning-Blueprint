@@ -701,3 +701,132 @@ def run_trade_path_with_direction(
     exit_price = price_array[min(entry_idx + max_holding, n-1)]
     ret = (exit_price / entry_price - 1.0) * direction
     return ret, max_holding, 'max_hold'
+
+
+def validate_trend_strategy_oos(
+    prices: pd.Series,
+    entry_signal_fn: Callable[[pd.Series], pd.Series],  # Function that generates direction signals
+    rule_search_fn: Callable,
+    volatility_lookback: int = 20,
+    max_holding: int = 50,
+    n_splits: int = 5,
+    purge_window: int = 10
+) -> Dict:
+    """
+    Validate trend-following strategy with directional trading.
+    """
+    # Generate direction signals
+    signals = entry_signal_fn(prices)
+    entry_times = get_entry_times_from_signals(signals)
+    
+    if isinstance(prices, pd.Series):
+        price_arr = prices.values
+        signal_arr = signals.values
+        index = prices.index
+    else:
+        price_arr = np.asarray(prices)
+        signal_arr = np.asarray(signals)
+        index = pd.Index(range(len(price_arr)))
+    
+    # Calculate volatility
+    price_series = pd.Series(price_arr, index=index)
+    volatility_series = calculate_volatility(price_series, volatility_lookback)
+    volatility_arr = volatility_series.fillna(method='bfill').values
+    
+    # Map entry times to indices
+    entry_idx_all = np.array([index.get_loc(t) for t in entry_times], dtype=int)
+    entry_idx_all = np.sort(entry_idx_all)
+    
+    # Use MLFinLab cross-validation
+    cv = PurgedWalkForward(
+        n_splits=n_splits,
+        min_train_size=len(entry_idx_all) // (n_splits + 1),
+        test_size=len(entry_idx_all) // n_splits,
+        purge_window=purge_window
+    )
+    
+    results = {'folds': [], 'aggregate_test_metrics': {}}
+    all_test_trades = []
+    
+    splits = list(cv.split(entry_idx_all))
+    
+    for fold_idx, (train_indices, test_indices) in enumerate(splits):
+        with mlflow.start_run(nested=True, run_name=f"trend_fold_{fold_idx}"):
+            train_entries = entry_idx_all[train_indices]
+            test_entries = entry_idx_all[test_indices]
+            
+            if len(train_entries) == 0:
+                continue
+            
+            # Find optimal barriers for trend strategy
+            best_pt, best_sl = rule_search_fn(
+                price_arr, volatility_arr, train_entries, signal_arr
+            )
+            
+            # Test on out-of-sample data
+            trades = []
+            for entry_idx in test_entries:
+                direction = signal_arr[entry_idx]
+                ret, holding, reason = run_trade_path_with_direction(
+                    price_arr, volatility_arr, entry_idx, 
+                    direction, best_pt, best_sl, max_holding
+                )
+                
+                trades.append({
+                    'entry_idx': int(entry_idx),
+                    'entry_time': index[entry_idx],
+                    'direction': int(direction),
+                    'return': float(ret),
+                    'holding': int(holding),
+                    'exit_reason': reason,
+                    'fold': fold_idx,
+                    'pt_multiple': best_pt,
+                    'sl_multiple': best_sl
+                })
+            
+            trades_df = pd.DataFrame(trades)
+            all_test_trades.extend(trades)
+            
+            # Calculate directional metrics
+            test_metrics = calculate_directional_metrics(trades_df)
+            
+            results['folds'].append({
+                'fold_index': fold_idx,
+                'chosen_rule': {'pt_multiple': best_pt, 'sl_multiple': best_sl},
+                'test_metrics': test_metrics,
+                'trades_df': trades_df
+            })
+    
+    # Aggregate results
+    all_trades_df = pd.DataFrame(all_test_trades)
+    aggregate_metrics = calculate_directional_metrics(all_trades_df)
+    results['aggregate_test_metrics'] = aggregate_metrics
+    results['all_trades_df'] = all_trades_df
+    
+    return results
+
+
+def calculate_directional_metrics(trades_df: pd.DataFrame) -> Dict:
+    """Calculate metrics for directional trading strategy"""
+    if len(trades_df) == 0:
+        return {'n_trades': 0, 'long_win_rate': 0, 'short_win_rate': 0, 'overall_sharpe': 0}
+    
+    long_trades = trades_df[trades_df['direction'] == 1]
+    short_trades = trades_df[trades_df['direction'] == -1]
+    
+    long_win_rate = (long_trades['return'] > 0).mean() if len(long_trades) > 0 else 0
+    short_win_rate = (short_trades['return'] > 0).mean() if len(short_trades) > 0 else 0
+    
+    overall_returns = trades_df['return']
+    overall_sharpe = overall_returns.mean() / overall_returns.std() if overall_returns.std() > 0 else 0
+    
+    return {
+        'n_trades': len(trades_df),
+        'n_long': len(long_trades),
+        'n_short': len(short_trades),
+        'long_win_rate': long_win_rate,
+        'short_win_rate': short_win_rate,
+        'overall_sharpe': overall_sharpe,
+        'mean_return_long': long_trades['return'].mean() if len(long_trades) > 0 else 0,
+        'mean_return_short': short_trades['return'].mean() if len(short_trades) > 0 else 0
+    }
