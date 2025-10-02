@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
+from numba import njit, prange
+import numba as nb
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional,Tuple
 import statsmodels.api as sm
+
 
 @dataclass
 class RGPParams:
@@ -13,6 +16,7 @@ class RGPParams:
     jump_lambda: Optional[float]
     jump_mu: Optional[float] 
     jump_sigma: Optional[float]
+
 
 def estimate_rgp_from_prices(prices: pd.Series,
                            fit_ar1: bool = True,
@@ -112,6 +116,7 @@ def simulate_rgp_path(start_price: float,
     
     return np.exp(logp)
 
+
 def simulate_multiple_paths(start_price: float,
                           steps: int,
                           params: RGPParams,
@@ -126,3 +131,134 @@ def simulate_multiple_paths(start_price: float,
                                    random_state=rng.integers(0, 2**32))
     
     return paths
+
+
+
+# Numba-optimized single path simulation
+@njit(cache=True)
+def simulate_single_path_numba(start_log_price: float, steps: int,
+                             mu: float, sigma: float, phi: float, 
+                             intercept: float, jump_lambda: float,
+                             jump_mu: float, jump_sigma: float,
+                             use_ar1: bool, use_jumps: bool,
+                             seed: int) -> np.ndarray:
+    """Numba-optimized single path simulation"""
+    np.random.seed(seed)
+    logp = np.empty(steps + 1, dtype=np.float64)
+    logp[0] = start_log_price
+    prev_ret = mu
+    
+    for t in range(1, steps + 1):
+        # Base innovation
+        eps = np.random.normal(0.0, sigma)
+        
+        # AR(1) dynamics
+        if use_ar1:
+            ret = intercept + phi * prev_ret + eps
+        else:
+            ret = mu + eps
+        
+        # Jump component
+        if use_jumps and np.random.random() < jump_lambda:
+            jump = np.random.normal(jump_mu, jump_sigma)
+            ret += jump
+        
+        logp[t] = logp[t-1] + ret
+        prev_ret = ret
+    
+    return np.exp(logp)
+
+def simulate_multiple_paths_numba(start_price: float, steps: int,
+                                params: RGPParams, n_paths: int = 1000,
+                                random_state: Optional[int] = None) -> np.ndarray:
+    """Multiple paths using Numba optimization"""
+    if random_state is not None:
+        np.random.seed(random_state)
+    
+    # Extract parameters and flags
+    use_ar1 = params.phi is not None and params.intercept is not None
+    use_jumps = (params.jump_lambda is not None and 
+                params.jump_lambda > 0 and 
+                params.jump_mu is not None)
+    
+    phi = params.phi if use_ar1 else 0.0
+    intercept = params.intercept if use_ar1 else 0.0
+    jump_lambda = params.jump_lambda if use_jumps else 0.0
+    jump_mu = params.jump_mu if use_jumps else 0.0
+    jump_sigma = params.jump_sigma if use_jumps else 0.0
+    
+    start_log_price = np.log(start_price)
+    paths = np.empty((n_paths, steps + 1), dtype=np.float64)
+    
+    for i in range(n_paths):
+        seed = np.random.randint(0, 2**31 - 1)  # Different seed for each path
+        paths[i] = simulate_single_path_numba(
+            start_log_price, steps, params.mu, params.sigma,
+            phi, intercept, jump_lambda, jump_mu, jump_sigma,
+            use_ar1, use_jumps, seed
+        )
+    
+    return paths
+
+
+@njit(parallel=True, cache=True)
+def simulate_all_paths_numba_parallel(start_log_price: float, steps: int,
+                                    mu: float, sigma: float, phi: float,
+                                    intercept: float, jump_lambda: float,
+                                    jump_mu: float, jump_sigma: float,
+                                    use_ar1: bool, use_jumps: bool,
+                                    n_paths: int) -> np.ndarray:
+    """Ultra-fast version using Numba's parallel capabilities"""
+    paths = np.empty((n_paths, steps + 1), dtype=np.float64)
+    
+    # Numba's parallel loop - each iteration can run on different cores
+    for i in prange(n_paths):
+        # Each thread gets its own random state
+        seed = i  # Simple seeding strategy
+        np.random.seed(seed)
+        
+        logp = np.empty(steps + 1, dtype=np.float64)
+        logp[0] = start_log_price
+        prev_ret = mu
+        
+        for t in range(1, steps + 1):
+            eps = np.random.normal(0.0, sigma)
+            
+            if use_ar1:
+                ret = intercept + phi * prev_ret + eps
+            else:
+                ret = mu + eps
+            
+            if use_jumps and np.random.random() < jump_lambda:
+                jump = np.random.normal(jump_mu, jump_sigma)
+                ret += jump
+            
+            logp[t] = logp[t-1] + ret
+            prev_ret = ret
+        
+        paths[i] = np.exp(logp)
+    
+    return paths
+
+
+def simulate_multiple_paths_ultra(start_price: float, steps: int,
+                                params: RGPParams, n_paths: int = 1000) -> np.ndarray:
+    """Ultra-fast combined approach"""
+    use_ar1 = params.phi is not None and params.intercept is not None
+    use_jumps = (params.jump_lambda is not None and 
+                params.jump_lambda > 0 and 
+                params.jump_mu is not None)
+    
+    phi = params.phi if use_ar1 else 0.0
+    intercept = params.intercept if use_ar1 else 0.0
+    jump_lambda = params.jump_lambda if use_jumps else 0.0
+    jump_mu = params.jump_mu if use_jumps else 0.0
+    jump_sigma = params.jump_sigma if use_jumps else 0.0
+    
+    start_log_price = np.log(start_price)
+    
+    return simulate_all_paths_numba_parallel(
+        start_log_price, steps, params.mu, params.sigma,
+        phi, intercept, jump_lambda, jump_mu, jump_sigma,
+        use_ar1, use_jumps, n_paths
+    )
