@@ -7,6 +7,9 @@ from typing import Optional,Tuple
 import statsmodels.api as sm
 
 
+from ..util.volatility import get_period_vol
+
+
 @dataclass
 class RGPParams:
     mu: float            # unconditional mean of log-returns
@@ -288,25 +291,12 @@ def calculate_volatility(price_series: pd.Series,
     Returns:
         Series of volatility values
     """
-    if method == 'returns':
-        returns = price_series.pct_change().dropna()
-        volatility = returns.rolling(window=lookback_period).std()
-    elif method == 'atr':
-        # Average True Range calculation
-        high = price_series  # Assuming we only have close prices
-        low = price_series
-        close = price_series
-        
-        tr1 = high - low
-        tr2 = abs(high - close.shift())
-        tr3 = abs(low - close.shift())
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        volatility = tr.rolling(window=lookback_period).mean()
-    elif method == 'ewma':
-        returns = price_series.pct_change().dropna()
-        volatility = returns.ewm(span=lookback_period).std()
+    if method == 'daily':
+        volatility = get_period_vol(price_series, days=lookback_period)
+    elif method == 'hourly':
+        volatility = get_period_vol(price_series, hours=lookback_period)
     else:
-        raise ValueError("Method must be 'returns', 'atr', or 'ewma'")
+        raise ValueError("Method must be 'daily' or 'hourly'")
     
     return volatility
 
@@ -372,7 +362,7 @@ def validate_rule_oos_volatility(
     entry_times: Sequence[pd.Timestamp],
     rule_search_fn: Callable[[np.ndarray, np.ndarray, np.ndarray], Tuple[float, float]],
     volatility_lookback: int = 20,
-    volatility_method: str = 'returns',
+    volatility_method: str = 'daily',
     pt_sl_grid: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     max_holding: int = 50,
     n_splits: int = 5,
@@ -388,7 +378,7 @@ def validate_rule_oos_volatility(
         rule_search_fn: Function that takes (price_array, volatility_array, train_entries) 
                        and returns (best_pt_multiple, best_sl_multiple)
         volatility_lookback: Lookback period for volatility calculation
-        volatility_method: Method for volatility calculation ('returns', 'atr', 'ewma')
+        volatility_method: Method for volatility calculation ('daily', 'hourly')
         pt_sl_grid: Optional grid of (pt_multiples, sl_multiples)
         max_holding: Maximum holding period
         n_splits: Number of CV folds
@@ -423,7 +413,7 @@ def validate_rule_oos_volatility(
             price_series, 
             lookback_period=volatility_lookback,
             method=volatility_method
-        ).fillna(method='bfill')
+        ).reindex(index).fillna(method='bfill')
         
         volatility_arr = volatility_series.values
         
