@@ -262,3 +262,396 @@ def simulate_multiple_paths_ultra(start_price: float, steps: int,
         phi, intercept, jump_lambda, jump_mu, jump_sigma,
         use_ar1, use_jumps, n_paths
     )
+
+
+from typing import Sequence, Tuple, Callable, Dict, Optional
+import numpy as np
+import pandas as pd
+from loguru import logger
+import mlflow
+from mlfinlab.cross_validation import PurgedWalkForward
+from mlfinlab.util.multiprocess import mp_pandas_obj
+
+def calculate_volatility(price_series: pd.Series, 
+                        lookback_period: int = 20,
+                        method: str = 'returns') -> pd.Series:
+    """
+    Calculate volatility of price series using different methods.
+    
+    Args:
+        price_series: Series of prices
+        lookback_period: Period for volatility calculation
+        method: 'returns' for standard deviation of returns, 
+                'atr' for average true range,
+                'ewma' for exponentially weighted moving average
+    
+    Returns:
+        Series of volatility values
+    """
+    if method == 'returns':
+        returns = price_series.pct_change().dropna()
+        volatility = returns.rolling(window=lookback_period).std()
+    elif method == 'atr':
+        # Average True Range calculation
+        high = price_series  # Assuming we only have close prices
+        low = price_series
+        close = price_series
+        
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        volatility = tr.rolling(window=lookback_period).mean()
+    elif method == 'ewma':
+        returns = price_series.pct_change().dropna()
+        volatility = returns.ewm(span=lookback_period).std()
+    else:
+        raise ValueError("Method must be 'returns', 'atr', or 'ewma'")
+    
+    return volatility
+
+
+def run_trade_path_on_series_volatility(
+    price_array: np.ndarray,
+    volatility_array: np.ndarray,
+    entry_idx: int,
+    pt_multiple: float, 
+    sl_multiple: float, 
+    max_holding: int
+) -> Tuple[float, int, str]:
+    """
+    Run one trade with volatility-adjusted barriers.
+    
+    Args:
+        price_array: Array of prices
+        volatility_array: Array of volatility values at each point
+        entry_idx: Entry index
+        pt_multiple: Profit-taking multiple of volatility (e.g., 1.5 means 1.5 * volatility)
+        sl_multiple: Stop-loss multiple of volatility (e.g., 0.5 means 0.5 * volatility)
+        max_holding: Maximum holding period
+    
+    Returns:
+        Tuple of (return, holding_period, exit_reason)
+    """
+    entry_price = price_array[entry_idx]
+    entry_volatility = volatility_array[entry_idx]
+    
+    # Calculate absolute barrier levels based on volatility
+    pt_level = entry_price * (1 + pt_multiple * entry_volatility)
+    sl_level = entry_price * (1 - sl_multiple * entry_volatility)
+    
+    n = len(price_array)
+    
+    for h in range(1, max_holding + 1):
+        t = entry_idx + h
+        if t >= n:
+            exit_price = price_array[-1]
+            ret = (exit_price / entry_price) - 1.0
+            return ret, h, 'last'
+        
+        current_price = price_array[t]
+        
+        # Check profit-taking barrier
+        if current_price >= pt_level:
+            ret = (pt_level / entry_price) - 1.0
+            return ret, h, 'tp'
+        
+        # Check stop-loss barrier  
+        if current_price <= sl_level:
+            ret = (sl_level / entry_price) - 1.0
+            return ret, h, 'sl'
+    
+    # Max holding period reached
+    exit_price = price_array[min(entry_idx + max_holding, n-1)]
+    ret = (exit_price / entry_price) - 1.0
+    return ret, max_holding, 'max_hold'
+
+
+def validate_rule_oos_volatility(
+    prices: pd.Series,
+    entry_times: Sequence[pd.Timestamp],
+    rule_search_fn: Callable[[np.ndarray, np.ndarray, np.ndarray], Tuple[float, float]],
+    volatility_lookback: int = 20,
+    volatility_method: str = 'returns',
+    pt_sl_grid: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    max_holding: int = 50,
+    n_splits: int = 5,
+    purge_window: int = 10,
+    experiment_name: str = "volatility_barrier_validation"
+) -> Dict:
+    """
+    Chronological cross-validation with volatility-adjusted barriers.
+    
+    Args:
+        prices: pd.Series of prices indexed by time
+        entry_times: Sequence of entry timestamps
+        rule_search_fn: Function that takes (price_array, volatility_array, train_entries) 
+                       and returns (best_pt_multiple, best_sl_multiple)
+        volatility_lookback: Lookback period for volatility calculation
+        volatility_method: Method for volatility calculation ('returns', 'atr', 'ewma')
+        pt_sl_grid: Optional grid of (pt_multiples, sl_multiples)
+        max_holding: Maximum holding period
+        n_splits: Number of CV folds
+        purge_window: Purge window for avoiding data leakage
+        experiment_name: MLflow experiment name
+    
+    Returns:
+        Dictionary with validation results
+    """
+    mlflow.set_experiment(experiment_name)
+    
+    with mlflow.start_run():
+        # Log parameters
+        mlflow.log_params({
+            "volatility_lookback": volatility_lookback,
+            "volatility_method": volatility_method,
+            "max_holding": max_holding,
+            "n_splits": n_splits,
+            "purge_window": purge_window
+        })
+        
+        if isinstance(prices, pd.Series):
+            price_arr = prices.values
+            index = prices.index
+        else:
+            price_arr = np.asarray(prices)
+            index = pd.Index(range(len(price_arr)))
+        
+        # Calculate volatility series
+        price_series = pd.Series(price_arr, index=index)
+        volatility_series = calculate_volatility(
+            price_series, 
+            lookback_period=volatility_lookback,
+            method=volatility_method
+        ).fillna(method='bfill')
+        
+        volatility_arr = volatility_series.values
+        
+        logger.info(f"Volatility stats - Mean: {volatility_arr.mean():.6f}, "
+                   f"Std: {volatility_arr.std():.6f}, "
+                   f"Min: {volatility_arr.min():.6f}, "
+                   f"Max: {volatility_arr.max():.6f}")
+        
+        # Map entry_times to integer indices
+        entry_idx_all = np.array([index.get_loc(t) for t in entry_times], dtype=int)
+        entry_idx_all = np.sort(entry_idx_all)
+        
+        # Remove entries where volatility is not available
+        valid_entries = entry_idx_all[entry_idx_all >= volatility_lookback]
+        if len(valid_entries) < len(entry_idx_all):
+            logger.warning(f"Removed {len(entry_idx_all) - len(valid_entries)} entries due to insufficient volatility data")
+        
+        entry_idx_all = valid_entries
+        
+        # Use MLFinLab's PurgedWalkForward
+        cv = PurgedWalkForward(
+            n_splits=n_splits,
+            min_train_size=len(entry_idx_all) // (n_splits + 1),
+            test_size=len(entry_idx_all) // n_splits,
+            purge_window=purge_window
+        )
+        
+        results = {'folds': [], 'aggregate_test_metrics': {}}
+        all_test_trades = []
+        
+        splits = list(cv.split(entry_idx_all))
+        
+        for fold_idx, (train_indices, test_indices) in enumerate(splits):
+            with mlflow.start_run(nested=True, run_name=f"fold_{fold_idx}"):
+                logger.info(f"Processing fold {fold_idx + 1}/{len(splits)}")
+                
+                train_entries = entry_idx_all[train_indices]
+                test_entries = entry_idx_all[test_indices]
+                
+                if len(train_entries) == 0:
+                    logger.warning(f"Skipping fold {fold_idx} - no training data")
+                    continue
+                
+                # In-sample search for optimal volatility multiples
+                if pt_sl_grid is None:
+                    best_pt_multiple, best_sl_multiple = rule_search_fn(
+                        price_arr, volatility_arr, train_entries
+                    )
+                else:
+                    best_pt_multiple, best_sl_multiple = rule_search_fn(
+                        price_arr, volatility_arr, train_entries, pt_sl_grid
+                    )
+                
+                logger.info(f"Fold {fold_idx} - Best PT multiple: {best_pt_multiple:.2f}, "
+                           f"Best SL multiple: {best_sl_multiple:.2f}")
+                
+                # Evaluate on test set with volatility-adjusted barriers
+                trades = []
+                for entry_idx in test_entries:
+                    ret, holding, reason = run_trade_path_on_series_volatility(
+                        price_arr, volatility_arr, int(entry_idx),
+                        best_pt_multiple, best_sl_multiple, max_holding
+                    )
+                    entry_vol = volatility_arr[entry_idx]
+                    trades.append({
+                        'entry_idx': int(entry_idx),
+                        'entry_time': index[entry_idx],
+                        'entry_price': price_arr[entry_idx],
+                        'entry_volatility': entry_vol,
+                        'pt_level': price_arr[entry_idx] * (1 + best_pt_multiple * entry_vol),
+                        'sl_level': price_arr[entry_idx] * (1 - best_sl_multiple * entry_vol),
+                        'return': float(ret),
+                        'holding': int(holding),
+                        'exit_reason': reason,
+                        'fold': fold_idx,
+                        'pt_multiple': best_pt_multiple,
+                        'sl_multiple': best_sl_multiple
+                    })
+                
+                trades_df = pd.DataFrame(trades)
+                all_test_trades.extend(trades)
+                
+                # Calculate metrics
+                test_metrics = calculate_trading_metrics(trades_df)
+                
+                # Log fold results
+                mlflow.log_params({
+                    "fold_pt_multiple": best_pt_multiple,
+                    "fold_sl_multiple": best_sl_multiple
+                })
+                mlflow.log_metrics(test_metrics)
+                
+                if len(trades_df) > 0:
+                    trades_df.to_csv(f"fold_{fold_idx}_trades.csv", index=False)
+                    mlflow.log_artifact(f"fold_{fold_idx}_trades.csv")
+                
+                results['folds'].append({
+                    'fold_index': fold_idx,
+                    'train_entries_range': (train_entries[0], train_entries[-1]),
+                    'test_entries_range': (test_entries[0], test_entries[-1]),
+                    'chosen_rule': {
+                        'pt_multiple': float(best_pt_multiple), 
+                        'sl_multiple': float(best_sl_multiple)
+                    },
+                    'test_metrics': test_metrics,
+                    'trades_df': trades_df
+                })
+                
+                logger.success(f"Fold {fold_idx} completed: {len(trades_df)} trades, "
+                              f"Sharpe: {test_metrics['sharpe_ratio']:.4f}")
+        
+        # Aggregate results
+        all_trades_df = pd.DataFrame(all_test_trades)
+        aggregate_metrics = calculate_trading_metrics(all_trades_df)
+        
+        # Log aggregate metrics with volatility context
+        mlflow.log_metrics({f"aggregate_{k}": v for k, v in aggregate_metrics.items()})
+        
+        # Log volatility statistics of trades
+        if len(all_trades_df) > 0:
+            vol_stats = {
+                "mean_entry_volatility": all_trades_df['entry_volatility'].mean(),
+                "std_entry_volatility": all_trades_df['entry_volatility'].std(),
+                "min_entry_volatility": all_trades_df['entry_volatility'].min(),
+                "max_entry_volatility": all_trades_df['entry_volatility'].max()
+            }
+            mlflow.log_metrics(vol_stats)
+            
+            all_trades_df.to_csv("all_trades.csv", index=False)
+            mlflow.log_artifact("all_trades.csv")
+        
+        results['aggregate_test_metrics'] = aggregate_metrics
+        results['all_trades_df'] = all_trades_df
+        results['volatility_stats'] = vol_stats if len(all_trades_df) > 0 else {}
+        
+        logger.success(f"Validation completed: {len(all_trades_df)} total trades, "
+                      f"Aggregate Sharpe: {aggregate_metrics['sharpe_ratio']:.4f}")
+        
+        return results
+
+
+def calculate_trading_metrics(trades_df: pd.DataFrame) -> Dict:
+    """Calculate comprehensive trading metrics for volatility-adjusted strategy"""
+    if len(trades_df) == 0:
+        return {
+            'n_trades': 0, 'mean_return': float('nan'), 'std_return': float('nan'), 
+            'sharpe_ratio': float('nan'), 'win_rate': float('nan'),
+            'avg_holding_period': float('nan'), 'max_drawdown': float('nan'),
+            'profit_factor': float('nan'), 'avg_pt_multiple': float('nan'),
+            'avg_sl_multiple': float('nan')
+        }
+    
+    returns = trades_df['return']
+    wins = returns[returns > 0]
+    losses = returns[returns < 0]
+    
+    mean_return = returns.mean()
+    std_return = returns.std(ddof=1) if len(returns) > 1 else 0.0
+    sharpe_ratio = mean_return / std_return if std_return > 0 else 0.0
+    win_rate = len(wins) / len(returns) if len(returns) > 0 else 0.0
+    avg_holding_period = trades_df['holding'].mean()
+    
+    # Calculate cumulative returns for drawdown
+    cumulative_returns = (1 + returns).cumprod()
+    running_max = cumulative_returns.expanding().max()
+    drawdown = (cumulative_returns - running_max) / running_max
+    max_drawdown = drawdown.min()
+    
+    # Profit factor
+    gross_profit = wins.sum() if len(wins) > 0 else 0
+    gross_loss = abs(losses.sum()) if len(losses) > 0 else 0
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+    
+    # Volatility multiple stats
+    avg_pt_multiple = trades_df['pt_multiple'].mean() if 'pt_multiple' in trades_df.columns else float('nan')
+    avg_sl_multiple = trades_df['sl_multiple'].mean() if 'sl_multiple' in trades_df.columns else float('nan')
+    
+    return {
+        'n_trades': len(trades_df),
+        'mean_return': float(mean_return),
+        'std_return': float(std_return),
+        'sharpe_ratio': float(sharpe_ratio),
+        'win_rate': float(win_rate),
+        'avg_holding_period': float(avg_holding_period),
+        'max_drawdown': float(max_drawdown),
+        'profit_factor': float(profit_factor),
+        'avg_pt_multiple': float(avg_pt_multiple),
+        'avg_sl_multiple': float(avg_sl_multiple)
+    }
+
+# Example volatility-aware rule search function
+def volatility_rule_search_fn(
+    price_array: np.ndarray, 
+    volatility_array: np.ndarray,
+    train_entries: np.ndarray,
+    pt_sl_grid: Optional[Tuple[np.ndarray, np.ndarray]] = None
+) -> Tuple[float, float]:
+    """
+    Example rule search function that finds optimal volatility multiples.
+    """
+    logger.info(f"Searching for optimal volatility multiples on {len(train_entries)} training entries")
+    
+    # Define parameter grid for volatility multiples
+    if pt_sl_grid is None:
+        pt_multiples = np.linspace(0.5, 3.0, 20)  # PT: 0.5x to 3.0x volatility
+        sl_multiples = np.linspace(0.1, 1.5, 15)  # SL: 0.1x to 1.5x volatility
+    else:
+        pt_multiples, sl_multiples = pt_sl_grid
+    
+    best_sharpe = -np.inf
+    best_pt, best_sl = 0.0, 0.0
+    
+    for pt in pt_multiples:
+        for sl in sl_multiples:
+            fold_returns = []
+            for entry_idx in train_entries:
+                ret, _, _ = run_trade_path_on_series_volatility(
+                    price_array, volatility_array, entry_idx, pt, sl, 50
+                )
+                fold_returns.append(ret)
+            
+            if len(fold_returns) > 1:
+                sharpe = np.mean(fold_returns) / np.std(fold_returns) if np.std(fold_returns) > 0 else 0
+                if sharpe > best_sharpe:
+                    best_sharpe = sharpe
+                    best_pt, best_sl = pt, sl
+    
+    logger.info(f"Optimal multiples found: PT={best_pt:.2f}x vol, SL={best_sl:.2f}x vol, Sharpe={best_sharpe:.4f}")
+    return best_pt, best_sl
+
+
