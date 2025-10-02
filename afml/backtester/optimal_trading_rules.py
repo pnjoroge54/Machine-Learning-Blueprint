@@ -604,8 +604,9 @@ def calculate_trading_metrics(trades_df: pd.DataFrame) -> Dict:
         'avg_sl_multiple': float(avg_sl_multiple)
     }
 
+
 # Example volatility-aware rule search function
-def volatility_rule_search_fn(
+def rule_search_fn(
     price_array: np.ndarray, 
     volatility_array: np.ndarray,
     train_entries: np.ndarray,
