@@ -628,8 +628,7 @@ def volatility_rule_search_fn(
     
     # Define parameter grid for volatility multiples
     if pt_sl_grid is None:
-        pt_multiples = np.linspace(0.5, 3.0, 20)  # PT: 0.5x to 3.0x volatility
-        sl_multiples = np.linspace(0.1, 1.5, 15)  # SL: 0.1x to 1.5x volatility
+        pt_multiples = sl_multiples = np.linspace(0.5, 10.0, 20)  # PT: 0.5x to 10.0x volatility
     else:
         pt_multiples, sl_multiples = pt_sl_grid
     
