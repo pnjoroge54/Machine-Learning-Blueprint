@@ -367,6 +367,7 @@ def validate_rule_oos_volatility(
     max_holding: int = 50,
     n_splits: int = 5,
     purge_window: int = 10,
+    sides: pd.Series = None,
     experiment_name: str = "volatility_barrier_validation"
 ) -> Dict:
     """
@@ -382,7 +383,8 @@ def validate_rule_oos_volatility(
         pt_sl_grid: Optional grid of (pt_multiples, sl_multiples)
         max_holding: Maximum holding period
         n_splits: Number of CV folds
-        purge_window: Purge window for avoiding data leakage
+        purge_window: Purge window for avoiding data leakage,
+        sides: Predicted direction of trades
         experiment_name: MLflow experiment name
     
     Returns:
@@ -472,8 +474,9 @@ def validate_rule_oos_volatility(
                 
                 # Evaluate on test set with volatility-adjusted barriers
                 trades = []
+                run_trade_path_fn = run_trade_path_on_series_volatility if sides is None else run_trade_path_with_direction
                 for entry_idx in test_entries:
-                    ret, holding, reason = run_trade_path_on_series_volatility(
+                    ret, holding, reason = run_trade_path_fn(
                         price_arr, volatility_arr, int(entry_idx),
                         best_pt_multiple, best_sl_multiple, max_holding
                     )
@@ -606,7 +609,7 @@ def calculate_trading_metrics(trades_df: pd.DataFrame) -> Dict:
 
 
 # Example volatility-aware rule search function
-def rule_search_fn(
+def volatility_rule_search_fn(
     price_array: np.ndarray, 
     volatility_array: np.ndarray,
     train_entries: np.ndarray,
@@ -645,3 +648,56 @@ def rule_search_fn(
     return best_pt, best_sl
 
 
+def run_trade_path_with_direction(
+    price_array: np.ndarray,
+    volatility_array: np.ndarray,
+    entry_idx: int,
+    direction: int,  # +1 for long, -1 for short
+    pt_multiple: float,
+    sl_multiple: float,
+    max_holding: int
+) -> Tuple[float, int, str]:
+    """
+    Run one trade with direction-aware volatility barriers.
+    """
+    entry_price = price_array[entry_idx]
+    entry_volatility = volatility_array[entry_idx]
+    
+    # Direction-aware barrier levels
+    if direction == 1:  # Long trade
+        pt_level = entry_price * (1 + pt_multiple * entry_volatility)
+        sl_level = entry_price * (1 - sl_multiple * entry_volatility)
+    else:  # Short trade
+        pt_level = entry_price * (1 - pt_multiple * entry_volatility)  # Profit if price goes down
+        sl_level = entry_price * (1 + sl_multiple * entry_volatility)  # Stop loss if price goes up
+    
+    n = len(price_array)
+    
+    for h in range(1, max_holding + 1):
+        t = entry_idx + h
+        if t >= n:
+            exit_price = price_array[-1]
+            ret = (exit_price / entry_price - 1.0) * direction
+            return ret, h, 'last'
+        
+        current_price = price_array[t]
+        
+        if direction == 1:  # Long
+            if current_price >= pt_level:
+                ret = (pt_level / entry_price) - 1.0
+                return ret, h, 'tp'
+            if current_price <= sl_level:
+                ret = (sl_level / entry_price) - 1.0
+                return ret, h, 'sl'
+        else:  # Short
+            if current_price <= pt_level:
+                ret = (entry_price / pt_level) - 1.0  # Inverse for short
+                return ret, h, 'tp'
+            if current_price >= sl_level:
+                ret = (entry_price / sl_level) - 1.0  # Inverse for short
+                return ret, h, 'sl'
+    
+    # Max holding period reached
+    exit_price = price_array[min(entry_idx + max_holding, n-1)]
+    ret = (exit_price / entry_price - 1.0) * direction
+    return ret, max_holding, 'max_hold'
