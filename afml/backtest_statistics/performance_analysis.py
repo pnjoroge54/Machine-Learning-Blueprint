@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 from numba import njit
 from scipy.stats import kurtosis, skew
 
@@ -285,9 +284,10 @@ def get_annualization_factors(
             # t = 365.25 if value_counts_index.nunique() == 1 else 252
             avg_delta = value_counts_index.idxmax()
             periods_per_year = pd.Timedelta(days=trading_days_per_year) / avg_delta
-            logger.info(f"Inferred timeframe to be {avg_delta}.")
+            print(f"Inferred timeframe to be {avg_delta}.")
         else:
             median_delta = data_index.diff().median()
+            print(f"Inferred timeframe from median delta as {median_delta}.")
             if median_delta.total_seconds() == 0:
                 warnings.warn(
                     "Cannot infer frequency from index. Falling back to default daily.",
