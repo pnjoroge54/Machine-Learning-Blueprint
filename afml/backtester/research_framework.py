@@ -1,7 +1,7 @@
 import asyncio
 import json
 import sys
-from datetime import datetime
+from datetime import datetime as dt
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -133,7 +133,7 @@ def log_model_configuration(
     """Log comprehensive model metadata"""
     model_metadata = {
         "event": "model_configuration",
-        "timestamp": datetime.now(timezone("UTC")).isoformat(),
+        "timestamp": dt.now(timezone("UTC")).isoformat(),
         "strategy": strategy_name,
         "model_type": type(model).__name__,
         "feature_set": list(X_train.columns),
@@ -160,7 +160,7 @@ def log_performance_results(results, model=None):
     """Log performance metrics in structured format"""
     performance_log = {
         "event": "performance_results",
-        "timestamp": datetime.now(timezone("UTC")).isoformat() + "Z",
+        "timestamp": dt.now(timezone("UTC")).isoformat() + "Z",
         "strategy": results["strategy_name"],
         "confidence_threshold": results["meta_metrics"].get(
             "confidence_threshold", 0.6
