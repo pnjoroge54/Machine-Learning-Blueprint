@@ -408,7 +408,7 @@ class CEVProcess(StochasticProcess):
     
     def estimate_parameters(self, price_series, gamma_guess=1.5):
         returns = price_series.pct_change().dropna()
-        prices = price_series[:-1].values[returns.index]
+        prices = price_series.loc[returns.index].values
         returns_values = returns.values
         
         # Estimate gamma through regression
