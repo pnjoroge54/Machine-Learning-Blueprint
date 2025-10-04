@@ -614,7 +614,7 @@ def evaluate_meta_labeling_performance(
 
     msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
     msg = msg + f"\n{kwargs}" if kwargs else msg
-    logger.info(msg)
+    print(msg)
 
     # Apply the calculated bet size to the signals that were not filtered out.
     meta_positions = get_positions_from_events(data_index, meta_events["t1"], bets)
