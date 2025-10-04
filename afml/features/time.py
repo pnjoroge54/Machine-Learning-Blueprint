@@ -165,13 +165,13 @@ def get_time_features(
     if not isinstance(df.index, pd.DatetimeIndex):
         raise ValueError("DataFrame must have a DatetimeIndex")
 
-    df = df.copy()
+    features = []
 
     # Bar duration features for non-time bars
     if bar_type != "time":
-        durations = df.index.to_series().diff().dt.total_seconds()
-        df["bar_duration"] = durations
-        df["bar_duration_accel"] = durations.diff()
+        durations = df.index.to_series("bar_duration").diff().dt.total_seconds()
+        duration_accel = durations.diff().rename("bar_duration_accel") # bar duration acceleration
+        features += [durations, duration_accel]
 
     # Frequency-based feature optimization
     timeframe = timeframe.upper()
@@ -196,5 +196,6 @@ def get_time_features(
     else:
         session_feat = pd.DataFrame()
 
-    df = pd.concat([cyclical_feat, session_feat], axis=1)
-    return df
+    features += [cyclical_feat, session_feat]
+    
+    return pd.concat(features, axis=1)
