@@ -452,7 +452,7 @@ def calculate_performance_metrics(
     if positions is not None:
         hp = average_holding_period(positions)
         metrics["avg_trade_duration"] = (
-            pd.Timedelta(days=round(hp, 3)) if hp > 0 else hp
+            pd.Timedelta(days=hp).round("1s") if hp > 0 else hp
         )  # Rounded so output doesn't include nanoseconds
         bet_frequency = timing_of_flattening_and_flips(positions).size
         metrics["bet_frequency"] = bet_frequency
