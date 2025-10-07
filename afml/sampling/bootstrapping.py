@@ -240,3 +240,65 @@ class SequentialBootstrappedRandomForestClassifier(RandomForestClassifier):
             
         return self
 
+
+class WeightedParallelSequentialForest:
+    def __init__(self, n_estimators=100, n_jobs=-1, **tree_params):
+        self.n_estimators = n_estimators
+        self.n_jobs = n_jobs
+        self.tree_params = tree_params
+        self.estimators_ = []
+    
+    def _train_single_tree(self, tree_id, ind_mat, features, labels, sample_weights, sample_length):
+        """Train single tree with sequential bootstrapping AND sample weights"""
+        random_state = np.random.RandomState(tree_id)
+        
+        # Sequential bootstrap for this tree
+        sample_indices = seq_bootstrap(
+            ind_mat,
+            sample_length=sample_length,
+            random_state=random_state
+        )
+        
+        # Get corresponding sample weights for bootstrapped indices
+        tree_sample_weights = sample_weights.iloc[sample_indices] if sample_weights is not None else None
+        
+        # Train tree with sample weights
+        tree = DecisionTreeClassifier(**self.tree_params)
+        
+        if tree_sample_weights is not None:
+            tree.fit(
+                features.iloc[sample_indices], 
+                labels.iloc[sample_indices],
+                sample_weight=tree_sample_weights.values
+            )
+        else:
+            tree.fit(features.iloc[sample_indices], labels.iloc[sample_indices])
+        
+        return tree, sample_indices
+    
+    def fit(self, ind_mat, features, labels, sample_weights=None):
+        """
+        Fit forest with sequential bootstrapping and sample weights
+        
+        :param sample_weights: pd.Series with same index as features/labels
+        """
+        sample_length = len(features)
+        
+        # Validate sample weights
+        if sample_weights is not None:
+            if len(sample_weights) != len(features):
+                raise ValueError("sample_weights must have same length as features")
+            if not isinstance(sample_weights, (pd.Series, np.ndarray)):
+                raise ValueError("sample_weights must be pd.Series or np.ndarray")
+        
+        results = Parallel(n_jobs=self.n_jobs)(
+            delayed(self._train_single_tree)(
+                tree_id, ind_mat, features, labels, sample_weights, sample_length
+            )
+            for tree_id in range(self.n_estimators)
+        )
+        
+        self.estimators_ = [result[0] for result in results]
+        self.bootstrap_samples_ = [result[1] for result in results]
+        
+        return self
