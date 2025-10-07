@@ -177,7 +177,7 @@ class SequentialRandomForestClassifier:
         self.estimators_ = []
         self.oob_samples_ = []  # Track out-of-bag samples for evaluation
         
-    def fit(self, ind_mat, features, labels, warmup_samples=None):
+    def fit(self, ind_mat, features, labels, warmup_samples=None, sample_weight=None):
         """
         Fit forest using sequential bootstrapping
         
@@ -185,6 +185,7 @@ class SequentialRandomForestClassifier:
         :param features: Feature matrix
         :param labels: Target labels  
         :param warmup_samples: Pre-defined samples for warm start
+        :param sample_weight: Sample Weights
         """
         self.estimators_ = []
         n_samples = len(features)
@@ -208,7 +209,12 @@ class SequentialRandomForestClassifier:
                 max_features=self.max_features,
                 **self.tree_params
             )
-            tree.fit(features.iloc[sample_indices], labels.iloc[sample_indices])
+            # Get weights for this specific bootstrap sample
+            tree_sample_weights = (
+                sample_weight.iloc[sample_indices] 
+                if sample_weight is not None else None
+            )
+            tree.fit(features.iloc[sample_indices], labels.iloc[sample_indices], sample_weight=tree_sample_weights.values)
             self.estimators_.append(tree)
             
         return self
