@@ -219,7 +219,7 @@ class SequentialRandomForestClassifier:
         return np.mean(predictions, axis=0)
 
     def calculate_oob_score(self, features, labels):
-        """Calculate out-of-bag score using     sequentially bootstrapped samples"""
+        """Calculate out-of-bag score using sequentially bootstrapped samples"""
         oob_predictions = []
         oob_labels = []
     
