@@ -7,6 +7,7 @@ import numpy as np
 from numba import jit, prange
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score
+from joblib import delayed
 
 
 def get_ind_matrix(samples_info_sets, price_bars):
@@ -165,75 +166,77 @@ def seq_bootstrap(ind_mat, sample_length=None, warmup_samples=None, compare=Fals
     return phi
 
 
-class SequentialRandomForestClassifier:
+class SequentialBootstrappedRandomForestClassifier(RandomForestClassifier):
     """
-    Random forest classifier using sequential bootstrapping for financial data
+    Simpler approach: Pre-compute sequential samples and use standard RandomForest
     """
     
-    def __init__(self, n_estimators=100, max_features='sqrt', **tree_params):
-        self.n_estimators = n_estimators
-        self.max_features = max_features
-        self.tree_params = tree_params
-        self.estimators_ = []
-        self.oob_samples_ = []  # Track out-of-bag samples for evaluation
+    def __init__(self, ind_mat=None, max_samples_ratio=0.8, **rf_params):
+        super().__init__(**rf_params)
+        self.ind_mat = ind_mat
+        self.max_samples_ratio = max_samples_ratio
         
-    def fit(self, ind_mat, features, labels, warmup_samples=None, sample_weight=None):
-        """
-        Fit forest using sequential bootstrapping
+    def fit(self, X, y, sample_weight=None, ind_mat=None):
+        from sklearn.tree import DecisionTreeClassifier
+
+        # Inside your fit method:
+        # Get the valid parameters for a DecisionTreeClassifier
+        valid_tree_params = DecisionTreeClassifier().get_params().keys()
+
+        # Filter the current parameters, keeping only those valid for a tree
+         tree_params = {key: value for key, value in self.get_params().items() if key in valid_tree_params}
         
-        :param ind_mat: Indicator matrix from get_ind_matrix
-        :param features: Feature matrix
-        :param labels: Target labels  
-        :param warmup_samples: Pre-defined samples for warm start
-        :param sample_weight: Sample Weights
-        """
-        self.estimators_ = []
-        n_samples = len(features)
+        if ind_mat is not None:
+            self.ind_mat = ind_mat
+            
+        if self.ind_mat is None:
+            # Fallback to standard RandomForest
+            return super().fit(X, y, sample_weight=sample_weight)
         
+        # Generate sequential bootstrap indices
+        n_samples = len(X)
+        max_samples = int(self.max_samples_ratio * n_samples)
+        
+        # Create a list of bootstrap indices for all trees
+        bootstrap_indices = []
         for i in range(self.n_estimators):
-            # Sequential bootstrap sample
-            sample_indices = seq_bootstrap(
-                ind_mat,
-                sample_length=n_samples,
-                warmup_samples=warmup_samples[i] if warmup_samples else None,
-                random_state=np.random.RandomState(i)
+            random_state = np.random.RandomState(
+                self.random_state + i if self.random_state else i
             )
-            
-            # Track out-of-bag samples [citation:6]
-            all_indices = set(range(n_samples))
-            oob_indices = list(all_indices - set(sample_indices))
-            self.oob_samples_.append(oob_indices)
-            
-            # Train tree
-            tree = DecisionTreeClassifier(
-                max_features=self.max_features,
-                **self.tree_params
+            indices = seq_bootstrap(
+                self.ind_mat,
+                sample_length=max_samples, 
+                random_state=random_state
             )
-            # Get weights for this specific bootstrap sample
-            tree_sample_weights = (
-                sample_weight.iloc[sample_indices] 
-                if sample_weight is not None else None
-            )
-            tree.fit(features.iloc[sample_indices], labels.iloc[sample_indices], sample_weight=tree_sample_weights.values)
-            self.estimators_.append(tree)
+            bootstrap_indices.append(indices)
+        
+        # Temporarily set to no bootstrap since we provide indices
+        original_bootstrap = self.bootstrap
+        self.bootstrap = False
+        
+        try:
+            # Manually fit each tree with our bootstrap samples
+            self.estimators_ = []
+            for i, indices in enumerate(bootstrap_indices):
+                tree = DecisionTreeClassifier(**tree_params)
+                
+                X_bootstrap = X.iloc[indices] if hasattr(X, 'iloc') else X[indices]
+                y_bootstrap = y.iloc[indices] if hasattr(y, 'iloc') else y[indices]
+                
+                if sample_weight is not None:
+                    sample_weight_bootstrap = (
+                        sample_weight.iloc[indices] 
+                        if hasattr(sample_weight, 'iloc') 
+                        else sample_weight[indices]
+                    )
+                    tree.fit(X_bootstrap, y_bootstrap, sample_weight=sample_weight_bootstrap)
+                else:
+                    tree.fit(X_bootstrap, y_bootstrap)
+                    
+                self.estimators_.append(tree)
+                
+        finally:
+            self.bootstrap = original_bootstrap
             
         return self
-    
-    def predict_proba(self, X):
-        # Aggregate predictions from all trees
-        predictions = np.array([tree.predict_proba(X) for tree in self.estimators_])
-        return np.mean(predictions, axis=0)
-
-    def calculate_oob_score(self, features, labels):
-        """Calculate out-of-bag score using sequentially bootstrapped samples"""
-        oob_predictions = []
-        oob_labels = []
-    
-        for i, oob_indices in enumerate(self.oob_samples_):
-            if len(oob_indices) > 0:
-                pred = self.estimators_[i].predict(features.iloc[oob_indices])
-                oob_predictions.extend(pred)
-                oob_labels.extend(labels.iloc[oob_indices])
-    
-        return accuracy_score(oob_labels, oob_predictions)
 
