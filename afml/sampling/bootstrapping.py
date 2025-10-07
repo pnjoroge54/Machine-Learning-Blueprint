@@ -5,6 +5,8 @@ Logic regarding sequential bootstrapping from chapter 4.
 import pandas as pd
 import numpy as np
 from numba import jit, prange
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score
 
 
 def get_ind_matrix(samples_info_sets, price_bars):
@@ -163,9 +165,9 @@ def seq_bootstrap(ind_mat, sample_length=None, warmup_samples=None, compare=Fals
     return phi
 
 
-class SequentialRandomForest:
+class SequentialRandomForestClassifier:
     """
-    Random forest using sequential bootstrapping for financial data
+    Random forest classifier using sequential bootstrapping for financial data
     """
     
     def __init__(self, n_estimators=100, max_features='sqrt', **tree_params):
