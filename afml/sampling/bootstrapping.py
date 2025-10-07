@@ -161,3 +161,71 @@ def seq_bootstrap(ind_mat, sample_length=None, warmup_samples=None, compare=Fals
         print('Standard uniqueness: {}\nSequential uniqueness: {}'.format(standard_unq, sequential_unq))
 
     return phi
+
+
+class SequentialRandomForest:
+    """
+    Random forest using sequential bootstrapping for financial data
+    """
+    
+    def __init__(self, n_estimators=100, max_features='sqrt', **tree_params):
+        self.n_estimators = n_estimators
+        self.max_features = max_features
+        self.tree_params = tree_params
+        self.estimators_ = []
+        self.oob_samples_ = []  # Track out-of-bag samples for evaluation
+        
+    def fit(self, ind_mat, features, labels, warmup_samples=None):
+        """
+        Fit forest using sequential bootstrapping
+        
+        :param ind_mat: Indicator matrix from get_ind_matrix
+        :param features: Feature matrix
+        :param labels: Target labels  
+        :param warmup_samples: Pre-defined samples for warm start
+        """
+        self.estimators_ = []
+        n_samples = len(features)
+        
+        for i in range(self.n_estimators):
+            # Sequential bootstrap sample
+            sample_indices = seq_bootstrap(
+                ind_mat,
+                sample_length=n_samples,
+                warmup_samples=warmup_samples[i] if warmup_samples else None,
+                random_state=np.random.RandomState(i)
+            )
+            
+            # Track out-of-bag samples [citation:6]
+            all_indices = set(range(n_samples))
+            oob_indices = list(all_indices - set(sample_indices))
+            self.oob_samples_.append(oob_indices)
+            
+            # Train tree
+            tree = DecisionTreeClassifier(
+                max_features=self.max_features,
+                **self.tree_params
+            )
+            tree.fit(features.iloc[sample_indices], labels.iloc[sample_indices])
+            self.estimators_.append(tree)
+            
+        return self
+    
+    def predict_proba(self, X):
+        # Aggregate predictions from all trees
+        predictions = np.array([tree.predict_proba(X) for tree in self.estimators_])
+        return np.mean(predictions, axis=0)
+
+    def calculate_oob_score(self, features, labels):
+        """Calculate out-of-bag score using     sequentially bootstrapped samples"""
+        oob_predictions = []
+        oob_labels = []
+    
+        for i, oob_indices in enumerate(self.oob_samples_):
+            if len(oob_indices) > 0:
+                pred = self.estimators_[i].predict(features.iloc[oob_indices])
+                oob_predictions.extend(pred)
+                oob_labels.extend(labels.iloc[oob_indices])
+    
+        return accuracy_score(oob_labels, oob_predictions)
+
