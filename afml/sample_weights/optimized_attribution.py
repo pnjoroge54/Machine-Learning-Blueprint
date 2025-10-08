@@ -208,15 +208,9 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_seri
     if n_events == 0:
         return pd.Series(dtype=np.float64)
 
-    # Prepare arrays for Numba function
-    start_indices = np.zeros(n_events, dtype=np.int32)
-    end_indices = np.zeros(n_events, dtype=np.int32)
-
-    # Convert datetime indices to integer positions efficiently
-    close_index = close_series.index
-    for i, (t_in, t_out) in enumerate(label_endtime.items()):
-        start_indices[i] = close_index.get_loc(t_in)
-        end_indices[i] = close_index.get_loc(t_out) + 1
+    # Vectorized lookup
+    start_indices = close_index.get_indexer(label_endtime.index)
+    end_indices = close_index.get_indexer_for(label_endtime) + 1
 
     # Get concurrent events as numpy array
     concurrent_counts = num_conc_events.values
