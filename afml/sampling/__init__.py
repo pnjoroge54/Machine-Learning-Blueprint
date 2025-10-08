@@ -20,3 +20,4 @@ from .optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,
     get_num_conc_events_optimized,
 )
+from .sb_bagging import SequentiallyBootstrappedBaggingClassifier, SequentiallyBootstrappedBaggingRegressor
