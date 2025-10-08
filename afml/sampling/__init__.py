@@ -9,15 +9,13 @@ from .bootstrapping import (
     seq_bootstrap,
 )
 from .concurrent import (
-    _get_average_uniqueness,
     get_av_uniqueness_from_triple_barrier,
     num_concurrent_events,
 )
 from .optimized_concurrent import (
-    _compute_concurrent_events_numba,
-    _compute_uniqueness_numba,
-    _get_average_uniqueness_optimized,
     get_av_uniqueness_from_triple_barrier_optimized,
     get_num_conc_events_optimized,
 )
-from .sb_bagging import SequentiallyBootstrappedBaggingClassifier, SequentiallyBootstrappedBaggingRegressor
+from .sb_bagging import (
+SequentiallyBootstrappedBaggingClassifier, SequentiallyBootstrappedBaggingRegressor
+)
