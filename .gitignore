@@ -11,6 +11,7 @@ cover/
 *.log
 *.png
 *.html
+*.jsonl
 */.ipynb_checkpoints/*
 afml.egg-info/*
 
