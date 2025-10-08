@@ -427,10 +427,10 @@ def get_weights_by_time_decay_optimized(
         av_uniqueness = av_uniqueness.to_frame()
 
     # Extract and sort weights by time
-    cum_weights = av_uniqueness["tW"].sort_index().cumsum()
+    cum_weights = av_uniqueness["tW"].sort_index().cumsum().values
 
     # Apply optimized decay calculation using Numba
-    decay_weights = _apply_time_decay_numba(cum_weights.values, decay, linear)
+    decay_weights = _apply_time_decay_numba(cum_weights, decay, linear)
 
     if verbose:
         print(
