@@ -4,10 +4,7 @@ Logic regarding sequential bootstrapping from chapter 4.
 
 import pandas as pd
 import numpy as np
-from numba import jit, prange
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score
-from joblib import delayed
+from numba import njit, prange
 
 
 def get_ind_matrix(samples_info_sets, price_bars):
@@ -91,7 +88,7 @@ def get_ind_mat_label_uniqueness(ind_mat):
     return uniqueness
 
 
-@jit(parallel=True, nopython=True)
+@njit(parallel=True)
 def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
     """
     Part of Sequential Bootstrapping for-loop. Using previously accumulated concurrency array, loops through all samples
@@ -154,151 +151,13 @@ def seq_bootstrap(ind_mat, sample_length=None, warmup_samples=None, compare=Fals
             choice = random_state.choice(range(ind_mat.shape[1]), p=prob)
         phi += [choice]
         prev_concurrency += ind_mat[:, choice]  # Add recorded label array from ind_mat
-        if verbose is True:
+        if verbose:
             print(prob)
 
-    if compare is True:
+    if compare:
         standard_indx = np.random.choice(ind_mat.shape[1], size=sample_length)
         standard_unq = get_ind_mat_average_uniqueness(ind_mat[:, standard_indx])
         sequential_unq = get_ind_mat_average_uniqueness(ind_mat[:, phi])
-        print('Standard uniqueness: {}\nSequential uniqueness: {}'.format(standard_unq, sequential_unq))
+        print(f'Standard uniqueness: {standard_unq:.4f}\nSequential uniqueness: {sequential_unq:.4f}')
 
     return phi
-
-
-class SequentialBootstrappedRandomForestClassifier(RandomForestClassifier):
-    """
-    Simpler approach: Pre-compute sequential samples and use standard RandomForest
-    """
-    
-    def __init__(self, ind_mat=None, max_samples_ratio=0.8, **rf_params):
-        super().__init__(**rf_params)
-        self.ind_mat = ind_mat
-        self.max_samples_ratio = max_samples_ratio
-        
-    def fit(self, X, y, sample_weight=None, ind_mat=None):
-        from sklearn.tree import DecisionTreeClassifier
-
-        # Inside your fit method:
-        # Get the valid parameters for a DecisionTreeClassifier
-        valid_tree_params = DecisionTreeClassifier().get_params().keys()
-
-        # Filter the current parameters, keeping only those valid for a tree
-         tree_params = {key: value for key, value in self.get_params().items() if key in valid_tree_params}
-        
-        if ind_mat is not None:
-            self.ind_mat = ind_mat
-            
-        if self.ind_mat is None:
-            # Fallback to standard RandomForest
-            return super().fit(X, y, sample_weight=sample_weight)
-        
-        # Generate sequential bootstrap indices
-        n_samples = len(X)
-        max_samples = int(self.max_samples_ratio * n_samples)
-        
-        # Create a list of bootstrap indices for all trees
-        bootstrap_indices = []
-        for i in range(self.n_estimators):
-            random_state = np.random.RandomState(
-                self.random_state + i if self.random_state else i
-            )
-            indices = seq_bootstrap(
-                self.ind_mat,
-                sample_length=max_samples, 
-                random_state=random_state
-            )
-            bootstrap_indices.append(indices)
-        
-        # Temporarily set to no bootstrap since we provide indices
-        original_bootstrap = self.bootstrap
-        self.bootstrap = False
-        
-        try:
-            # Manually fit each tree with our bootstrap samples
-            self.estimators_ = []
-            for i, indices in enumerate(bootstrap_indices):
-                tree = DecisionTreeClassifier(**tree_params)
-                
-                X_bootstrap = X.iloc[indices] if hasattr(X, 'iloc') else X[indices]
-                y_bootstrap = y.iloc[indices] if hasattr(y, 'iloc') else y[indices]
-                
-                if sample_weight is not None:
-                    sample_weight_bootstrap = (
-                        sample_weight.iloc[indices] 
-                        if hasattr(sample_weight, 'iloc') 
-                        else sample_weight[indices]
-                    )
-                    tree.fit(X_bootstrap, y_bootstrap, sample_weight=sample_weight_bootstrap)
-                else:
-                    tree.fit(X_bootstrap, y_bootstrap)
-                    
-                self.estimators_.append(tree)
-                
-        finally:
-            self.bootstrap = original_bootstrap
-            
-        return self
-
-
-class WeightedParallelSequentialForest:
-    def __init__(self, n_estimators=100, n_jobs=-1, **tree_params):
-        self.n_estimators = n_estimators
-        self.n_jobs = n_jobs
-        self.tree_params = tree_params
-        self.estimators_ = []
-    
-    def _train_single_tree(self, tree_id, ind_mat, features, labels, sample_weights, sample_length):
-        """Train single tree with sequential bootstrapping AND sample weights"""
-        random_state = np.random.RandomState(tree_id)
-        
-        # Sequential bootstrap for this tree
-        sample_indices = seq_bootstrap(
-            ind_mat,
-            sample_length=sample_length,
-            random_state=random_state
-        )
-        
-        # Get corresponding sample weights for bootstrapped indices
-        tree_sample_weights = sample_weights.iloc[sample_indices] if sample_weights is not None else None
-        
-        # Train tree with sample weights
-        tree = DecisionTreeClassifier(**self.tree_params)
-        
-        if tree_sample_weights is not None:
-            tree.fit(
-                features.iloc[sample_indices], 
-                labels.iloc[sample_indices],
-                sample_weight=tree_sample_weights.values
-            )
-        else:
-            tree.fit(features.iloc[sample_indices], labels.iloc[sample_indices])
-        
-        return tree, sample_indices
-    
-    def fit(self, ind_mat, features, labels, sample_weights=None):
-        """
-        Fit forest with sequential bootstrapping and sample weights
-        
-        :param sample_weights: pd.Series with same index as features/labels
-        """
-        sample_length = len(features)
-        
-        # Validate sample weights
-        if sample_weights is not None:
-            if len(sample_weights) != len(features):
-                raise ValueError("sample_weights must have same length as features")
-            if not isinstance(sample_weights, (pd.Series, np.ndarray)):
-                raise ValueError("sample_weights must be pd.Series or np.ndarray")
-        
-        results = Parallel(n_jobs=self.n_jobs)(
-            delayed(self._train_single_tree)(
-                tree_id, ind_mat, features, labels, sample_weights, sample_length
-            )
-            for tree_id in range(self.n_estimators)
-        )
-        
-        self.estimators_ = [result[0] for result in results]
-        self.bootstrap_samples_ = [result[1] for result in results]
-        
-        return self
