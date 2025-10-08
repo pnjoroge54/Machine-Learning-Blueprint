@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from sklearn.base import BaseEstimator, clone
-from sklearn.ensemble import BaggingClassifier
+from sklearn.ensemble import BaggingClassifier, RandomForestClassifier 
 from sklearn.metrics import precision_recall_curve
 
 from ..cross_validation.cross_validation import PurgedSplit
@@ -79,6 +79,7 @@ def train_model(
         logger.info("Samples weighted by return attribution.")
     elif weighting == "t_value" and "t_value" in cont:
         w = cont["t_value"].abs()
+        w *= w.shape[0] / w.sum()    
         y = y[y != 0]  # Remove zero labels for t-value weighting to speed up training
         X = X.loc[y.index]
         w = w.loc[y.index]
@@ -92,6 +93,8 @@ def train_model(
             linear=linear_decay,
             av_uniqueness=(cont["tW"] if "tW" in cont else None),
         )
+        if "w" in cont:
+            w *= cont["w"]
     else:
         logger.info("Samples are equally weighted.")
 
@@ -107,13 +110,13 @@ def train_model(
     )
 
     # Only clone when we actually need to modify parameters
-    if isinstance(model, BaggingClassifier) and "tW" in cont:
+    if isinstance(model, (BaggingClassifier, RandomForestClassifier)) and "tW" in cont:
         av_uniqueness = cont["tW"].iloc[train].mean()
         logger.info(f"Average uniqueness: {av_uniqueness:.4f}")
         # Clone before modifying to preserve original
         model = clone(model)
         model.set_params(max_samples=av_uniqueness)
-    elif isinstance(model, BaggingClassifier):
+    elif isinstance(model, (BaggingClassifier, RandomForestClassifier)):
         logger.warning("Warning: 'tW' column not found in labels. Using default max_samples.")
 
     logger.info(f"Training on {X_train.shape[0]:,} samples...")
