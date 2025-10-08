@@ -79,11 +79,6 @@ def train_model(
         logger.info("Samples weighted by return attribution.")
     elif weighting == "t_value" and "t_value" in cont:
         w = cont["t_value"].abs()
-        w *= w.shape[0] / w.sum()    
-        y = y[y != 0]  # Remove zero labels for t-value weighting to speed up training
-        X = X.loc[y.index]
-        w = w.loc[y.index]
-        cont = cont.loc[y.index]
         logger.info("Samples weighted by t_value.")
     elif weighting == "time":
         w = get_weights_by_time_decay_optimized(
