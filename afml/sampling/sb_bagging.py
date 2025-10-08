@@ -2,7 +2,6 @@
 Implementation of Sequentially Bootstrapped Bagging Classifier using sklearn's library as base class
 """
 import numbers
-import itertools
 from warnings import warn
 from abc import ABCMeta, abstractmethod
 import pandas as pd
