@@ -210,7 +210,7 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_seri
 
     # Vectorized lookup
     start_indices = close_index.get_indexer(label_endtime.index)
-    end_indices = close_index.get_indexer_for(label_endtime) + 1
+    end_indices = close_index.get_indexer_for(label_endtime) + 1 # Guaranteed return of an indexer even when non-unique.
 
     # Get concurrent events as numpy array
     concurrent_counts = num_conc_events.values
