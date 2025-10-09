@@ -158,53 +158,6 @@ def _get_average_uniqueness(label_endtime, num_conc_events, molecule):
 
 **Understanding uniqueness through an example**:
 
-```python
-def demonstrate_uniqueness_calculation():
-    """
-    Demonstrate how uniqueness is calculated for overlapping events.
-    
-    This example shows three events with different levels of overlap and
-    calculates their uniqueness scores step-by-step.
-    """
-    # Create sample events
-    events = pd.DataFrame({
-        't0': pd.to_datetime(['2024-01-01 10:00', '2024-01-01 10:15', '2024-01-01 10:45']),
-        't1': pd.to_datetime(['2024-01-01 10:30', '2024-01-01 10:50', '2024-01-01 11:00'])
-    })
-    events.set_index('t0', inplace=True)
-    
-    # Create minute-by-minute timeline
-    timeline = pd.date_range('2024-01-01 10:00', '2024-01-01 11:00', freq='5min')
-    
-    # Manually count concurrency at each point
-    concurrency = pd.Series(0, index=timeline)
-    for t0, row in events.iterrows():
-        t1 = row['t1']
-        concurrency.loc[t0:t1] += 1
-    
-    print("Timeline of Concurrency:")
-    print(concurrency)
-    print("\n")
-    
-    # Calculate uniqueness for each event
-    for idx, (t0, row) in enumerate(events.iterrows(), 1):
-        t1 = row['t1']
-        event_concurrency = concurrency.loc[t0:t1]
-        uniqueness = (1.0 / event_concurrency).mean()
-        
-        print(f"Event {idx} (from {t0.time()} to {t1.time()}):")
-        print(f"  Concurrency during lifespan: {event_concurrency.values}")
-        print(f"  Reciprocals (1/concurrency): {(1.0/event_concurrency).values}")
-        print(f"  Average Uniqueness: {uniqueness:.4f}")
-        print(f"  Interpretation: Event has {uniqueness:.1%} unique information\n")
-    
-    return concurrency, events
-
-# Run the demonstration
-concurrency, events = demonstrate_uniqueness_calculation()
-```
-
-**Expected Output**:
 ```
 Timeline of Concurrency:
 2024-01-01 10:00:00    1
@@ -1036,6 +989,6 @@ As you continue developing your trading systems, remember that sophistication sh
 
 In the next article, we'll build on this foundation to explore cross-validation techniques specifically designed for financial time series with weighted samples, and how to properly combine sample weights with ensemble methods for even more robust predictions. The journey to professional-grade financial ML continues, and you now have another essential tool for the road ahead.
 
-**Remember:** In financial ML, data preparation is 80% of success. Sample weights ensure your model learns from real patterns, not artifacts of your sampling process. Use them wisely, validate rigorously, and always keep one eye on live performance—because that's where theory meets reality.
+**Remember:** In financial ML, data preparation is 80% of success. Sample weights ensure your model learns from real patterns, not artifacts of your sampling process. Use them wisely, validate rigorously, and always keep one eye on live performance because that's where theory meets reality.
 
 ---
