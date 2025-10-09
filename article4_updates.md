@@ -174,4 +174,38 @@ The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 - The method successfully **discourages redundancy** while allowing for sample diversity
 
 ---
+## Visualizing the Superior Uniqueness of Sequential Bootstrap
+
+**Figure 1** provides crucial visual evidence from Monte Carlo experiments comparing the effectiveness of the sequential bootstrap method against the standard bootstrap method.
+
+**(Insert Figure 4.2 here)**
+*Caption: Monte Carlo experiment comparing the distribution of average uniqueness for standard bootstrap (left) and sequential bootstrap (right). The sequential method produces samples with significantly higher average uniqueness.*
+
+The chart presents a histogram that visually compares the `average uniqueness` of samples generated through two methods:
+- **Standard Bootstrap** (left distribution): The conventional method of random sampling with replacement.
+- **Sequential Bootstrap** (right distribution): The advanced method introduced in Section 4.5.1 that dynamically adjusts draw probabilities to reduce overlap.
+
+The key finding is that the distribution for the sequential bootstrap is shifted noticeably to the right, indicating a higher average uniqueness value across many experimental trials[citation:1].
+
+### 🔬 Methodology Behind the Data
+
+The data for this figure was generated through extensive **Monte Carlo simulations**:
+
+1. **Random Series Generation**: Multiple random `t1` series were created, where each observation has a random start time and duration[citation:1].
+2. **Indicator Matrix Formation**: For each series, the `getIndMatrix` function was used to create the corresponding indicator matrix, mapping which observations were active at each time point.
+3. **Bootstrap Sampling**: For each generated indicator matrix:
+   - Samples were drawn using the **standard bootstrap** method.
+   - Samples were drawn using the **sequential bootstrap** method (`seqBootstrap`).
+4. **Uniqueness Calculation**: For each generated sample, the average uniqueness was calculated using the `getAvgUniqueness` function.
+5. **Distribution Plotting**: The uniqueness values from thousands of iterations were compiled into the two histograms shown in the figure.
+
+
+Two key quantitative findings are demonstrated:
+
+- The **median average uniqueness** for the standard bootstrap method is approximately **0.6**.
+- The **median average uniqueness** for the sequential bootstrap method is approximately **0.7**.
+
+This difference is not just visually apparent but also **statistically significant**. An ANOVA test on the difference of means reportedly returns a "vanishingly small probability," meaning we can be highly confident that the sequential bootstrap method genuinely produces more unique samples.
+
+To recreate this analysis, implement the Monte Carlo experiment using the functions provided in the attachment *mc_experiment.py*.
 
