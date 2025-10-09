@@ -461,7 +461,7 @@ To address this, Dr. Prado introduces two key modifications:
 import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss, accuracy_score
-from sklearn.model_selection import _BaseKFold
+from sklearn.model_selection._split import _BaseKFold
 
 
 class PurgedKFold(_BaseKFold):
