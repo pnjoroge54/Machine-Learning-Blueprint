@@ -41,107 +41,115 @@ To understand how the **sequential bootstrap** method works by walking through t
 
 We have three observations (labels) with the following time spans:
 
-- **Observation 1**: Spans time periods 0 to 2 (r₀,₃)
-- **Observation 2**: Spans time periods 2 to 3 (r₂,₄)  
-- **Observation 3**: Spans time periods 4 to 5 (r₄,₆)
+- **Observation 1**: Spans time periods 1 to 3 (r₁,₃)
+- **Observation 2**: Spans time periods 3 to 4 (r₃,₄)  
+- **Observation 3**: Spans time periods 5 to 6 (r₅,₆)
 
 The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 
 | Time | Obs 1 | Obs 2 | Obs 3 |
 |------|-------|-------|-------|
-| 0    | 1     | 0     | 0     |
 | 1    | 1     | 0     | 0     |
-| 2    | 1     | 1     | 0     |
-| 3    | 0     | 1     | 0     |
-| 4    | 0     | 0     | 1     |
+| 2    | 1     | 0     | 0     |
+| 3    | 1     | 1     | 0     |
+| 4    | 0     | 1     | 0     |
 | 5    | 0     | 0     | 1     |
+| 6    | 0     | 0     | 1     |
 
 ---
 
 ## 🔁 Sequential Bootstrap Process
 
 ### Step 1: First Draw
-- Initial probabilities: \( \delta^{(1)} = \left[ \frac{1}{3}, \frac{1}{3}, \frac{1}{3} \right] \)
+- Initial probabilities: δ₁ = 1/3, δ₂ = 1/3, δ₃ = 1/3
 - **Observation 2** is selected (as given in the book)
-- Current sample: \( \phi^{(1)} = \{2\} \)
+- Current sample: φ¹ = {2}
 
 ### Step 2: Update Probabilities for Second Draw
 
 **Calculate average uniqueness for each observation:**
 
 - **Observation 1**:
-  - Active at times: 0,1,2
-  - Overlaps with Obs 2 only at time 2
+  - Active at times: 1,2,3
+  - Overlaps with Obs 2 only at time 3
   - Uniqueness calculation:
-    - Time 0: 1/(1+0) = 1
-    - Time 1: 1/(1+0) = 1  
-    - Time 2: 1/(1+1) = 0.5
-  - Average uniqueness: \( \bar{u}_1^{(2)} = (1 + 1 + 0.5)/3 = \frac{2.5}{3} = \frac{5}{6} \)
+    - Time 1: 1/(1+0) = 1
+    - Time 2: 1/(1+0) = 1  
+    - Time 3: 1/(1+1) = 0.5
+  - Average uniqueness: (1 + 1 + 0.5)/3 = 2.5/3 = 5/6
 
 - **Observation 2**:
   - Already selected → high self-overlap
-  - Active at times: 2,3
+  - Active at times: 3,4
   - Uniqueness calculation:
-    - Time 2: 1/(1+1) = 0.5
-    - Time 3: 1/(1+0) = 1
-  - Average uniqueness: \( \bar{u}_2^{(2)} = (0.5 + 1)/2 = \frac{1.5}{2} = \frac{3}{6} = \frac{1}{2} \)
+    - Time 3: 1/(1+1) = 0.5
+    - Time 4: 1/(1+0) = 1
+  - Average uniqueness: (0.5 + 1)/2 = 1.5/2 = 3/6 = 1/2
 
 - **Observation 3**:
-  - Active at times: 4,5
+  - Active at times: 5,6
   - No overlap with Obs 2
   - Uniqueness calculation:
-    - Time 4: 1/(1+0) = 1
     - Time 5: 1/(1+0) = 1
-  - Average uniqueness: \( \bar{u}_3^{(2)} = (1 + 1)/2 = 1 = \frac{6}{6} \)
+    - Time 6: 1/(1+0) = 1
+  - Average uniqueness: (1 + 1)/2 = 1 = 6/6
 
 **Calculate draw probabilities:**
-- Total uniqueness sum = \( \frac{5}{6} + \frac{3}{6} + \frac{6}{6} = \frac{14}{6} \)
-- \( \delta^{(2)} = \left[ \frac{5}{14}, \frac{3}{14}, \frac{6}{14} \right] \)
+- Total uniqueness sum = 5/6 + 3/6 + 6/6 = 14/6
+- δ¹ = (5/6) ÷ (14/6) = 5/14
+- δ² = (3/6) ÷ (14/6) = 3/14  
+- δ³ = (6/6) ÷ (14/6) = 6/14
+
+**Second draw probabilities: δ² = [5/14, 3/14, 6/14]**
 
 ### Step 3: Second Draw
-- Probabilities: \( \left[ \frac{5}{14}, \frac{3}{14}, \frac{6}{14} \right] \)
+- Probabilities: [5/14, 3/14, 6/14]
 - **Observation 3** is selected (as given in the book)
-- Current sample: \( \phi^{(2)} = \{2, 3\} \)
+- Current sample: φ² = {2, 3}
 
 ### Step 4: Update Probabilities for Third Draw
 
 **Calculate average uniqueness for each observation:**
 
 - **Observation 1**:
-  - Active at times: 0,1,2
+  - Active at times: 1,2,3
   - Overlaps:
-    - With Obs 2 at time 2
+    - With Obs 2 at time 3
     - With Obs 3 at no times
   - Uniqueness calculation:
-    - Time 0: 1/(1+0) = 1
     - Time 1: 1/(1+0) = 1
-    - Time 2: 1/(1+1) = 0.5
-  - Average uniqueness: \( \bar{u}_1^{(3)} = (1 + 1 + 0.5)/3 = \frac{2.5}{3} = \frac{5}{6} \)
+    - Time 2: 1/(1+0) = 1
+    - Time 3: 1/(1+1) = 0.5
+  - Average uniqueness: (1 + 1 + 0.5)/3 = 2.5/3 = 5/6
 
 - **Observation 2**:
-  - Active at times: 2,3
+  - Active at times: 3,4
   - Overlaps:
-    - With Obs 1 at time 2
+    - With Obs 1 at time 3
     - With Obs 3 at no times
   - Uniqueness calculation:
-    - Time 2: 1/(1+1) = 0.5
-    - Time 3: 1/(1+0) = 1
-  - Average uniqueness: \( \bar{u}_2^{(3)} = (0.5 + 1)/2 = \frac{1.5}{2} = \frac{3}{6} = \frac{1}{2} \)
+    - Time 3: 1/(1+1) = 0.5
+    - Time 4: 1/(1+0) = 1
+  - Average uniqueness: (0.5 + 1)/2 = 1.5/2 = 3/6 = 1/2
 
 - **Observation 3**:
-  - Active at times: 4,5
+  - Active at times: 5,6
   - Overlaps with no other observations in sample
   - Uniqueness calculation:
-    - Time 4: 1/(1+0) = 1
     - Time 5: 1/(1+0) = 1
-  - Average uniqueness: \( \bar{u}_3^{(3)} = (1 + 1)/2 = 1 = \frac{6}{6} \)
+    - Time 6: 1/(1+0) = 1
+  - Average uniqueness: (1 + 1)/2 = 1 = 6/6
 
 **Calculate final draw probabilities:**
-- Total uniqueness sum = \( \frac{5}{6} + \frac{3}{6} + \frac{6}{6} = \frac{14}{6} \)
-- \( \delta^{(3)} = \left[ \frac{5}{14}, \frac{3}{14}, \frac{6}{14} \right] \)
+- Total uniqueness sum = 5/6 + 3/6 + 6/6 = 14/6
+- δ¹ = (5/6) ÷ (14/6) = 5/14
+- δ² = (3/6) ÷ (14/6) = 3/14
+- δ³ = (6/6) ÷ (14/6) = 6/14
+
+**Third draw probabilities: δ³ = [5/14, 3/14, 6/14]**
 
 ### Step 5: Third Draw
-- Probabilities: \( \left[ \frac{5}{14}, \frac{3}{14}, \frac{6}{14} \right] \)
+- Probabilities: [5/14, 3/14, 6/14]
 - Final sample depends on random draw from these probabilities
 
 ---
@@ -150,9 +158,9 @@ The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 
 | Draw | Observation 1 | Observation 2 | Observation 3 | Selected |
 |------|---------------|---------------|---------------|----------|
-| 1    | 1/3           | 1/3           | 1/3           | 2        |
-| 2    | 5/14          | 3/14          | 6/14          | 3        |
-| 3    | 5/14          | 3/14          | 6/14          | ?        |
+| 1    | 1/3 (33.3%)   | 1/3 (33.3%)   | 1/3 (33.3%)   | 2        |
+| 2    | 5/14 (35.7%)  | 3/14 (21.4%)  | 6/14 (42.9%)  | 3        |
+| 3    | 5/14 (35.7%)  | 3/14 (21.4%)  | 6/14 (42.9%)  | ?        |
 
 ---
 
