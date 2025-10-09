@@ -924,14 +924,14 @@ position_size = calculate_size_from_probability(predictions[0, 1])
 """
 ```
 
-### Exercise 4.6: Backtesting With and Without Weights
+### Backtesting With and Without Weights
 
 The ultimate test: does proper weighting actually improve real trading performance?
 
 ```python
 def backtest_comparison(ohlc_data, events, features, labels, close):
     """
-    Exercise 4.6: Compare backtest performance with and without sample weights.
+    Compare backtest performance with and without sample weights.
     
     This simulates actual trading to show the real-world impact.
     """
@@ -1109,7 +1109,6 @@ def diagnose_sample_weights(events_df, price_series):
         reasoning = """
         ⚠️ Moderate concurrency impact. Significant label overlap exists.
         → Sample weighting will likely improve model generalization.
-        → Expected performance improvement: 5-15%
         → Implement basic uniqueness weighting.
         """
     else:
@@ -1118,8 +1117,7 @@ def diagnose_sample_weights(events_df, price_series):
         reasoning = """
         🚨 HIGH concurrency impact. Severe label overlap detected.
         → Model will dramatically overfit without sample weighting.
-        → Expected performance improvement: 20%+
-        → Implement uniqueness + return attribution weighting immediately.
+        → Implement return attribution weighting immediately.
         → Consider sequential bootstrap for training.
         """
     
@@ -1139,41 +1137,8 @@ def diagnose_sample_weights(events_df, price_series):
 # diagnosis = diagnose_sample_weights(triple_barrier_events, close_prices)
 ```
 
-⚖️ The Weighting Decision Framework
 
-The diagnostic output guides your strategy. The decision can be summarized as follows:
-
-Mean Uniqueness Recommendation Primary Technique Expected Impact
-> 0.85 Optional None or uniqueness only < 5%
-0.65 - 0.85 Recommended Uniqueness weighting 5-15%
-< 0.65 Essential Uniqueness + Return Attribution 15%+
-
-This framework aligns with established econometric principles: use weighting to correct for issues like heteroskedasticity or endogenous sampling, but validate its necessity rather than applying it blindly.
-
-🛠️ Implementation Best Practices
-
-🔄 Integration with Model Training
-
-Once you've computed sample weights, integrating them correctly is crucial. Most machine learning libraries accept sample weights.
-
-```python
-# Example for scikit-learn
-from sklearn.ensemble import RandomForestClassifier
-
-# Ensure weights are properly aligned with your features (X) and labels (y)
-sample_weights = diagnosis['uniqueness_series'].loc[y_train.index]
-
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X_train, y_train, sample_weight=sample_weights)
-```
-
-Key Integration Points:
-
-- Alignment: Weights must correspond exactly to the indices of your features and labels.
-- Normalization: Most algorithms expect weights to be positive but do not require them to sum to 1. The sample_weight parameter typically expects weights to be an array-like structure with the same length as the input data.
-- Validation: Use weighted performance metrics during backtesting to accurately assess model quality.
-
-📈 Monitoring and Maintenance
+#### Monitoring and Maintenance
 
 Sample weighting is not a one-time setup. Financial markets evolve, and your weighting strategy should too.
 
@@ -1182,9 +1147,9 @@ Sample weighting is not a one-time setup. Financial markets evolve, and your wei
    - Intraday Strategies: Recompute weights daily.
    - Swing Trading: Recompute weekly.
    - Always recompute after major economic events or when you observe performance degradation.
-3. Performance Validation: In your walk-forward backtest, compare the performance of weighted vs. unweighted models on out-of-sample data. This is the ultimate test.
+3. Performance Validation: In your backtest, compare the performance of weighted vs. unweighted models on out-of-sample data. This is the ultimate test.
 
-🚀 Quick Start Checklist
+#### Quick Start Checklist
 
 - Run the Diagnostic: Use diagnose_sample_weights() on your labeled dataset.
 - Choose Your Technique: Select a weighting strategy based on the recommendation.
