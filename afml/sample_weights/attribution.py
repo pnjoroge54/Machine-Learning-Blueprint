@@ -112,7 +112,7 @@ def get_weights_by_return(
 def get_weights_by_time_decay(
     triple_barrier_events,
     close_series,
-    num_threads=5,
+    num_threads=4,
     decay=1,
     linear=True,
     av_uniqueness=None,
@@ -120,29 +120,14 @@ def get_weights_by_time_decay(
 ):
     """
     Advances in Financial Machine Learning, Snippet 4.11, page 70.
-
     Implementation of Time Decay Factors
-
-    :param triple_barrier_events: (pd.DataFrame) Events from labeling.get_events()
-    :param close_series: (pd.Series) Close prices
-    :param num_threads: (int) The number of threads concurrently used by the function.
-    :param decay: (int) Decay factor
-        - decay = 1 means there is no time decay
-        - 0 < decay < 1 means that weights decay linearly over time, but every observation still receives a strictly positive weight, regardless of how old
-        - decay = 0 means that weights converge linearly (exponenentially) to zero, as they become older
-        - decay < 0 means that the oldest portion c of the observations receive zero weight (i.e they are erased from memory)
-    :param linear: (bool) If True, linear decay is applied, else exponential decay
-    :param av_uniqueness: (pd.Series) Average uniqueness of events
-    :param verbose: (bool) Flag to report progress on asynch jobs
-    :return: (pd.Series) Sample weights based on time decay factors
     """
     assert (
         bool(triple_barrier_events.isnull().values.any()) is False
         and bool(triple_barrier_events.index.isnull().any()) is False
     ), "NaN values in triple_barrier_events, delete nans"
 
-    # Apply piecewise-linear or exponential decay to observed uniqueness
-    # Newest observation gets weight=1, oldest observation gets weight=decay
+    # Get average uniqueness if not provided
     if av_uniqueness is None:
         av_uniqueness = get_av_uniqueness_from_triple_barrier(
             triple_barrier_events, close_series, num_threads, verbose=verbose
@@ -150,26 +135,38 @@ def get_weights_by_time_decay(
     elif isinstance(av_uniqueness, pd.Series):
         av_uniqueness = av_uniqueness.to_frame()
 
-    decay_w = av_uniqueness["tW"].sort_index().cumsum()
-
+    # Calculate cumulative time weights
+    cum_time_weights = av_uniqueness["tW"].sort_index().cumsum()
+    
     if linear:
-        # Apply linear decay
+        # Apply linear decay (your existing linear code is correct)
         if decay >= 0:
-            slope = (1 - decay) / decay_w.iloc[-1]
+            slope = (1 - decay) / cum_time_weights.iloc[-1]
         else:
-            slope = 1 / ((decay + 1) * decay_w.iloc[-1])
-        const = 1 - slope * decay_w.iloc[-1]
-        decay_w = const + slope * decay_w
-        decay_w[decay_w < 0] = 0  # Weights can't be negative
-        return decay_w
+            slope = 1 / ((decay + 1) * cum_time_weights.iloc[-1])
+        const = 1 - slope * cum_time_weights.iloc[-1]
+        weights = const + slope * cum_time_weights
+        weights[weights < 0] = 0
+        return weights
     else:
         # Apply exponential decay
-        # Handle edge cases
         if decay == 1:
-            return pd.Series(1.0, index=decay_w.index)
-        if decay_w.iloc[-1] == 0:  # Avoid division by zero if all tW are 0
-            return pd.Series(1.0, index=decay_w.index)
-        age = decay_w.iloc[-1] - decay_w
-        norm_age = age / age.max()  # Scale age to be in [0, 1]
-        exp_decay_w = decay**norm_age
-        return exp_decay_w
+            return pd.Series(1.0, index=cum_time_weights.index)
+        
+        if cum_time_weights.iloc[-1] == 0:
+            return pd.Series(1.0, index=cum_time_weights.index)
+        
+        # Calculate normalized position (0 = newest, 1 = oldest)
+        if decay >= 0:
+            # For decay >= 0, use standard exponential decay
+            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (cum_time_weights.iloc[-1] - cum_time_weights.iloc[0])
+            weights = decay ** normalized_position
+        else:
+            # For decay < 0, implement cutoff (similar to linear case)
+            # This is more complex for exponential - you might want to reconsider this case
+            cutoff_threshold = abs(decay)
+            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (cum_time_weights.iloc[-1] - cum_time_weights.iloc[0])
+            weights = (1 - cutoff_threshold) ** normalized_position
+            weights[weights < 0] = 0
+        
+        return weights

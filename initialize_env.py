@@ -5,7 +5,7 @@ from pathlib import Path
 
 LOG_FILE = "setup_log.txt"
 ENV_FILE = "environment.yml"
-ENV_NAME = "mlfinlab"
+ENV_NAME = "afml"
 
 def log(msg):
     with open(LOG_FILE, "a") as f:
