@@ -432,18 +432,15 @@ def get_weights_by_time_decay(
         return exp_decay_w
 ```
 
-### Class Weights 
+### Class Weights
 
-```
-In addition to sample weights, it is often useful to apply class weights. Class weights are weights that correct for underrepresented labels. This is particularly critical in classification problems where the most important classes have rare occurrences (King and Zeng [2001]). For example, suppose that you wish to predict liquidity crisis, like the flash crash of May 6, 2010. These events are rare relative to the millions of observations that take place in between them. Unless we assign higher weights to the samples associated with those rare labels, the ML algorithm will maximize the accuracy of the most common labels, and flash crashes will be deemed to be outliers rather than rare events.
-
-ML libraries typically implement functionality to handle class weights. For example, sklearn penalizes errors in samples ofclass[j], j=1,…,J, with weighting class_weight[j] rather than 1. Accordingly, higher class weights on label j will force the algorithm to achieve higher accuracy on j. When class weights do not add up to J, the effect is equivalent to changing the regularization parameter of the classifier.
-
-In financial applications, the standard labels of a classification algorithm are {−1, 1}, where the zero (or neutral) case will be implied by a prediction with probability only slightly above 0.5 and below some neutral threshold. There is no reason for favoring accuracy of one class over the other, and as such a good default is to assignclass_weight='balanced'. This choice re-weights observations so as to simulate that all classes appeared with equal frequency. In the context of bagging classifiers, you may want to con-sider the argumentclass_weight='balanced_subsample', which means that class_weight='balanced'will be applied to the in-bag bootstrapped samples, rather than to the entire dataset. For full details, it is helpful to read the source code implementingclass_weightin sklearn. Please also be aware of this reported bug:
-https://github.com/scikit-learn/scikit-learn/issues/4324.
-
-Prado [2018] - *Advances in Financial Machine Learning* (p. 71)
-```
+> In addition to sample weights, it is often useful to apply class weights. Class weights are weights that correct for underrepresented labels. This is particularly critical in classification problems where the most important classes have rare occurrences (King and Zeng [2001]). For example, suppose that you wish to predict liquidity crisis, like the flash crash of May 6, 2010. These events are rare relative to the millions of observations that take place in between them. Unless we assign higher weights to the samples associated with those rare labels, the ML algorithm will maximize the accuracy of the most common labels, and flash crashes will be deemed to be outliers rather than rare events.
+>
+> ML libraries typically implement functionality to handle class weights. For example, sklearn penalizes errors in samples of class[j], j=1,…,J, with weighting class_weight[j] rather than 1. Accordingly, higher class weights on label j will force the algorithm to achieve higher accuracy on j. When class weights do not add up to J, the effect is equivalent to changing the regularization parameter of the classifier.
+>
+> In financial applications, the standard labels of a classification algorithm are {−1, 1}, where the zero (or neutral) case will be implied by a prediction with probability only slightly above 0.5 and below some neutral threshold. There is no reason for favoring accuracy of one class over the other, and as such a good default is to assign `class_weight='balanced'`. This choice re-weights observations so as to simulate that all classes appeared with equal frequency. In the context of bagging classifiers, you may want to consider the argument `class_weight='balanced_subsample'`, which means that `class_weight='balanced'` will be applied to the in-bag bootstrapped samples, rather than to the entire dataset. For full details, it is helpful to read the source code implementing `class_weight` in sklearn. Please also be aware of this reported bug:
+> https://github.com/scikit-learn/scikit-learn/issues/4324.
+(Prado, 2018, p. 71)
 
 ### Using Sample Weights in Model Training
 
@@ -452,6 +449,8 @@ Now for the critical part: how do we actually use these weights in our machine l
 **The Integration Point**: Sample weights are passed to the `fit()` method of your classifier through the `sample_weight` parameter. Here's the complete workflow:
 
 ```python
+def train_with_sample_weights: 
+    pass
 
 ```
 
