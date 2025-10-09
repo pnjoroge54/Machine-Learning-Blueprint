@@ -437,7 +437,7 @@ def get_weights_by_return(
 
 ### Time-Decay Weighting
 
-Another sophisticated approach combines uniqueness with time decay, giving more weight to recent observations:
+Another sophisticated approach combines uniqueness with time decay, giving more weight to recent observations. Note that time is not meant to be chronological. In this implementation, decay takes place according to cumulative uniqueness because a chronological decay would reduce weights too fast in the presence of redundant observations.
 
 ```python
 def get_weights_by_time_decay(
