@@ -30,14 +30,7 @@ Integrating Sequential Bootstrapping into your ensemble models provides two key 
 - **More Robust Models**: By building trees on less correlated, more unique samples, the ensemble becomes more robust and better at capturing diverse patterns in the data.
 - **Better Performance Estimates**: The out-of-bag (OOB) score from a sequentially bootstrapped model is less inflated and provides a more reliable estimate of the model's out-of-sample performance.
 
-# Section 4.5.3: A Numerical Example of Sequential Bootstrap
-
-## 🎯 Objective
-To understand how the **sequential bootstrap** method works by walking through the exact example from the book with three observations and their overlapping time spans.
-
----
-
-## 📌 Scenario Setup (From the Book)
+## A Numerical Example of Sequential Bootstrap
 
 We have three observations (labels) with the following time spans:
 
@@ -58,7 +51,7 @@ The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 
 ---
 
-## 🔁 Sequential Bootstrap Process
+## Sequential Bootstrap Process
 
 ### Step 1: First Draw
 - Initial probabilities: δ₁ = 1/3, δ₂ = 1/3, δ₃ = 1/3
@@ -182,10 +175,3 @@ The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 
 ---
 
-## ✅ Summary
-
-This numerical example demonstrates how sequential bootstrap:
-- **Dynamically adjusts probabilities** based on overlap
-- **Penalizes redundant sampling** of highly overlapping observations
-- **Rewards unique observations** that add diversity to the sample
-- Creates **more representative samples** for financial ML applications
