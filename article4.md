@@ -5,9 +5,6 @@
 **Description:** 
 This comprehensive guide tackles a critical problem in financial ML that most traders ignore: overlapping observations artificially inflate pattern importance, leading to overfit models that fail in live trading. Learn how to implement sample weights using López de Prado's average uniqueness method, return attribution, and time decay techniques. Includes complete Python implementations, diagnostic tools to determine if your data needs weighting, walk-forward backtesting frameworks, and production-ready code for MQL5 integration. Whether you're trading high-frequency intraday strategies or longer-term positions, understanding and applying sample weights can transform your model performance from academic curiosity to profitable reality. Features hands-on exercises revealing when weights matter most and how to validate their impact on your specific trading system.
 
-## Short Description
-Learn how to fix a critical flaw in financial ML models: the false assumption of independent observations. This practical guide shows traders how to implement sample weights that account for overlapping trades, leading to more realistic model performance and better out-of-sample results. Includes working code examples and real-world applications.
-
 ---
 
 ## Sample Weights - Addressing Concurrency
@@ -16,19 +13,15 @@ Learn how to fix a critical flaw in financial ML models: the false assumption of
 
 Here's a problem that most academic papers ignore but every real trader faces: financial observations aren't independent. When you generate a trading signal at 9:00 AM and another at 9:05 AM, these aren't separate, unrelated events. The second signal is influenced by the same underlying market conditions as the first, the same news flows, the same algorithmic behaviors, and possibly even the same price movements.
 
-This creates what López de Prado calls the "concurrency" problem. Traditional machine learning assumes that each observation in your training set provides unique information, but in financial time series, overlapping observations often contain redundant information. It's like having multiple witnesses to the same crime—they're not providing independent testimony, they're all describing the same event from slightly different angles.
+This creates what López de Prado calls the "concurrency" problem. Traditional machine learning assumes that each observation in your training set provides unique information, but in financial time series, overlapping observations often contain redundant information. It's like having multiple witnesses to the same crime; they're not providing independent testimony, they're all describing the same event from slightly different angles.
 
 The implications for model training are profound. When your algorithm encounters multiple overlapping observations that all stem from the same underlying market condition, it effectively "sees" that pattern multiple times and assigns it disproportionate importance. This leads to overfitting on patterns that appear more frequent simply due to temporal overlap, not because they're genuinely more predictive.
 
 Consider a concrete example: Suppose a significant news event at 10:00 AM creates a strong trending move that lasts for two hours. If you're generating signals every 15 minutes, you might create 8 different "observations" from this single underlying event. Your model will see this pattern 8 times and assume it's much more common and reliable than it actually is.
 
-**Real-World Impact**: Imagine you're trading EURUSD with a strategy that enters positions based on momentum signals. During a major ECB announcement, you generate 12 overlapping positions over the next 3 hours. Your model treats these as 12 independent examples of "momentum works," when in reality, you had one significant market event. When you backtest, your strategy looks incredibly robust with a 90% win rate during trending conditions. But in live trading, that drops to 40% because trend days are much rarer than your training data suggested.
+The traditional approach of treating these as 8 independent observations is fundamentally flawed. In reality, you have one significant market event that's been artificially multiplied into 8 pseudo-observations. The model becomes overconfident in patterns that happen to overlap temporally, while undervaluing unique, non-overlapping patterns. This problem is particularly acute in high-frequency data where the overlap between consecutive observations is substantial.
 
-The traditional approach of treating these as 8 independent observations is fundamentally flawed. In reality, you have one significant market event that's been artificially multiplied into 8 pseudo-observations. The model becomes overconfident in patterns that happen to overlap temporally, while undervaluing unique, non-overlapping patterns.
-
-This problem is particularly acute in high-frequency data where the overlap between consecutive observations is substantial. In our EURUSD 5-minute bar data, a single market-moving event might influence dozens of consecutive observations, creating dozens of seemingly independent training examples from what is essentially one market condition.
-
-The concurrency problem isn't just theoretical—it has measurable impacts on model performance. Models trained on concurrent observations often show inflated in-sample performance (because they're learning the same patterns multiple times) but poor out-of-sample performance (because the real frequency of those patterns is much lower than the model believes).
+Models trained on concurrent observations often show inflated in-sample performance (because they're learning the same patterns multiple times) but poor out-of-sample performance (because the real frequency of those patterns is much lower than the model believes).
 
 Sample weighting provides an elegant solution. Instead of treating all observations equally, we assign weights based on how much unique information each observation contains. Observations that overlap heavily with others receive lower weights, while truly independent observations receive higher weights.
 
@@ -55,8 +48,6 @@ This creates a natural weighting scheme where:
 - Heavily overlapping observations receive minimal weight (< 0.3)
 
 The beauty of this approach is that it doesn't eliminate overlapping observations entirely—it just reduces their influence proportionally to their redundancy. This preserves information while correcting for the artificial amplification created by temporal overlap.
-
-**Exercise 4.1 Insight**: Why not just remove concurrent observations instead of weighting them? Because some overlap is inevitable and contains useful information. A weight of 0.3 means "this observation shares information with others, but still contributes something unique." Removing it entirely would waste that unique component.
 
 ### Implementation: Computing Concurrency
 
@@ -880,6 +871,8 @@ class WeightedMLTrader:
             'max_depth': 6,
             'min_samples_leaf': 50,
             'min_samples_split': 100,
+            'min_weight_fraction_leaf': 0.05,
+            'class_weight': 'balanced_subsample',
             'max_features': 'sqrt',
             'random_state': 42,
             'n_jobs': -1
