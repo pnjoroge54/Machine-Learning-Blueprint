@@ -446,16 +446,21 @@ def get_weights_by_time_decay(
 
 Now for the critical part: how do we actually use these weights in our machine learning pipeline? This is where theory meets practice.
 
+#### Conceptual Foundation for Financial Cross-Validation
+
+Standard k-fold cross-validation relies on the assumption that data points are Independent and Identically Distributed (IID). Financial time-series data violates this core assumption due to serial correlation, temporal dependencies, and structural breaks. Using standard methods risks data leakage, where information from the future inadvertently influences the training of a model on past data, leading to overfitting and unreliable performance estimates.
+
+To address this, Dr. Prado introduces two key modifications:
+
+- Purged Cross-Validation: This method removes from the training set any observations whose labels overlap in time with those in the test set. This prevents the model from having knowledge of future periods it is supposed to predict.
+- Embargo: An additional safety measure that further removes a small fraction of data immediately following the test period from the training set, guarding against leakage through serial correlation.
+
 **The Integration Point**: Sample weights are passed to the `fit()` method of your classifier through the `sample_weight` parameter. Here's the complete workflow:
 
 ```python
 import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss, accuracy_score
-
-
-class PurgedKFold...
-
 
 
 def train_with_sample_weights(clf, X, y, sample_weight, times, scoring='neg_log_loss', cv_folds=5, pct_embargo=0.02):
