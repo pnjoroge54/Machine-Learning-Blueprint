@@ -461,6 +461,59 @@ To address this, Dr. Prado introduces two key modifications:
 import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss, accuracy_score
+from sklearn.model_selection import _BaseKFold
+
+
+class PurgedKFold(_BaseKFold):
+    """
+    Extend KFold class to work with labels that span intervals
+
+    The train is purged of observations overlapping test-label intervals
+    Test set is assumed contiguous (shuffle=False), w/o training samples in between
+
+    :param n_splits: (int) The number of splits. Default to 3
+    :param t1: (pd.Series) The information range on which each record is constructed from
+        *t1.index*: Time when the information extraction started.
+        *t1.value*: Time when the information extraction ended.
+    :param pct_embargo: (float) Percent that determines the embargo size.
+    """
+
+    def __init__(self, n_splits=3, t1=None, pct_embargo=0.0):
+        if not isinstance(t1, pd.Series):
+            raise ValueError("Label Through Dates must be a pd.Series")
+
+        super().__init__(n_splits, shuffle=False, random_state=None)
+
+        self.t1 = t1
+        self.pct_embargo = pct_embargo
+
+    def split(self, X, y=None, groups=None):
+        """
+        The main method to call for the PurgedKFold class
+
+        :param X: (pd.DataFrame) Samples dataset that is to be split
+        :param y: (pd.Series) Sample labels series
+        :param groups: (array-like), with shape (n_samples,), optional
+            Group labels for the samples used while splitting the dataset into
+            train/test set.
+        :return: (tuple) [train list of sample indices, and test list of sample indices]
+        """
+
+        if (X.index == self.t1.index).sum() != len(self.t1):
+            raise ValueError("X and ThruDateValues must have the same index")
+
+        indices = np.arange(X.shape[0])
+        mbrg = int(X.shape[0] * self.pct_embargo)
+        test_starts = [(i[0], i[-1] + 1) for i in np.array_split(np.arange(len(X)), self.n_splits)]
+
+        for i, j in test_starts:
+            t0 = self.t1.index[i]  # start of test set
+            test_indices = indices[i:j]
+            max_t1_idx = self.t1.index.searchsorted(self.t1[test_indices].max())
+            train_indices = self.t1.index.searchsorted(self.t1[self.t1 <= t0].index)
+            if max_t1_idx < X.shape[0]:  # right train (with embargo)
+                train_indices = np.concatenate((train_indices, indices[max_t1_idx + mbrg :]))
+            yield train_indices, test_indices
 
 
 def train_with_sample_weights(clf, X, y, sample_weight, times, scoring='neg_log_loss', cv_folds=5, pct_embargo=0.02):
