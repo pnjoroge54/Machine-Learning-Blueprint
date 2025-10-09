@@ -147,7 +147,7 @@ The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 
 ---
 
-## 📊 Complete Probability Summary
+## Complete Probability Summary
 
 | Draw | Observation 1 | Observation 2 | Observation 3 | Selected |
 |------|---------------|---------------|---------------|----------|
@@ -157,7 +157,7 @@ The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 
 ---
 
-## 🔍 Key Observations from This Example
+## Key Observations from This Example
 
 1. **Lowest probability** goes to the previously selected observation (Observation 2)
 2. **Highest probability** goes to the observation with no overlap (Observation 3)
@@ -166,7 +166,7 @@ The **indicator matrix** {1ₜ,ᵢ} shows when each observation is active:
 
 ---
 
-## 🧠 Why This Pattern Occurs
+## Why This Pattern Occurs
 
 - **Observation 2** (already selected) gets penalized for self-overlap
 - **Observation 3** gets rewarded for having zero overlap with current sample  
@@ -187,7 +187,7 @@ The chart presents a histogram that visually compares the `average uniqueness` o
 
 The key finding is that the distribution for the sequential bootstrap is shifted noticeably to the right, indicating a higher average uniqueness value across many experimental trials[citation:1].
 
-### 🔬 Methodology Behind the Data
+### Methodology Behind the Data
 
 The data for this figure was generated through extensive **Monte Carlo simulations**:
 
