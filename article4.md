@@ -479,64 +479,6 @@ def get_weights_by_time_decay(
         return exp_decay_w
 ```
 
-**Exercise 4.4: Choosing Decay Parameters**
-
-```python
-def visualize_decay_schemes(events, close, n_events=1000):
-    """
-    Exercise 4.4: Visualize how different decay parameters affect weights.
-    
-    This helps you choose appropriate decay for your market/timeframe.
-    """
-    import matplotlib.pyplot as plt
-    
-    # Get base uniqueness
-    uniqueness = get_av_uniqueness_from_triple_barrier(events, close, num_threads=1)
-    
-    # Test various decay parameters
-    decay_params = [1.0, 0.9, 0.5, 0.1, 0, -0.5]
-    
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    axes = axes.flatten()
-    
-    for idx, decay in enumerate(decay_params):
-        weights = get_weights_by_time_decay(
-            events.iloc[:n_events], 
-            close, 
-            decay=decay, 
-            linear=True,
-            av_uniqueness=uniqueness.iloc[:n_events]
-        )
-        
-        axes[idx].plot(weights.values)
-        axes[idx].set_title(f'Decay = {decay}')
-        axes[idx].set_xlabel('Event Age (oldest to newest)')
-        axes[idx].set_ylabel('Sample Weight')
-        axes[idx].grid(True, alpha=0.3)
-        
-        # Add interpretation
-        old_weight = weights.iloc[:100].mean()
-        new_weight = weights.iloc[-100:].mean()
-        ratio = new_weight / old_weight if old_weight > 0 else float('inf')
-        axes[idx].text(0.05, 0.95, f'New/Old ratio: {ratio:.1f}x',
-                      transform=axes[idx].transAxes, verticalalignment='top')
-    
-    plt.tight_layout()
-    plt.savefig('decay_schemes_comparison.png', dpi=300)
-    plt.show()
-    
-    print("Interpretation Guide:")
-    print("  decay=1.0: All events weighted equally (by uniqueness only)")
-    print("  decay=0.9: Gentle fade - oldest events get 10% of newest")
-    print("  decay=0.5: Moderate fade - good for most strategies")
-    print("  decay=0.1: Aggressive fade - only recent data matters")
-    print("  decay=0: Asymptotic fade - old data approaches zero")
-    print("  decay<0: Hard cutoff - oldest events completely removed")
-
-# Usage
-visualize_decay_schemes(triple_barrier_events, close_series)
-```
-
 ### Using Sample Weights in Model Training
 
 Now for the critical part: how do we actually use these weights in our machine learning pipeline? This is where theory meets practice.
