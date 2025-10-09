@@ -449,8 +449,73 @@ Now for the critical part: how do we actually use these weights in our machine l
 **The Integration Point**: Sample weights are passed to the `fit()` method of your classifier through the `sample_weight` parameter. Here's the complete workflow:
 
 ```python
-def train_with_sample_weights: 
-    pass
+import numpy as np
+import pandas as pd
+from sklearn.metrics import log_loss, accuracy_score
+
+
+class PurgedKFold...
+
+
+
+def train_with_sample_weights(clf, X, y, sample_weight, times, scoring='neg_log_loss', cv_folds=5, pct_embargo=0.02):
+    """
+    Train a classifier using purged cross-validation to evaluate performance
+    with sample weights on financial time series data.
+    
+    Parameters:
+    clf: sklearn classifier
+        The classifier model to be trained and evaluated.
+    X: pd.DataFrame
+        Feature matrix.
+    y: pd.Series
+        Target labels.
+    sample_weight: pd.Series
+        Sample weights for each observation.
+    times: pd.Series
+        Timestamp information for each observation for purging.
+    scoring: str
+        Scoring metric, 'neg_log_loss' or 'accuracy'.
+    cv_folds: int
+        Number of cross-validation folds.
+    pct_embargo: float
+        Percentage of embargo to apply to prevent data leakage.
+        
+    Returns:
+    np.array: Array of cross-validation scores.
+    """
+    
+    if scoring not in ['neg_log_loss', 'accuracy']:
+        raise ValueError("Scoring must be 'neg_log_loss' or 'accuracy'")
+    
+    # Initialize PurgedKFold cross-validator
+    cv_gen = PurgedKFold(n_splits=cv_folds, samples_info_sets=times, pct_embargo=pct_embargo)
+    
+    scores = []
+    for train_idx, test_idx in cv_gen.split(X=X):
+        # Split data, ensuring no data leakage
+        X_train, X_test = X.iloc[train_idx, :], X.iloc[test_idx, :]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        sw_train, sw_test = sample_weight.iloc[train_idx].values, sample_weight.iloc[test_idx].values
+        
+        # Fit the classifier on the training set
+        fit = clf.fit(X=X_train, y=y_train, sample_weight=sw_train)
+        
+        # Evaluate on the test set
+        if scoring == 'neg_log_loss':
+            prob = fit.predict_proba(X_test)
+            score = -log_loss(y_test, prob, sample_weight=sw_test, labels=clf.classes_)
+        else:  # accuracy
+            pred = fit.predict(X_test)
+            score = accuracy_score(y_test, pred, sample_weight=sw_test)
+        scores.append(score)
+    
+    return np.array(scores)
+
+# Example usage:
+# Assuming X, y, sample_weight, and timestamp_index are your DataFrames/Series
+# cv_scores = train_with_sample_weights(RandomForestClassifier(), X, y, sample_weight, timestamp_index)
+# print(f"Average CV Score: {cv_scores.mean():.4f}")
 
 ```
 
