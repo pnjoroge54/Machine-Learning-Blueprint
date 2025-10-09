@@ -29,13 +29,11 @@ Sample weighting provides an elegant solution. Instead of treating all observati
 
 The mathematical foundation for sample weights comes from the concept of "average uniqueness." For each observation, we need to quantify how much of its information content is unique versus shared with other concurrent observations.
 
-López de Prado's approach calculates this through a matrix of label overlap. For any two observations *i* and *j*, we determine how much their respective "information sets" overlap in time. If observation *i* uses information from time *t₁* to *t₂* for its label, and observation *j* uses information from time *t₃* to *t₄*, then their overlap is the intersection of these time intervals.
-
-**The Mathematics in Plain English**: 
+López de Prado's approach calculates this through a matrix of label overlap. For any two observations *i* and *j*, we determine how much their respective "information sets" overlap in time. If observation *i* uses information from time *t₁* to *t₂* for its label, and observation *j* uses information from time *t₃* to *t₄*, then their overlap is the intersection of these time intervals. 
 
 1. **Concurrency Count**: For each bar in your data, count how many events are "active" at that time. If three trades are all open simultaneously, each bar during that period has a concurrency of 3.
 
-2. **Average Uniqueness**: For each event, calculate 1 divided by the average concurrency across its lifespan. If an event spans bars with concurrency [3, 4, 3, 2], its average uniqueness is 1/((1/3 + 1/4 + 1/3 + 1/2)/4) ≈ 0.35.
+2. **Uniqueness**: For each event, calculate 1 divided by the average concurrency across its lifespan. If an event spans bars with concurrency [3, 4, 3, 2], its average uniqueness is 1/((1/3 + 1/4 + 1/3 + 1/2)/4) ≈ 0.35.
 
 3. **Sample Weight**: This uniqueness value becomes the weight for that observation during model training.
 
