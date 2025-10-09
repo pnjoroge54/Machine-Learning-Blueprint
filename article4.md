@@ -1045,9 +1045,9 @@ backtest_results = backtest_comparison(
 )
 ```
 
-## 🎯 Practical Implementation: When and How to Use Sample Weights
+## Practical Implementation: When and How to Use Sample Weights
 
-### 🔍 Diagnostic Framework: Understanding When Weights Matter Most
+### Diagnostic Framework: Understanding When Weights Matter Most
 
 Not all datasets benefit equally from sample weighting. Implementing weights adds complexity, and it's crucial to diagnose whether your data needs it. The core challenge is **statistical concurrency**, where multiple observations are not independent due to overlapping time horizons[citation:1]. This is fundamentally different from, but analogous to, the concurrency issues faced in software systems where multiple threads access shared resources[citation:2].
 
@@ -1169,9 +1169,9 @@ model.fit(X_train, y_train, sample_weight=sample_weights)
 
 Key Integration Points:
 
-· Alignment: Weights must correspond exactly to the indices of your features and labels.
-· Normalization: Most algorithms expect weights to be positive but do not require them to sum to 1. The sample_weight parameter typically expects weights to be an array-like structure with the same length as the input data.
-· Validation: Use weighted performance metrics during backtesting to accurately assess model quality.
+- Alignment: Weights must correspond exactly to the indices of your features and labels.
+- Normalization: Most algorithms expect weights to be positive but do not require them to sum to 1. The sample_weight parameter typically expects weights to be an array-like structure with the same length as the input data.
+- Validation: Use weighted performance metrics during backtesting to accurately assess model quality.
 
 📈 Monitoring and Maintenance
 
@@ -1179,74 +1179,19 @@ Sample weighting is not a one-time setup. Financial markets evolve, and your wei
 
 1. Track Trends: Monitor the mean uniqueness metric over time. A sudden drop may indicate a market regime change.
 2. Recompute Periodically:
-   · Intraday Strategies: Recompute weights daily.
-   · Swing Trading: Recompute weekly.
-   · Always recompute after major economic events or when you observe performance degradation.
+   - Intraday Strategies: Recompute weights daily.
+   - Swing Trading: Recompute weekly.
+   - Always recompute after major economic events or when you observe performance degradation.
 3. Performance Validation: In your walk-forward backtest, compare the performance of weighted vs. unweighted models on out-of-sample data. This is the ultimate test.
 
 🚀 Quick Start Checklist
 
-· Run the Diagnostic: Use diagnose_sample_weights() on your labeled dataset.
-· Choose Your Technique: Select a weighting strategy based on the recommendation.
-· Implement & Integrate: Compute weights and pass them to your model's fit() function.
-· Validate Rigorously: Use a walk-forward backtest to confirm improved out-of-sample performance.
-· Monitor: Schedule periodic re-computation of weights as part of your model maintenance routine.
+- Run the Diagnostic: Use diagnose_sample_weights() on your labeled dataset.
+- Choose Your Technique: Select a weighting strategy based on the recommendation.
+- Implement & Integrate: Compute weights and pass them to your model's fit() function.
+- Validate Rigorously: Use a walk-forward backtest to confirm improved out-of-sample performance.
+- Monitor: Schedule periodic re-computation of weights as part of your model maintenance routine.
 
-
-### Practical Considerations for MQL5 Traders
-
-For traders implementing this in MetaTrader 5, here are key practical points:
-
-**1. When to Recompute Weights:**
-- Recompute daily for intraday strategies
-- Recompute weekly for swing trading strategies
-- Always recompute after significant market regime changes
-
-**2. Performance Optimization:**
-```python
-# Cache concurrent events to avoid recomputation
-class WeightCache:
-    def __init__(self):
-        self.cached_concurrency = None
-        self.cache_date = None
-    
-    def get_weights(self, events, close, force_refresh=False):
-        today = events.index[-1].date()
-        
-        if force_refresh or self.cache_date != today:
-            self.cached_concurrency = get_num_conc_events(events, close)
-            self.cache_date = today
-        
-        weights = get_av_uniqueness_from_triple_barrier(
-            events, close, num_threads=4,
-            num_conc_events=self.cached_concurrency
-        )
-        return weights['tW']
-```
-
-**3. Memory Management for Large Datasets:**
-```python
-def compute_weights_in_batches(events, close, batch_size=10000):
-    """
-    For datasets with >100K events, process in batches to avoid memory issues.
-    """
-    n_batches = int(np.ceil(len(events) / batch_size))
-    all_weights = []
-    
-    for i in range(n_batches):
-        start_idx = i * batch_size
-        end_idx = min((i + 1) * batch_size, len(events))
-        
-        batch_events = events.iloc[start_idx:end_idx]
-        batch_close = close.loc[batch_events.index[0]:batch_events['t1'].max()]
-        
-        batch_weights = get_av_uniqueness_from_triple_barrier(
-            batch_events, batch_close, num_threads=4
-        )
-        all_weights.append(batch_weights['tW'])
-    
-    return pd.concat(all_weights)
-```
 
 ## Conclusion
 
