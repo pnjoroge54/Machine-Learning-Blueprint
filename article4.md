@@ -156,12 +156,12 @@ def _get_average_uniqueness(label_endtime, num_conc_events, molecule):
     return wght
 ```
 
-**Exercise 4.2 Implementation**: Understanding uniqueness through an example:
+**Understanding uniqueness through an example**:
 
 ```python
 def demonstrate_uniqueness_calculation():
     """
-    Exercise 4.2: Demonstrate how uniqueness is calculated for overlapping events.
+    Demonstrate how uniqueness is calculated for overlapping events.
     
     This example shows three events with different levels of overlap and
     calculates their uniqueness scores step-by-step.
@@ -206,20 +206,40 @@ concurrency, events = demonstrate_uniqueness_calculation()
 
 **Expected Output**:
 ```
-Event 1 (10:00 to 10:30):
+Timeline of Concurrency:
+2024-01-01 10:00:00    1
+2024-01-01 10:05:00    1
+2024-01-01 10:10:00    1
+2024-01-01 10:15:00    2
+2024-01-01 10:20:00    2
+2024-01-01 10:25:00    2
+2024-01-01 10:30:00    2
+2024-01-01 10:35:00    1
+2024-01-01 10:40:00    1
+2024-01-01 10:45:00    2
+2024-01-01 10:50:00    2
+2024-01-01 10:55:00    1
+2024-01-01 11:00:00    1
+Freq: 5min, dtype: int64
+
+
+Event 1 (from 10:00:00 to 10:30:00):
   Concurrency during lifespan: [1 1 1 2 2 2 2]
-  Average Uniqueness: 0.6429
-  Interpretation: Event has 64.3% unique information
+  Reciprocals (1/concurrency): [1.  1.  1.  0.5 0.5 0.5 0.5]
+  Average Uniqueness: 0.7143
+  Interpretation: Event has 71.4% unique information
 
-Event 2 (10:15 to 10:50):
-  Concurrency during lifespan: [2 2 2 2 2 2 2 1]
-  Average Uniqueness: 0.5625
-  Interpretation: Event has 56.2% unique information
+Event 2 (from 10:15:00 to 10:50:00):
+  Concurrency during lifespan: [2 2 2 2 1 1 2 2]
+  Reciprocals (1/concurrency): [0.5 0.5 0.5 0.5 1.  1.  0.5 0.5]
+  Average Uniqueness: 0.6250
+  Interpretation: Event has 62.5% unique information
 
-Event 3 (10:45 to 11:00):
-  Concurrency during lifespan: [1 1 1 1]
-  Average Uniqueness: 1.0000
-  Interpretation: Event has 100% unique information
+Event 3 (from 10:45:00 to 11:00:00):
+  Concurrency during lifespan: [2 2 1 1]
+  Reciprocals (1/concurrency): [0.5 0.5 1.  1. ]
+  Average Uniqueness: 0.7500
+  Interpretation: Event has 75.0% unique information
 ```
 
 The orchestrator function brings everything together:
