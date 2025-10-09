@@ -174,7 +174,7 @@ def demonstrate_uniqueness_calculation():
     events.set_index('t0', inplace=True)
     
     # Create minute-by-minute timeline
-    timeline = pd.date_range('2024-01-01 10:00', '2024-01-01 11:00', freq='5T')
+    timeline = pd.date_range('2024-01-01 10:00', '2024-01-01 11:00', freq='5min')
     
     # Manually count concurrency at each point
     concurrency = pd.Series(0, index=timeline)
@@ -335,57 +335,6 @@ def _apply_weight_by_return(label_endtime, num_conc_events, close_series, molecu
     weights = pd.Series(weights)
     # Use absolute value - we care about magnitude, not direction
     return weights.abs()
-```
-
-**Exercise 4.3: When to Use Return Attribution**
-
-```python
-def compare_weighting_schemes(events, close):
-    """
-    Exercise 4.3: Compare uniqueness-only vs return-attribution weighting.
-    
-    This demonstrates when return attribution helps and when it might hurt.
-    """
-    # Get both types of weights
-    uniqueness = get_av_uniqueness_from_triple_barrier(events, close, num_threads=1)
-    return_weights = get_weights_by_return(events, close, num_threads=1)
-    
-    # Normalize for comparison
-    uniqueness_norm = uniqueness['tW'] / uniqueness['tW'].sum()
-    return_norm = return_weights / return_weights.sum()
-    
-    # Calculate returns for each event
-    event_returns = []
-    for t0, row in events.iterrows():
-        t1 = row['t1']
-        ret = np.log(close.loc[t1] / close.loc[t0])
-        event_returns.append(ret)
-    
-    comparison = pd.DataFrame({
-        'Event_Return': event_returns,
-        'Uniqueness_Weight': uniqueness_norm.values,
-        'Return_Weight': return_norm.values,
-        'Weight_Ratio': return_norm.values / uniqueness_norm.values
-    }, index=events.index)
-    
-    print("Weighting Scheme Comparison:")
-    print(comparison)
-    print("\n" + "="*60)
-    print("Key Insights:")
-    print(f"- Correlation between weights: {comparison['Uniqueness_Weight'].corr(comparison['Return_Weight']):.3f}")
-    print(f"- Events with >2x return weight: {(comparison['Weight_Ratio'] > 2).sum()}")
-    print(f"- Events with <0.5x return weight: {(comparison['Weight_Ratio'] < 0.5).sum()}")
-    
-    print("\nWhen to use Return Attribution:")
-    print("  ✓ Strategy depends on move magnitude (momentum, breakouts)")
-    print("  ✓ Want to focus learning on significant market events")
-    print("  ✗ Strategy is directional-only (doesn't care about size)")
-    print("  ✗ Working with very noisy, low signal-to-noise data")
-    
-    return comparison
-
-# Usage
-comparison = compare_weighting_schemes(triple_barrier_events, close_series)
 ```
 
 The full implementation with proper data handling:
