@@ -168,7 +168,7 @@ def _apply_time_decay_numba(cumulative_time_weights, decay_factor, linear_decay=
 # =============================================================================
 
 
-def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_series):
+def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close):
     """
     Optimized version of return weight calculation for parallel processing.
 
@@ -186,7 +186,7 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_seri
         Label endtime series (t1 for triple barrier events)
     num_conc_events : pd.Series
         Number of concurrent events
-    close_series : pd.Series
+    close : pd.Series
         Close prices
 
     Returns:
@@ -201,7 +201,7 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_seri
     - Scales well with dataset size
     """
     # Calculate log returns using vectorized operations
-    log_returns = np.log(close_series).diff().values
+    log_returns = np.log(close).diff().values
 
     n_events = len(label_endtime)
 
@@ -209,8 +209,8 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_seri
         return pd.Series(dtype=np.float64)
 
     # Vectorized lookup
-    start_indices = close_index.get_indexer(label_endtime.index)
-    end_indices = close_index.get_indexer_for(label_endtime) + 1 # Guaranteed return of an indexer even when non-unique.
+    start_indices = close.index.get_indexer(label_endtime.index)
+    end_indices = close.index.get_indexer_for(label_endtime) + 1 # Guaranteed return of an indexer even when non-unique.
 
     # Get concurrent events as numpy array
     concurrent_counts = num_conc_events.values
