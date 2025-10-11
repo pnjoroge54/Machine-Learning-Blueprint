@@ -30,7 +30,7 @@ def probability_weighted_accuracy(y_true, y_prob, sample_weight=None, labels=Non
     if isinstance(y_prob, pd.DataFrame):
         # If labels given, reorder columns; otherwise infer column order
         cols = labels if labels is not None else y_prob.columns.tolist()
-        y_prob = y_prob[cols].values
+        y_prob = y_prob[cols].to_numpy()
     else:
         y_prob = np.asarray(y_prob)
 

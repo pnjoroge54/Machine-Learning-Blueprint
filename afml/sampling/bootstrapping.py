@@ -4,7 +4,7 @@ Logic regarding sequential bootstrapping from chapter 4.
 
 import pandas as pd
 import numpy as np
-from numba import jit, prange
+from numba import njit, prange
 
 
 def get_ind_matrix(samples_info_sets, price_bars):
@@ -88,7 +88,7 @@ def get_ind_mat_label_uniqueness(ind_mat):
     return uniqueness
 
 
-@jit(parallel=True, nopython=True)
+@njit(parallel=True)
 def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
     """
     Part of Sequential Bootstrapping for-loop. Using previously accumulated concurrency array, loops through all samples
@@ -151,13 +151,13 @@ def seq_bootstrap(ind_mat, sample_length=None, warmup_samples=None, compare=Fals
             choice = random_state.choice(range(ind_mat.shape[1]), p=prob)
         phi += [choice]
         prev_concurrency += ind_mat[:, choice]  # Add recorded label array from ind_mat
-        if verbose is True:
+        if verbose:
             print(prob)
 
-    if compare is True:
+    if compare:
         standard_indx = np.random.choice(ind_mat.shape[1], size=sample_length)
         standard_unq = get_ind_mat_average_uniqueness(ind_mat[:, standard_indx])
         sequential_unq = get_ind_mat_average_uniqueness(ind_mat[:, phi])
-        print('Standard uniqueness: {}\nSequential uniqueness: {}'.format(standard_unq, sequential_unq))
+        print(f'Standard uniqueness: {standard_unq:.4f}\nSequential uniqueness: {sequential_unq:.4f}')
 
     return phi

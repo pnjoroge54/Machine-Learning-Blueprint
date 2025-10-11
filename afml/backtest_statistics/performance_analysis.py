@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 from numba import njit
 from scipy.stats import kurtosis, skew
 
@@ -279,17 +278,26 @@ def get_annualization_factors(
             return np.sqrt(trading_days_per_year), trading_days_per_year
 
         # Estimate the average time between bars.
-        avg_delta = (data_index[-1] - data_index[0]) / (len(data_index) - 1)
-        if avg_delta.total_seconds() == 0:
-            warnings.warn(
-                "Cannot infer frequency from index. Falling back to default daily.",
-                UserWarning,
-                stacklevel=2,
-            )
-            return np.sqrt(trading_days_per_year), trading_days_per_year
+        value_counts_index = data_index.diff().value_counts()
+        if value_counts_index.max() > int(len(data_index) * 0.7):
+            # Check if using a common timeframe despite holidays and weekends
+            # t = 365.25 if value_counts_index.nunique() == 1 else 252
+            avg_delta = value_counts_index.idxmax()
+            periods_per_year = pd.Timedelta(days=trading_days_per_year) / avg_delta
+            print(f"Inferred timeframe to be {avg_delta}.")
+        else:
+            median_delta = data_index.diff().median()
+            print(f"Inferred timeframe from median delta as {median_delta}.")
+            if median_delta.total_seconds() == 0:
+                warnings.warn(
+                    "Cannot infer frequency from index. Falling back to default daily.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return np.sqrt(trading_days_per_year), trading_days_per_year
 
-        # Calculate periods per year based on the average bar frequency.
-        periods_per_year = pd.Timedelta(days=365.25) / avg_delta
+            # Calculate periods per year based on the median bar frequency.
+            periods_per_year = pd.Timedelta(days=trading_days_per_year) / median_delta
         return np.sqrt(periods_per_year), int(round(periods_per_year))
 
     # This line should not be reached due to the initial checks.
@@ -530,8 +538,8 @@ def get_positions_from_events(
     pd.Series
         Series containing the target positions for data_index.
     """
+    end_times = pd.Index(events_t1).difference(events_t1.index)
     positions = sides.reindex(data_index)
-    end_times = events_t1.index.difference(events_t1)
     positions.loc[end_times] = 0  # End of trade
     positions = positions.ffill().fillna(0)
     return positions
@@ -573,6 +581,7 @@ def evaluate_meta_labeling_performance(
         A dictionary containing the performance metrics for both strategies,
         their return series, and other comparison metadata.
     """
+    data_index = close.index
 
     # Calculate returns
     events = events.dropna(subset=["t1"])
@@ -580,6 +589,7 @@ def evaluate_meta_labeling_performance(
     prices = close.reindex(all_dates, method="bfill")
     returns = prices.loc[events["t1"].array].array / prices.loc[events.index] - 1
     primary_returns = returns * events["side"]
+    primary_positions = get_positions_from_events(data_index, events["t1"], events["side"])
 
     # Filter trades: Set position to 0 for trades below the confidence threshold.
     aligned_probs = meta_probabilities.reindex(events.index, fill_value=0.5)
@@ -605,10 +615,11 @@ def evaluate_meta_labeling_performance(
 
     msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
     msg = msg + f"\n{kwargs}" if kwargs else msg
-    logger.info(msg)
+    print(msg)
 
     # Apply the calculated bet size to the signals that were not filtered out.
-    meta_returns = (returns.reindex(meta_events.index) * bets).dropna()
+    meta_positions = get_positions_from_events(data_index, meta_events["t1"], bets)
+    meta_returns = (returns.reindex(meta_events.index) * meta_positions).dropna()
 
     # --- Performance Calculation ---
     data_index = close.index

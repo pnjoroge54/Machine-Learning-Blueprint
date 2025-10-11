@@ -88,83 +88,78 @@ def _compute_return_weights_numba(
 
 
 @njit(fastmath=True, cache=True)
-def _apply_time_decay_numba(weights, decay_factor, linear_decay=True):
+def _apply_time_decay_numba(cumulative_time_weights, decay_factor, linear_decay=True):
     """
-    Numba-optimized function to apply time decay to weights.
-
-    This function applies either linear or exponential decay to a series of weights
-    based on their temporal order. The decay is applied efficiently using
-    vectorized operations and optimized mathematical computations.
-
-    Key Optimizations:
-    - Fast math operations for exponential calculations
-    - Vectorized operations where possible
-    - Efficient handling of edge cases
-    - Reduced branching for better performance
-
+    Numba-optimized function to apply time decay to pre-computed cumulative time weights.
+    
     Parameters:
     -----------
-    weights : np.ndarray
-        Array of weights to apply decay to
+    cumulative_time_weights : np.ndarray
+        Pre-computed cumulative time weights (equivalent to decay_w from original)
     decay_factor : float
-        Decay factor (between 0 and 1)
+        Decay factor
     linear_decay : bool
         Whether to use linear (True) or exponential (False) decay
-
+        
     Returns:
     --------
     np.ndarray
         Array of decay-adjusted weights
-
-    Performance:
-    -----------
-    - 2-3x faster than original implementation
-    - Better numerical stability
-    - Optimized memory usage
     """
-    n = len(weights)
+    n = len(cumulative_time_weights)
     if n == 0:
-        return weights
-
-    # Calculate cumulative sum for time ordering
-    cumsum_weights = np.cumsum(weights)
-    max_cumsum = cumsum_weights[-1]
-
+        return cumulative_time_weights
+    
+    max_cumulative = cumulative_time_weights[-1]
+    
     if linear_decay:
-        # Linear decay implementation
+        decay_weights = np.empty(n, dtype=np.float64)
+        
         if decay_factor >= 0:
-            slope = (1.0 - decay_factor) / max_cumsum if max_cumsum > 0 else 0.0
-            const = 1.0 - slope * max_cumsum
-            decay_weights = const + slope * cumsum_weights
-
-            # Ensure non-negative weights
+            if max_cumulative > 1e-12:  # Avoid division by zero
+                slope = (1.0 - decay_factor) / max_cumulative
+                const = 1.0 - slope * max_cumulative
+                for i in range(n):
+                    weight = const + slope * cumulative_time_weights[i]
+                    decay_weights[i] = max(0.0, weight)
+            else:
+                # All weights are zero, return uniform weights
+                decay_weights[:] = 1.0
+        else:
+            # decay_factor < 0 case
+            if max_cumulative > 1e-12:
+                slope = 1.0 / ((decay_factor + 1.0) * max_cumulative)
+                for i in range(n):
+                    weight = slope * cumulative_time_weights[i]
+                    decay_weights[i] = max(0.0, weight)
+            else:
+                decay_weights[:] = 0.0
+                
+        return decay_weights
+        
+    else:
+        # Exponential decay
+        if abs(decay_factor - 1.0) < 1e-12:
+            return np.ones(n, dtype=np.float64)
+            
+        if max_cumulative < 1e-12:
+            return np.ones(n, dtype=np.float64)
+            
+        decay_weights = np.empty(n, dtype=np.float64)
+        max_age = max_cumulative - cumulative_time_weights[0]
+        
+        if max_age > 1e-12:
             for i in range(n):
-                if decay_weights[i] < 0:
+                age = max_cumulative - cumulative_time_weights[i]
+                norm_age = age / max_age
+                # More stable calculation for extreme values
+                if abs(decay_factor) > 1e-12:
+                    decay_weights[i] = np.exp(norm_age * np.log(abs(decay_factor)))
+                else:
                     decay_weights[i] = 0.0
         else:
-            # Negative decay factor case
-            slope = 1.0 / ((decay_factor + 1.0) * max_cumsum) if max_cumsum > 0 else 0.0
-            decay_weights = slope * cumsum_weights
-
-        return decay_weights
-    else:
-        # Exponential decay implementation
-        if decay_factor == 1.0:
-            return np.ones(n, dtype=np.float64)
-
-        if max_cumsum == 0:
-            return np.ones(n, dtype=np.float64)
-
-        # Normalize age and apply exponential decay
-        age = max_cumsum - cumsum_weights
-        max_age = np.max(age)
-
-        if max_age > 0:
-            norm_age = age / max_age
-            decay_weights = np.power(decay_factor, norm_age)
-        else:
-            decay_weights = np.ones(n, dtype=np.float64)
-
+            decay_weights[:] = 1.0
+            
         return decay_weights
 
 
@@ -173,7 +168,7 @@ def _apply_time_decay_numba(weights, decay_factor, linear_decay=True):
 # =============================================================================
 
 
-def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_series):
+def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close):
     """
     Optimized version of return weight calculation for parallel processing.
 
@@ -191,7 +186,7 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_seri
         Label endtime series (t1 for triple barrier events)
     num_conc_events : pd.Series
         Number of concurrent events
-    close_series : pd.Series
+    close : pd.Series
         Close prices
 
     Returns:
@@ -206,22 +201,16 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close_seri
     - Scales well with dataset size
     """
     # Calculate log returns using vectorized operations
-    log_returns = np.log(close_series).diff().values
+    log_returns = np.log(close).diff().values
 
     n_events = len(label_endtime)
 
     if n_events == 0:
         return pd.Series(dtype=np.float64)
 
-    # Prepare arrays for Numba function
-    start_indices = np.zeros(n_events, dtype=np.int32)
-    end_indices = np.zeros(n_events, dtype=np.int32)
-
-    # Convert datetime indices to integer positions efficiently
-    close_index = close_series.index
-    for i, (t_in, t_out) in enumerate(label_endtime.items()):
-        start_indices[i] = close_index.get_loc(t_in)
-        end_indices[i] = close_index.get_loc(t_out) + 1
+    # Vectorized lookup
+    start_indices = close.index.get_indexer(label_endtime.index)
+    end_indices = close.index.get_indexer_for(label_endtime) + 1 # Guaranteed return of an indexer even when non-unique.
 
     # Get concurrent events as numpy array
     concurrent_counts = num_conc_events.values
@@ -438,10 +427,10 @@ def get_weights_by_time_decay_optimized(
         av_uniqueness = av_uniqueness.to_frame()
 
     # Extract and sort weights by time
-    weights = av_uniqueness["tW"].sort_index()
+    cum_weights = av_uniqueness["tW"].sort_index().cumsum().values
 
     # Apply optimized decay calculation using Numba
-    decay_weights = _apply_time_decay_numba(weights.values, decay, linear)
+    decay_weights = _apply_time_decay_numba(cum_weights, decay, linear)
 
     if verbose:
         print(

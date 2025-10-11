@@ -69,7 +69,7 @@ def avg_active_signals(signals):
     """
     # Convert datetimes to nanoseconds
     signal_times = signals.index.view(np.int64)
-    signal_values = signals["signal"].values
+    signal_values = signals["signal"].to_numpy()
 
     # Convert end times, handling NaT as maximum time
     MAX_TIME = np.iinfo(np.int64).max
