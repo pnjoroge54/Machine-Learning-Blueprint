@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Union
+from typing import Callable, Union
 
 import numpy as np
 import pandas as pd
@@ -8,7 +8,11 @@ from sklearn.base import BaseEstimator, clone
 from sklearn.ensemble import BaggingClassifier
 from sklearn.metrics import precision_recall_curve
 
-from ..cross_validation.cross_validation import PurgedSplit
+from ..cross_validation.cross_validation import (
+    PurgedKFold,
+    PurgedSplit,
+    ml_cross_val_score,
+)
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
 
 
@@ -46,7 +50,8 @@ def train_model(
     test_size: float = 0.3,
     weighting: Union[str, None] = None,
     time_decay: float = 1,
-    linear_decay: bool = False,
+    linear_decay: bool = True,
+    scoring: Callable[np.ndarray, np.ndarray] = None,
 ) -> ModelData:
     """
     Trains a meta-model using labeled financial events and returns structured model output.
@@ -57,8 +62,11 @@ def train_model(
         events (pd.DataFrame): Labeled events with required columns depending on labeling method.
         test_size (float, optional): Fraction of data to reserve for testing. Defaults to 0.3.
         weighting (str or None, optional): Sample weighting method. Options:
-            - "return": Use return-based or t-value-based weights.
+            - "uniqueness": Use uniqueness of labels as weights.
+            - "return": Use return-attribution.
+            - "t-value": Use t-value weights with trend-scanning labels
             - "time": Use time-decay weighting.
+            -- "time+": Use return-attribution x time-decay weighting.
             - None: Equal weights. Defaults to None.
         time_decay (float, optional): Decay factor for time-based weighting. Defaults to 1.
         linear_decay (bool, optional): If True, applies linear decay instead of exponential. Defaults to False.
@@ -74,17 +82,16 @@ def train_model(
     w = pd.Series(1, index=y.index, name="w")  # Sample weights
 
     # Assign sample weights
-    if weighting == "return" and "w" in cont:
+    if weighting == "uniqueness" and "tW" in cont:
+        w = cont["tW"]
+        logger.info("Samples weighted by uniqueness.")
+    elif weighting == "return" and "w" in cont:
         w = cont["w"]
         logger.info("Samples weighted by return attribution.")
     elif weighting == "t_value" and "t_value" in cont:
         w = cont["t_value"].abs()
-        y = y[y != 0]  # Remove zero labels for t-value weighting to speed up training
-        X = X.loc[y.index]
-        w = w.loc[y.index]
-        cont = cont.loc[y.index]
         logger.info("Samples weighted by t_value.")
-    elif weighting == "time":
+    elif weighting is not None and weighting.startswith("time") and "tW" in cont:
         w = get_weights_by_time_decay_optimized(
             triple_barrier_events=cont,
             close_series_index=data_index,
@@ -92,6 +99,11 @@ def train_model(
             linear=linear_decay,
             av_uniqueness=(cont["tW"] if "tW" in cont else None),
         )
+        if weighting == "time+" and "w" in cont:
+            w *= cont["w"]
+            logger.info("Samples weighted by time-decayed return attribution.")
+        else:
+            logger.info("Samples weighted by time-decay")
     else:
         logger.info("Samples are equally weighted.")
 
@@ -309,6 +321,10 @@ def get_optimal_threshold(model_data: ModelData) -> dict:
     #         "Default F1": default_f1,
     #         "Tuned Threshold": best_threshold,
     #         "Tuned Precision": tuned_precision,
+    #         "Tuned Recall": tuned_recall,
+    #         "Tuned F1": tuned_f1,
+    #     }
+    # )
     #         "Tuned Recall": tuned_recall,
     #         "Tuned F1": tuned_f1,
     #     }

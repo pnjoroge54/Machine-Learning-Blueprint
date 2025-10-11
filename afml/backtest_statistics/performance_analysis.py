@@ -413,8 +413,8 @@ def calculate_performance_metrics(
         ),
         "skewness": skewness,
         "kurtosis": kurtosis_,
-        "pos_concentration": positive_concentration,
-        "neg_concentration": negative_concentration,
+        "positive_concentration": positive_concentration,
+        "negative_concentration": negative_concentration,
         "time_concentration": time_concentration,
     }
 
@@ -444,7 +444,7 @@ def calculate_performance_metrics(
     if positions is not None:
         hp = average_holding_period(positions)
         metrics["avg_trade_duration"] = (
-            pd.Timedelta(days=round(hp, 3)) if hp > 0 else hp
+            pd.Timedelta(days=hp).round("1s") if hp > 0 else hp
         )  # Rounded so output doesn't include nanoseconds
         bet_frequency = timing_of_flattening_and_flips(positions).size
         metrics["bet_frequency"] = bet_frequency
@@ -589,29 +589,31 @@ def evaluate_meta_labeling_performance(
 
     # --- Bet Sizing Logic ---
     if bet_sizing is None:
-        bets = meta_events.side.copy()
+
+        meta_bets = meta_events["side"].copy()
         bet_sizing = "none"
     elif bet_sizing == "probability":
-        bets = bet_size_probability(
+        meta_bets = bet_size_probability(
             meta_events, meta_prob, num_classes=2, pred=meta_events["side"], **kwargs
         )
     elif bet_sizing == "budget":
-        bets = bet_size_budget(meta_events["t1"], meta_events["side"])
-        bets = bets["bet_size"]
+        meta_bets = bet_size_budget(meta_events["t1"], meta_events["side"])
+        meta_bets = meta_bets["bet_size"]
     elif bet_sizing == "reserve":
-        bets = bet_size_reserve(meta_events["t1"], meta_events["side"], **kwargs)
-        bets = bets["bet_size"]
+        meta_bets = bet_size_reserve(meta_events["t1"], meta_events["side"], **kwargs)
+        meta_bets = meta_bets["bet_size"]
+
     msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
     msg = msg + f"\n{kwargs}" if kwargs else msg
     logger.info(msg)
 
     # Apply the calculated bet size to the signals that were not filtered out.
-    meta_returns = (returns * bets).dropna()
+    meta_returns = (returns.reindex(meta_events.index) * bets).dropna()
 
     # --- Performance Calculation ---
     data_index = close.index
     primary_positions = get_positions_from_events(data_index, events["t1"], events["side"])
-    meta_positions = get_positions_from_events(data_index, meta_events["t1"], meta_events["side"])
+    meta_positions = get_positions_from_events(data_index, meta_events["t1"], bets)
 
     primary_metrics = calculate_performance_metrics(
         primary_returns,

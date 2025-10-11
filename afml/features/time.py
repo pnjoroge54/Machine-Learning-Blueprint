@@ -110,9 +110,9 @@ def encode_cyclical_features(
 
     # Feature configuration
     features = {
-        "hour": (datetime_index.dt.hour, 24),
-        "dayofweek": (datetime_index.dt.dayofweek, 7),
-        "dayofyear": (datetime_index.dt.dayofyear, 366),
+        "hour": (datetime_index.hour, 24),
+        "dayofweek": (datetime_index.dayofweek, 7),
+        "dayofyear": (datetime_index.dayofyear, 366),
     }
 
     # Process features
