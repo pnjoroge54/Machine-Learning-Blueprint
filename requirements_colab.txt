@@ -7,3 +7,8 @@ feature_engine
 loguru
 ruptures
 appdirs
+fastparquet
+TA-Lib 
+pandas_ta 
+mplfinance 
+deap 
