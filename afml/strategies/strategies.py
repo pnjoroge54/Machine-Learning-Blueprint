@@ -19,7 +19,7 @@ class BaseStrategy(ABC):
 
     @abstractmethod
     def get_objective(self) -> str:
-        """Return strategy objective"""
+        """Return strategy objective from {'mean_reversion', 'trend-following', 'momentum', 'pairs'}"""
         pass
 
 

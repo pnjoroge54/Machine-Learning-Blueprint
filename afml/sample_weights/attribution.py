@@ -113,7 +113,7 @@ def get_weights_by_time_decay(
     triple_barrier_events,
     close_series,
     num_threads=4,
-    decay=1,
+    last_weight=1,
     linear=True,
     av_uniqueness=None,
     verbose=True,
@@ -137,36 +137,40 @@ def get_weights_by_time_decay(
 
     # Calculate cumulative time weights
     cum_time_weights = av_uniqueness["tW"].sort_index().cumsum()
-    
+
     if linear:
         # Apply linear decay (your existing linear code is correct)
-        if decay >= 0:
-            slope = (1 - decay) / cum_time_weights.iloc[-1]
+        if last_weight >= 0:
+            slope = (1 - last_weight) / cum_time_weights.iloc[-1]
         else:
-            slope = 1 / ((decay + 1) * cum_time_weights.iloc[-1])
+            slope = 1 / ((last_weight + 1) * cum_time_weights.iloc[-1])
         const = 1 - slope * cum_time_weights.iloc[-1]
         weights = const + slope * cum_time_weights
         weights[weights < 0] = 0
         return weights
     else:
         # Apply exponential decay
-        if decay == 1:
+        if last_weight == 1:
             return pd.Series(1.0, index=cum_time_weights.index)
-        
+
         if cum_time_weights.iloc[-1] == 0:
             return pd.Series(1.0, index=cum_time_weights.index)
-        
+
         # Calculate normalized position (0 = newest, 1 = oldest)
-        if decay >= 0:
-            # For decay >= 0, use standard exponential decay
-            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (cum_time_weights.iloc[-1] - cum_time_weights.iloc[0])
-            weights = decay ** normalized_position
+        if last_weight >= 0:
+            # For last_weight >= 0, use standard exponential decay
+            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (
+                cum_time_weights.iloc[-1] - cum_time_weights.iloc[0]
+            )
+            weights = last_weight**normalized_position
         else:
-            # For decay < 0, implement cutoff (similar to linear case)
+            # For last_weight < 0, implement cutoff (similar to linear case)
             # This is more complex for exponential - you might want to reconsider this case
-            cutoff_threshold = abs(decay)
-            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (cum_time_weights.iloc[-1] - cum_time_weights.iloc[0])
+            cutoff_threshold = abs(last_weight)
+            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (
+                cum_time_weights.iloc[-1] - cum_time_weights.iloc[0]
+            )
             weights = (1 - cutoff_threshold) ** normalized_position
             weights[weights < 0] = 0
-        
+
         return weights

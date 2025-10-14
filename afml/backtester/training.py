@@ -51,7 +51,6 @@ def train_model(
     weighting: Union[str, None] = None,
     time_decay: float = 1,
     linear_decay: bool = True,
-    scoring: Callable[np.ndarray, np.ndarray] = None,
 ) -> ModelData:
     """
     Trains a meta-model using labeled financial events and returns structured model output.

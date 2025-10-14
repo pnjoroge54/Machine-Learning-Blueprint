@@ -686,6 +686,7 @@ def meta_labeling_classification_report_tables(
         # Add labeling method as top-level index
         df.index = pd.MultiIndex.from_product([[method], df.index], names=["method", "class"])
         report_frames.append(df)
+        print(f"{method} accuracy: {rpt['accuracy']:.3f}")
 
     # Concatenate all into one MultiIndex DataFrame
     combined_df = pd.concat(report_frames)
@@ -886,8 +887,6 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
             key_improvements.append(("Max Drawdown", dd_imp))
 
         avg_improvement = np.mean([imp for _, imp in key_improvements if imp != float("inf")])
-        print(f"avg_improvement: {avg_improvement}")
-        print([imp for _, imp in key_improvements if imp != float("inf")])
 
         if avg_improvement > 10:
             assessment = "✅ Meta-labeling shows SIGNIFICANT improvement"

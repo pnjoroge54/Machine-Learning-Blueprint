@@ -41,32 +41,39 @@ def seq_bootstrap_optimized(active_indices, s_length=None, random_seed=None):
     Args:
         active_indices (dict): Dictionary mapping sample identifiers to arrays of bar indices.
         s_length (int): Desired number of samples to generate.
-        random_seed (int, optional): Seed for random number generation.
+        random_seed (int, RandomState, or None): Seed for random number generation.
 
     Returns:
         list: A list of generated sample indices.
     """
-    np.random.seed(random_seed)  # Set random seed for reproducibility.
-    sample_ids = np.array(list(active_indices.keys()))  # Get array of sample identifiers.
-    phi = []  # Initialize list for sampled indices.
+    # Handle different types of random_seed input
+    if random_seed is None:
+        random_state = np.random.RandomState()
+    elif isinstance(random_seed, np.random.RandomState):
+        random_state = random_seed
+    else:
+        # Convert to integer and create RandomState
+        try:
+            random_state = np.random.RandomState(int(random_seed))
+        except (ValueError, TypeError):
+            random_state = np.random.RandomState()
 
-    # Determine the maximum bar index influenced by all samples for concurrency tracking.
+    sample_ids = np.array(list(active_indices.keys()))
+    phi = []
+
+    # Determine the maximum bar index
     active_indices_values = list(active_indices.values())
     T = max(max(indices) for indices in active_indices_values) + 1 if active_indices else 0
-    concurrency = np.zeros(
-        T, dtype=int
-    )  # Array to track the number of samples influencing each bar.
+    concurrency = np.zeros(T, dtype=int)
 
-    s_length = len(active_indices) if s_length is None else s_length  # Determine sample length.
+    s_length = len(active_indices) if s_length is None else s_length
 
-    # Sequential bootstrap sampling loop.
+    # Sequential bootstrap sampling loop
     for _ in range(s_length):
         prob = _seq_bootstrap_optimized_loop(active_indices_values, concurrency)
-        chosen = np.random.choice(sample_ids, p=prob)  # Choose a sample based on probabilities.
-        phi.append(chosen)  # Append the selected sample.
-        concurrency[
-            active_indices[chosen]
-        ] += 1  # Update concurrency for the chosen sample's indices.
+        chosen = random_state.choice(sample_ids, p=prob)  # Use random_state instead of np.random
+        phi.append(chosen)
+        concurrency[active_indices[chosen]] += 1
 
     return phi
 

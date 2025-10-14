@@ -202,7 +202,7 @@ def _get_average_uniqueness_optimized(label_endtime, num_conc_events):
 
 
 def get_num_conc_events_optimized(
-    close_series_index: pd.DatetimeIndex, label_endtime: pd.Series, verbose: bool = False
+    close_index: pd.DatetimeIndex, label_endtime: pd.Series, verbose: bool = False
 ):
     """
     Advances in Financial Machine Learning, Snippet 4.1, page 60.
@@ -232,7 +232,7 @@ def get_num_conc_events_optimized(
 
     Parameters:
     -----------
-    close_series_index : pd.DatetimeIndex
+    close_index : pd.DatetimeIndex
         Close prices index
     label_endtime : pd.Series
         Label endtime series (t1 for triple barrier events)
@@ -255,7 +255,7 @@ def get_num_conc_events_optimized(
         time0 = time.perf_counter()
 
     # Handle missing values efficiently using vectorized operations
-    relevant_events = label_endtime.fillna(close_series_index[-1])
+    relevant_events = label_endtime.fillna(close_index[-1])
 
     max_end_time = relevant_events.max()
     relevant_events = relevant_events.loc[:max_end_time]
@@ -265,9 +265,9 @@ def get_num_conc_events_optimized(
     end_times = relevant_events.to_numpy(np.int64)
 
     # Find the relevant time range for counting using efficient search
-    time_index = close_series_index.to_numpy(np.int64)
+    time_index = close_index.to_numpy(np.int64)
     start_idx = 0
-    end_idx = close_series_index.searchsorted(max_end_time, side="right")
+    end_idx = close_index.searchsorted(max_end_time, side="right")
 
     # Use Numba-optimized function for heavy computation
     counts = _compute_concurrent_events_numba(
@@ -275,7 +275,7 @@ def get_num_conc_events_optimized(
     )
 
     # Create result series with proper indexing
-    result_index = close_series_index[start_idx:end_idx]
+    result_index = close_index[start_idx:end_idx]
     result = pd.Series(counts, index=result_index)
 
     # Return only the requested range
@@ -291,7 +291,7 @@ def get_num_conc_events_optimized(
 
 def get_av_uniqueness_from_triple_barrier_optimized(
     triple_barrier_events: pd.DataFrame,
-    close_series_index: pd.DatetimeIndex,
+    close_index: pd.DatetimeIndex,
     num_conc_events: pd.Series = None,
     verbose: bool = False,
 ):
@@ -318,7 +318,7 @@ def get_av_uniqueness_from_triple_barrier_optimized(
     -----------
     triple_barrier_events : pd.DataFrame
         Events from labeling.get_events()
-    close_series_index : pd.DatetimeIndex
+    close_index : pd.DatetimeIndex
         Close prices index
     num_conc_events : pd.Series, optional
         Precomputed concurrent events count. If None, will be computed.
@@ -356,14 +356,14 @@ def get_av_uniqueness_from_triple_barrier_optimized(
     def process_concurrent_events(ce):
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
-        ce = ce.reindex(close_series_index).fillna(0)
+        ce = ce.reindex(close_index).fillna(0)
         return ce
 
     # Handle num_conc_events (whether provided or computed)
     if num_conc_events is None:
         # Compute using optimized function
         num_conc_events = get_num_conc_events_optimized(
-            close_series_index,
+            close_index,
             label_endtime=triple_barrier_events["t1"],
             verbose=verbose,
         )
@@ -373,10 +373,10 @@ def get_av_uniqueness_from_triple_barrier_optimized(
         processed_ce = process_concurrent_events(num_conc_events.copy())
 
     # Verify index compatibility
-    missing_in_close = processed_ce.index.difference(close_series_index)
+    missing_in_close = processed_ce.index.difference(close_index)
     assert (
         missing_in_close.empty
-    ), f"num_conc_events contains {len(missing_in_close)} indices not in close_series"
+    ), f"num_conc_events contains {len(missing_in_close)} indices not in close"
 
     # Compute average uniqueness using optimized function
     out["tW"] = _get_average_uniqueness_optimized(

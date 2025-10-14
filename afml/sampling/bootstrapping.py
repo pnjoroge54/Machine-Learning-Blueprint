@@ -2,8 +2,8 @@
 Logic regarding sequential bootstrapping from chapter 4.
 """
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from numba import njit, prange
 
 
@@ -21,18 +21,24 @@ def get_ind_matrix(samples_info_sets, price_bars):
     :param price_bars: (pd.DataFrame): Price bars which were used to form triple barrier events
     :return: (np.array) Indicator binary matrix indicating what (price) bars influence the label for each observation
     """
-    if bool(samples_info_sets.isnull().values.any()) is True or bool(
-            samples_info_sets.index.isnull().any()) is True:
-        raise ValueError('NaN values in triple_barrier_events, delete nans')
+    if (
+        bool(samples_info_sets.isnull().values.any()) is True
+        or bool(samples_info_sets.index.isnull().any()) is True
+    ):
+        raise ValueError("NaN values in triple_barrier_events, delete nans")
 
     triple_barrier_events = pd.DataFrame(samples_info_sets)  # Convert Series to DataFrame
 
     # Take only period covered in triple_barrier_events
-    trimmed_price_bars_index = price_bars[(price_bars.index >= triple_barrier_events.index.min()) &
-                                          (price_bars.index <= triple_barrier_events.t1.max())].index
+    trimmed_price_bars_index = price_bars[
+        (price_bars.index >= triple_barrier_events.index.min())
+        & (price_bars.index <= triple_barrier_events.t1.max())
+    ].index
 
     label_endtime = triple_barrier_events.t1
-    bar_index = list(triple_barrier_events.index)  # Generate index for indicator matrix from t1 and index
+    bar_index = list(
+        triple_barrier_events.index
+    )  # Generate index for indicator matrix from t1 and index
     bar_index.extend(triple_barrier_events.t1)
     bar_index.extend(trimmed_price_bars_index)  # Add price bars index
     bar_index = sorted(list(set(bar_index)))  # Drop duplicates and sort
@@ -40,16 +46,21 @@ def get_ind_matrix(samples_info_sets, price_bars):
     # Get sorted timestamps with index in sorted array
     sorted_timestamps = dict(zip(bar_index, range(len(bar_index))))
 
-    tokenized_endtimes = np.column_stack((label_endtime.index.map(sorted_timestamps), label_endtime.map(
-        sorted_timestamps).values))  # Create array of arrays: [label_index_position, label_endtime_position]
+    tokenized_endtimes = np.column_stack(
+        (
+            label_endtime.index.map(sorted_timestamps).to_numpy(),
+            label_endtime.map(sorted_timestamps).to_numpy(),
+        )
+    )  # Create array of arrays: [label_index_position, label_endtime_position]
 
-    ind_mat = np.zeros((len(bar_index), len(label_endtime)))  # Init indicator matrix
+    ind_mat = np.zeros((len(bar_index), len(label_endtime)), dtype=np.int8)  # Init indicator matrix
     for sample_num, label_array in enumerate(tokenized_endtimes):
         label_index = label_array[0]
         label_endtime = label_array[1]
         ones_array = np.ones(
-            (1, label_endtime - label_index + 1))  # Ones array which corresponds to number of 1 to insert
-        ind_mat[label_index:label_endtime + 1, sample_num] = ones_array
+            (1, label_endtime - label_index + 1), dtype=np.int8
+        )  # Ones array which corresponds to number of 1 to insert
+        ind_mat[label_index : label_endtime + 1, sample_num] = ones_array
     return ind_mat
 
 
@@ -66,7 +77,9 @@ def get_ind_mat_average_uniqueness(ind_mat):
     """
     ind_mat = np.array(ind_mat, dtype=np.float64)
     concurrency = ind_mat.sum(axis=1)
-    uniqueness = np.divide(ind_mat.T, concurrency, out=np.zeros_like(ind_mat.T), where=concurrency != 0)
+    uniqueness = np.divide(
+        ind_mat.T, concurrency, out=np.zeros_like(ind_mat.T), where=concurrency != 0
+    )
 
     avg_uniqueness = uniqueness[uniqueness > 0].mean()
 
@@ -84,11 +97,13 @@ def get_ind_mat_label_uniqueness(ind_mat):
     """
     ind_mat = np.array(ind_mat, dtype=np.float64)
     concurrency = ind_mat.sum(axis=1)
-    uniqueness = np.divide(ind_mat.T, concurrency, out=np.zeros_like(ind_mat.T), where=concurrency != 0)
+    uniqueness = np.divide(
+        ind_mat.T, concurrency, out=np.zeros_like(ind_mat.T), where=concurrency != 0
+    )
     return uniqueness
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
     """
     Part of Sequential Bootstrapping for-loop. Using previously accumulated concurrency array, loops through all samples
@@ -107,15 +122,23 @@ def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
         for j in range(len(reduced_mat)):  # pylint: disable=consider-using-enumerate
             if reduced_mat[j] > 0:
                 new_el = reduced_mat[j] / (reduced_mat[j] + prev_concurrency[j])
-                average_uniqueness = (prev_average_uniqueness * number_of_elements + new_el) / (number_of_elements + 1)
+                average_uniqueness = (prev_average_uniqueness * number_of_elements + new_el) / (
+                    number_of_elements + 1
+                )
                 number_of_elements += 1
                 prev_average_uniqueness = average_uniqueness
         avg_unique[i] = average_uniqueness
     return avg_unique
 
 
-def seq_bootstrap(ind_mat, sample_length=None, warmup_samples=None, compare=False, verbose=False,
-                  random_state=np.random.RandomState()):
+def seq_bootstrap(
+    ind_mat,
+    sample_length=None,
+    warmup_samples=None,
+    compare=False,
+    verbose=False,
+    random_state=np.random.RandomState(),
+):
     """
     Advances in Financial Machine Learning, Snippet 4.5, Snippet 4.6, page 65.
 
@@ -158,6 +181,8 @@ def seq_bootstrap(ind_mat, sample_length=None, warmup_samples=None, compare=Fals
         standard_indx = np.random.choice(ind_mat.shape[1], size=sample_length)
         standard_unq = get_ind_mat_average_uniqueness(ind_mat[:, standard_indx])
         sequential_unq = get_ind_mat_average_uniqueness(ind_mat[:, phi])
-        print(f'Standard uniqueness: {standard_unq:.4f}\nSequential uniqueness: {sequential_unq:.4f}')
+        print(
+            f"Standard uniqueness: {standard_unq:.4f}\nSequential uniqueness: {sequential_unq:.4f}"
+        )
 
     return phi

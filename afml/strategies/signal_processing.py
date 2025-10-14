@@ -87,9 +87,11 @@ def get_entries(
         filtered_events = cusum_filter(close, filter_threshold)
         signal_mask &= primary_signals.index.isin(filtered_events)
         thres = (
-            f" (threshold = {filter_threshold:.4%})" if isinstance(filter_threshold, float) else ""
+            f"(threshold = {filter_threshold:.4%})"
+            if isinstance(filter_threshold, float)
+            else "using series"
         )
-        msg = f" selected by CUSUM filter{thres}"
+        msg = f" selected by CUSUM filter {thres}"
     else:
         # Vectorized signal change detection
         if on_crossover:

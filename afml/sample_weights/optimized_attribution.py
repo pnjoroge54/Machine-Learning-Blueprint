@@ -88,19 +88,19 @@ def _compute_return_weights_numba(
 
 
 @njit(fastmath=True, cache=True)
-def _apply_time_decay_numba(cumulative_time_weights, decay_factor, linear_decay=True):
+def _apply_time_decay_numba(cumulative_time_weights, last_weight, linear_decay=True):
     """
     Numba-optimized function to apply time decay to pre-computed cumulative time weights.
-    
+
     Parameters:
     -----------
     cumulative_time_weights : np.ndarray
         Pre-computed cumulative time weights (equivalent to decay_w from original)
-    decay_factor : float
-        Decay factor
+    last_weight : float
+        Weight of oldest observation
     linear_decay : bool
         Whether to use linear (True) or exponential (False) decay
-        
+
     Returns:
     --------
     np.ndarray
@@ -109,15 +109,15 @@ def _apply_time_decay_numba(cumulative_time_weights, decay_factor, linear_decay=
     n = len(cumulative_time_weights)
     if n == 0:
         return cumulative_time_weights
-    
+
     max_cumulative = cumulative_time_weights[-1]
-    
+
     if linear_decay:
         decay_weights = np.empty(n, dtype=np.float64)
-        
-        if decay_factor >= 0:
+
+        if last_weight >= 0:
             if max_cumulative > 1e-12:  # Avoid division by zero
-                slope = (1.0 - decay_factor) / max_cumulative
+                slope = (1.0 - last_weight) / max_cumulative
                 const = 1.0 - slope * max_cumulative
                 for i in range(n):
                     weight = const + slope * cumulative_time_weights[i]
@@ -126,40 +126,40 @@ def _apply_time_decay_numba(cumulative_time_weights, decay_factor, linear_decay=
                 # All weights are zero, return uniform weights
                 decay_weights[:] = 1.0
         else:
-            # decay_factor < 0 case
+            # last_weight < 0 case
             if max_cumulative > 1e-12:
-                slope = 1.0 / ((decay_factor + 1.0) * max_cumulative)
+                slope = 1.0 / ((last_weight + 1.0) * max_cumulative)
                 for i in range(n):
                     weight = slope * cumulative_time_weights[i]
                     decay_weights[i] = max(0.0, weight)
             else:
                 decay_weights[:] = 0.0
-                
+
         return decay_weights
-        
+
     else:
         # Exponential decay
-        if abs(decay_factor - 1.0) < 1e-12:
+        if abs(last_weight - 1.0) < 1e-12:
             return np.ones(n, dtype=np.float64)
-            
+
         if max_cumulative < 1e-12:
             return np.ones(n, dtype=np.float64)
-            
+
         decay_weights = np.empty(n, dtype=np.float64)
         max_age = max_cumulative - cumulative_time_weights[0]
-        
+
         if max_age > 1e-12:
             for i in range(n):
                 age = max_cumulative - cumulative_time_weights[i]
                 norm_age = age / max_age
                 # More stable calculation for extreme values
-                if abs(decay_factor) > 1e-12:
-                    decay_weights[i] = np.exp(norm_age * np.log(abs(decay_factor)))
+                if abs(last_weight) > 1e-12:
+                    decay_weights[i] = np.exp(norm_age * np.log(abs(last_weight)))
                 else:
                     decay_weights[i] = 0.0
         else:
             decay_weights[:] = 1.0
-            
+
         return decay_weights
 
 
@@ -210,7 +210,9 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close):
 
     # Vectorized lookup
     start_indices = close.index.get_indexer(label_endtime.index)
-    end_indices = close.index.get_indexer_for(label_endtime) + 1 # Guaranteed return of an indexer even when non-unique.
+    end_indices = (
+        close.index.get_indexer_for(label_endtime) + 1
+    )  # Guaranteed return of an indexer even when non-unique.
 
     # Get concurrent events as numpy array
     concurrent_counts = num_conc_events.values
@@ -230,7 +232,7 @@ def _apply_weight_by_return_optimized(label_endtime, num_conc_events, close):
 
 def get_weights_by_return_optimized(
     triple_barrier_events,
-    close_series,
+    close,
     num_conc_events=None,
     verbose=False,
 ):
@@ -258,7 +260,7 @@ def get_weights_by_return_optimized(
     -----------
     triple_barrier_events : pd.DataFrame
         Events from labeling.get_events()
-    close_series : pd.Series
+    close : pd.Series
         Close prices
     num_conc_events : pd.Series, optional
         Precomputed concurrent events count. If None, will be computed.
@@ -297,14 +299,14 @@ def get_weights_by_return_optimized(
     def process_concurrent_events(ce):
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
-        ce = ce.reindex(close_series.index).fillna(0)
+        ce = ce.reindex(close.index).fillna(0)
         return ce
 
     # Handle num_conc_events (whether provided or computed)
     if num_conc_events is None:
         # Compute concurrent events using optimized function
         num_conc_events = get_num_conc_events_optimized(
-            close_series.index, triple_barrier_events["t1"], verbose
+            close.index, triple_barrier_events["t1"], verbose
         )
         processed_ce = process_concurrent_events(num_conc_events)
     else:
@@ -312,16 +314,16 @@ def get_weights_by_return_optimized(
         processed_ce = process_concurrent_events(num_conc_events.copy())
 
         # Verify index compatibility
-        missing_in_close = processed_ce.index.difference(close_series.index)
+        missing_in_close = processed_ce.index.difference(close.index)
         assert missing_in_close.empty, (
-            f"num_conc_events contains {len(missing_in_close)} " "indices not in close_series"
+            f"num_conc_events contains {len(missing_in_close)} " "indices not in close"
         )
 
     # Compute weights using optimized parallel processing
     weights = _apply_weight_by_return_optimized(
         label_endtime=triple_barrier_events["t1"],
         num_conc_events=processed_ce,
-        close_series=close_series,
+        close=close,
     )
 
     # Normalize weights to sum to number of observations
@@ -337,7 +339,7 @@ def get_weights_by_return_optimized(
 
 def get_weights_by_time_decay_optimized(
     triple_barrier_events,
-    close_series_index,
+    close_index,
     decay=1,
     linear=True,
     av_uniqueness=None,
@@ -366,7 +368,7 @@ def get_weights_by_time_decay_optimized(
     -----------
     triple_barrier_events : pd.DataFrame
         Events from labeling.get_events()
-    close_series_index : pd.DatetimeIndex
+    close_index : pd.DatetimeIndex
         Close prices index
     decay : float, default=1
         Decay factor:
@@ -420,21 +422,21 @@ def get_weights_by_time_decay_optimized(
     if av_uniqueness is None:
         av_uniqueness = get_av_uniqueness_from_triple_barrier_optimized(
             triple_barrier_events,
-            close_series_index,
+            close_index,
             verbose=verbose,
         )
     elif isinstance(av_uniqueness, pd.Series):
         av_uniqueness = av_uniqueness.to_frame()
 
     # Extract and sort weights by time
-    cum_weights = av_uniqueness["tW"].sort_index().cumsum().values
+    cum_weights = av_uniqueness["tW"].sort_index().cumsum()
 
     # Apply optimized decay calculation using Numba
-    decay_weights = _apply_time_decay_numba(cum_weights, decay, linear)
+    decay_weights = _apply_time_decay_numba(cum_weights.values, decay, linear)
 
     if verbose:
         print(
             f"get_weights_by_time_decay_optimized done after {timedelta(seconds=round(time.perf_counter() - time0))}."
         )
 
-    return pd.Series(decay_weights, index=weights.index)
+    return pd.Series(decay_weights, index=cum_weights.index)

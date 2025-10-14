@@ -57,36 +57,28 @@ def _generate_random_features(random_state, bootstrap, n_population, n_samples):
 
 
 def _generate_bagging_indices(
-    random_state, bootstrap_features, n_features, max_features, max_samples, ind_mat
+    random_state, bootstrap_features, n_features, max_features, max_samples, active_indices
 ):
     """Randomly draw feature and sample indices."""
-    # Get valid random state
-    random_state = check_random_state(random_state)
+    # Get valid random state - this returns a RandomState object
+    random_state_obj = check_random_state(random_state)
 
     # Draw samples using sequential bootstrap
-
-    # Limit samples if max_samples is specified
     if isinstance(max_samples, numbers.Integral):
-        if max_samples > len(sample_indices):
-            warn(
-                "max_samples (%d) is greater than the total number of samples (%d). "
-                "Using all samples." % (max_samples, len(sample_indices))
-            )
-            sample_indices = seq_bootstrap_optimized(
-                ind_mat, s_length=None, random_seed=random_state
-            )
-        else:
-            sample_indices = seq_bootstrap_optimized(
-                ind_mat, s_length=max_samples, random_seed=random_state
-            )
-
-    elif isinstance(max_samples, numbers.Real):
-        n_samples = int(round(max_samples * len(sample_indices)))
         sample_indices = seq_bootstrap_optimized(
-            ind_mat, s_length=n_samples, random_seed=random_state
+            active_indices, s_length=max_samples, random_seed=random_state_obj
+        )
+    elif isinstance(max_samples, numbers.Real):
+        n_samples = int(round(max_samples * len(active_indices)))
+        sample_indices = seq_bootstrap_optimized(
+            active_indices, s_length=n_samples, random_seed=random_state_obj
+        )
+    else:
+        sample_indices = seq_bootstrap_optimized(
+            active_indices, s_length=None, random_seed=random_state_obj
         )
 
-    # Draw feature indices
+    # Draw feature indices using the same random state
     if isinstance(max_features, numbers.Integral):
         n_feat = max_features
     elif isinstance(max_features, numbers.Real):
@@ -95,19 +87,19 @@ def _generate_bagging_indices(
         raise ValueError("max_features must be int or float")
 
     feature_indices = _generate_random_features(
-        random_state, bootstrap_features, n_features, n_feat
+        random_state_obj, bootstrap_features, n_features, n_feat
     )
 
     return sample_indices, feature_indices
 
 
 def _parallel_build_estimators(
-    n_estimators, ensemble, X, y, ind_mat, sample_weight, seeds, total_n_estimators, verbose
+    n_estimators, ensemble, X, y, active_indices, sample_weight, seeds, total_n_estimators, verbose
 ):
     """Private function used to build a batch of estimators within a job."""
     # Retrieve settings
     n_samples, n_features = X.shape
-    max_samples = ensemble.max_samples
+    max_samples = ensemble._max_samples
     max_features = ensemble.max_features
     bootstrap_features = ensemble.bootstrap_features
     support_sample_weight = has_fit_parameter(ensemble.estimator_, "sample_weight")
@@ -129,7 +121,7 @@ def _parallel_build_estimators(
 
         # Draw samples and features
         sample_indices, feature_indices = _generate_bagging_indices(
-            random_state, bootstrap_features, n_features, max_features, max_samples, ind_mat
+            random_state, bootstrap_features, n_features, max_features, max_samples, active_indices
         )
 
         # Draw samples, using sample weights if supported
@@ -187,7 +179,14 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
 
         self.samples_info_sets = samples_info_sets
         self.price_bars_index = price_bars_index
-        self.ind_mat_ = None
+        self.active_indices_ = None
+        self._estimators_samples = []  # Initialize private variable
+        self._seeds = None  # Initialize the attribute
+
+    @property
+    def estimators_samples_(self):
+        """Return the stored sample indices for each estimator."""
+        return self._estimators_samples
 
     def fit(self, X, y, sample_weight=None):
         """
@@ -238,8 +237,17 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         -------
         self : (object)
         """
+        # Set classes_ and n_classes_ for classifier compatibility
+        if hasattr(self, "classes_") and not hasattr(self, "n_classes_"):
+            # This is a classifier, set the required attributes
+            self.classes_ = np.unique(y)
+            self.n_classes_ = len(self.classes_)
         # Validate parameters
         random_state = check_random_state(self.random_state)
+
+        # Generate random seeds for each estimator, just like BaseBagging does
+        random_state = check_random_state(self.random_state)
+        self._seeds = random_state.randint(np.iinfo(np.int32).max, size=self.n_estimators)
 
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
@@ -271,13 +279,15 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         self._max_samples = max_samples
 
         # Compute indicator matrix for sequential bootstrap
-        if self.ind_mat_ is None:
-            self.ind_mat_ = precompute_active_indices(self.samples_info_sets, self.price_bars_index)
+        if self.active_indices_ is None:
+            self.active_indices_ = precompute_active_indices(
+                self.samples_info_sets, self.price_bars_index
+            )
 
         # Check if indicator matrix matches data shape
-        if len(self.ind_mat_) != n_samples:
+        if len(self.active_indices_) != n_samples:
             raise ValueError(
-                f"Indicator matrix shape {len(self.ind_mat_)} "
+                f"Indicator matrix shape {len(self.active_indices_)} "
                 f"does not match number of samples {n_samples}"
             )
 
@@ -286,7 +296,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
             # Free allocated memory, if any
             self.estimators_ = []
             self.estimators_features_ = []
-            self.estimators_samples_ = []
+            self._estimators_samples = []  # Use private variable instead of property
 
         n_more_estimators = self.n_estimators - len(self.estimators_)
 
@@ -308,6 +318,12 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         # Generate random seeds for each estimator
         seeds = random_state.randint(MAX_INT, size=n_more_estimators)
 
+        # Store seeds for sklearn compatibility (used by estimators_samples_ property)
+        if not hasattr(self, "_seeds"):
+            self._seeds = seeds
+        else:
+            self._seeds = np.concatenate([self._seeds, seeds])
+
         # Build estimators in parallel
         all_results = Parallel(n_jobs=n_jobs, verbose=self.verbose)(
             delayed(_parallel_build_estimators)(
@@ -315,7 +331,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
                 self,
                 X,
                 y,
-                self.ind_mat_,
+                self.active_indices_,
                 sample_weight,
                 seeds[starts[i] : starts[i + 1]],
                 total_n_estimators,
@@ -328,7 +344,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         for result in all_results:
             self.estimators_ += result[0]
             self.estimators_features_ += result[1]
-            self.estimators_samples_ += result[2]
+            self._estimators_samples += result[2]  # Use private variable
 
         # Compute OOB score if requested
         if self.oob_score:
@@ -341,71 +357,8 @@ class SequentiallyBootstrappedBaggingClassifier(
     SequentiallyBootstrappedBaseBagging, BaggingClassifier, ClassifierMixin
 ):
     """
-    A Sequentially Bootstrapped Bagging classifier is an ensemble meta-estimator that fits base
-    classifiers each on random subsets of the original dataset generated using
-    Sequential Bootstrapping sampling procedure and then aggregate their individual predictions (
-    either by voting or by averaging) to form a final prediction. Such a meta-estimator can typically be used as
-    a way to reduce the variance of a black-box estimator (e.g., a decision
-    tree), by introducing randomization into its construction procedure and
-    then making an ensemble out of it.
-
-    :param samples_info_sets: (pd.Series), The information range on which each record is constructed from
-        *samples_info_sets.index*: Time when the information extraction started.
-        *samples_info_sets.value*: Time when the information extraction ended.
-    :param price_bars_index: (pd.DatetimeIndex)
-        Index of price bars used in samples_info_sets generation
-    :param estimator: (object or None), optional (default=None)
-        The base estimator to fit on random subsets of the dataset.
-        If None, then the base estimator is a decision tree.
-    :param n_estimators: (int), optional (default=10)
-        The number of base estimators in the ensemble.
-    :param max_samples: (int or float), optional (default=1.0)
-        The number of samples to draw from X to train each base estimator.
-        If int, then draw `max_samples` samples. If float, then draw `max_samples * X.shape[0]` samples.
-    :param max_features: (int or float), optional (default=1.0)
-        The number of features to draw from X to train each base estimator.
-        If int, then draw `max_features` features. If float, then draw `max_features * X.shape[1]` features.
-    :param bootstrap_features: (bool), optional (default=False)
-        Whether features are drawn with replacement.
-    :param oob_score: (bool), optional (default=False)
-        Whether to use out-of-bag samples to estimate
-        the generalization error.
-    :param warm_start: (bool), optional (default=False)
-        When set to True, reuse the solution of the previous call to fit
-        and add more estimators to the ensemble, otherwise, just fit
-        a whole new ensemble.
-    :param n_jobs: (int or None), optional (default=None)
-        The number of jobs to run in parallel for both `fit` and `predict`.
-        ``None`` means 1 unless in a :obj:`joblib.parallel_backend` context.
-        ``-1`` means using all processors.
-    :param random_state: (int), RandomState instance or None, optional (default=None)
-        If int, random_state is the seed used by the random number generator;
-        If RandomState instance, random_state is the random number generator;
-        If None, the random number generator is the RandomState instance used
-        by `np.random`.
-    :param verbose: (int), optional (default=0)
-        Controls the verbosity when fitting and predicting.
-
-    :ivar estimator_: (estimator)
-        The base estimator from which the ensemble is grown.
-    :ivar estimators_: (list of estimators)
-        The collection of fitted base estimators.
-    :ivar estimators_samples_: (list of arrays)
-        The subset of drawn samples (i.e., the in-bag samples) for each base
-        estimator. Each subset is defined by an array of the indices selected.
-    :ivar estimators_features_: (list of arrays)
-        The subset of drawn features for each base estimator.
-    :ivar classes_: (array) of shape = [n_classes]
-        The classes labels.
-    :ivar n_classes_: (int or list)
-        The number of classes.
-    :ivar oob_score_: (float)
-        Score of the training dataset obtained using an out-of-bag estimate.
-    :ivar oob_decision_function_: (array) of shape = [n_samples, n_classes]
-        Decision function computed with out-of-bag estimate on the training
-        set. If n_estimators is small it might be possible that a data point
-        was never left out during the bootstrap. In this case,
-        `oob_decision_function_` might contain NaN.
+    A Sequentially Bootstrapped Bagging classifier...
+    [keep your existing docstring]
     """
 
     def __init__(
@@ -442,15 +395,32 @@ class SequentiallyBootstrappedBaggingClassifier(
         """Check the estimator and set the estimator_ attribute."""
         super()._validate_estimator(default=DecisionTreeClassifier())
 
+    def _fit(self, X, y, max_samples=None, max_depth=None, sample_weight=None):
+        """
+        Override _fit to set classes_ and n_classes_ for classifier compatibility.
+        """
+        # Set classes_ and n_classes_ before calling parent _fit
+        self.classes_ = np.unique(y)
+        self.n_classes_ = len(self.classes_)
+
+        # Call parent _fit method
+        return super()._fit(X, y, max_samples, max_depth, sample_weight)
+
     def _set_oob_score(self, X, y):
         """Compute out-of-bag score"""
+
+        # Safeguard: Ensure n_classes_ is set
+        if not hasattr(self, "n_classes_"):
+            self.classes_ = np.unique(y)
+            self.n_classes_ = len(self.classes_)
+
         n_samples = y.shape[0]
         n_classes = self.n_classes_
 
         predictions = np.zeros((n_samples, n_classes))
 
         for estimator, samples, features in zip(
-            self.estimators_, self.estimators_samples_, self.estimators_features_
+            self.estimators_, self._estimators_samples, self.estimators_features_
         ):
             # Create mask for OOB samples
             mask = ~indices_to_mask(samples, n_samples)
@@ -583,7 +553,7 @@ class SequentiallyBootstrappedBaggingRegressor(
         n_predictions = np.zeros(n_samples)
 
         for estimator, samples, features in zip(
-            self.estimators_, self.estimators_samples_, self.estimators_features_
+            self.estimators_, self._estimators_samples, self.estimators_features_
         ):
             # Create mask for OOB samples
             mask = ~indices_to_mask(samples, n_samples)
@@ -595,12 +565,6 @@ class SequentiallyBootstrappedBaggingRegressor(
                 n_predictions[mask] += 1
 
         # Avoid division by zero
-        mask = n_predictions > 0
-        if np.any(mask):
-            predictions[mask] /= n_predictions[mask]
-
-        self.oob_prediction_ = predictions
-        self.oob_score_ = r2_score(y[mask], predictions[mask])
         mask = n_predictions > 0
         if np.any(mask):
             predictions[mask] /= n_predictions[mask]
