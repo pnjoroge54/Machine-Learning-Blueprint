@@ -6,8 +6,8 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator
-from sklearn.metrics import log_loss
+from sklearn.base import ClassifierMixin
+from sklearn.metrics import accuracy_score, f1_score, log_loss
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection._split import _BaseKFold
 
@@ -149,7 +149,7 @@ class PurgedSplit:
 
 # noinspection PyPep8Naming
 def ml_cross_val_score(
-    classifier: BaseEstimator,
+    classifier: ClassifierMixin,
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
@@ -164,7 +164,7 @@ def ml_cross_val_score(
 
     Using the PurgedKFold Class.
 
-    Function to run a cross-validation evaluation of the using sample weights and a custom CV generator.
+    Function to run a cross-validation evaluation of the classifier using sample weights and a custom CV generator.
 
     Note: This function is different to the book in that it requires the user to pass through a CV object. The book
     will accept a None value as a default and then resort to using PurgedCV, this also meant that extra arguments had to
@@ -214,9 +214,95 @@ def ml_cross_val_score(
             )
         elif scoring == probability_weighted_accuracy:
             prob = fit.predict_proba(X.iloc[test, :])
-            score = scoring(y.iloc[test], prob, sample_weight=sample_weight_score[test])
+            score = scoring(
+                y.iloc[test],
+                prob,
+                sample_weight=sample_weight_score[test],
+                labels=classifier.classes_,
+            )
         else:
             pred = fit.predict(X.iloc[test, :])
             score = scoring(y.iloc[test], pred, sample_weight=sample_weight_score[test])
         ret_scores.append(score)
     return np.array(ret_scores)
+
+
+def ml_cross_val_scores_all(
+    classifier: ClassifierMixin,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv_gen: BaseCrossValidator,
+    sample_weight_train: np.ndarray = None,
+    sample_weight_score: np.ndarray = None,
+):
+    # pylint: disable=invalid-name
+    # pylint: disable=comparison-with-callable
+    """
+    Advances in Financial Machine Learning, Snippet 7.4, page 110.
+
+    Using the PurgedKFold Class.
+
+    Function to run a cross-validation evaluation of the classifier using sample weights and a custom CV generator.
+    Scores are computed using accuracy_score, probability_weighted_accuracy, log_loss and f1_score.
+
+    Note: This function is different to the book in that it requires the user to pass through a CV object. The book
+    will accept a None value as a default and then resort to using PurgedCV, this also meant that extra arguments had to
+    be passed to the function. To correct this we have removed the default and require the user to pass a CV object to
+    the function.
+
+    Example:
+
+    .. code-block:: python
+
+        cv_gen = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=pct_embargo)
+        scores_array = ml_cross_val_score(classifier, X, y, cv_gen, sample_weight_train=sample_train,
+                                          sample_weight_score=sample_score, scoring=accuracy_score)
+
+    :param classifier: (BaseEstimator) A scikit-learn Classifier object instance.
+    :param X: (pd.DataFrame) The dataset of records to evaluate.
+    :param y: (pd.Series) The labels corresponding to the X dataset.
+    :param cv_gen: (BaseCrossValidator) Cross Validation generator object instance.
+    :param sample_weight_train: (np.array) Sample weights used to train the model for each record in the dataset.
+    :param sample_weight_score: (np.array) Sample weights used to evaluate the model quality.
+    :return: (dict) The computed scores.
+    """
+    scoring_methods = [accuracy_score, probability_weighted_accuracy, log_loss, f1_score]
+    ret_scores = {
+        scoring.__name__ if scoring != log_loss else "neg_log_loss": []
+        for scoring in scoring_methods
+    }
+
+    # If no sample_weight then broadcast a value of 1 to all samples (full weight).
+    if sample_weight_train is None:
+        sample_weight_train = np.ones((X.shape[0],))
+
+    if sample_weight_score is None:
+        sample_weight_score = np.ones((X.shape[0],))
+
+    # Score model on KFolds
+    for train, test in cv_gen.split(X=X, y=y):
+        fit = classifier.fit(
+            X=X.iloc[train, :],
+            y=y.iloc[train],
+            sample_weight=sample_weight_train[train],
+        )
+        prob = fit.predict_proba(X.iloc[test, :])
+        pred = fit.predict(X.iloc[test, :])
+        for method, scoring in zip(ret_scores.keys(), scoring_methods):
+            if scoring in (accuracy_score, f1_score):
+                score = scoring(y.iloc[test], pred, sample_weight=sample_weight_score[test])
+            else:
+                score = scoring(
+                    y.iloc[test],
+                    prob,
+                    sample_weight=sample_weight_score[test],
+                    labels=classifier.classes_,
+                )
+                if method == "neg_log_loss":
+                    score *= -1
+            ret_scores[method].append(score)
+
+    for k, v in ret_scores.items():
+        ret_scores[k] = np.array(v)
+
+    return ret_scores

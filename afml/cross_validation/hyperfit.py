@@ -7,7 +7,7 @@ from .cross_validation import PurgedKFold
 
 
 class MyPipeline(Pipeline):
-    """Allows for asample_weight in fit method"""
+    """Allows for a sample_weight in fit method"""
 
     def fit(self, X, y, sample_weight=None, **fit_params):
         if sample_weight is not None:
