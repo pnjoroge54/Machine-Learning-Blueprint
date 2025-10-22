@@ -3,13 +3,9 @@ Optimized implementation of logic regarding sequential bootstrapping from chapte
 """
 
 import numpy as np
-import pandas as pd
-from numba import jit, njit, prange
+from numba import njit
 from numba.core import types
 from numba.typed import Dict
-from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
 
 @njit(cache=True)

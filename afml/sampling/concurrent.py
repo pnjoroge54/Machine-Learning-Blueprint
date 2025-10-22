@@ -14,8 +14,8 @@ def num_concurrent_events(close_series_index, label_endtime, molecule):
 
     Estimating the Uniqueness of a Label
 
-    This function uses close series prices and label endtime (when the first barrier is touched) to compute the number
-    of concurrent events per bar.
+    This function uses close series prices and label endtime (when the first barrier is touched)
+    to compute the number of concurrent events per bar.
 
     :param close_series_index: (pd.Series) Close prices index
     :param label_endtime: (pd.Series) Label endtime series (t1 for triple barrier events)
@@ -48,8 +48,8 @@ def _get_average_uniqueness(label_endtime, num_conc_events, molecule):
 
     Estimating the Average Uniqueness of a Label
 
-    This function uses close series prices and label endtime (when the first barrier is touched) to compute the number
-    of concurrent events per bar.
+    This function uses close series prices and label endtime (when the first barrier is touched)
+    to compute the number of concurrent events per bar.
 
     :param label_endtime: (pd.Series) Label endtime series (t1 for triple barrier events)
     :param num_conc_events: (pd.Series) Number of concurrent labels (output from num_concurrent_events function).

@@ -6,6 +6,7 @@ from .combinatorial import CombinatorialPurgedKFold
 from .cross_validation import (
     PurgedKFold,
     PurgedSplit,
+    best_weighting_by_mean_score,
     ml_cross_val_score,
     ml_cross_val_scores_all,
     ml_get_train_times,
@@ -23,4 +24,5 @@ __all__ = [
     "MyPipeline",
     "clf_hyper_fit",
     "CombinatorialPurgedKFold",
+    "best_weighting_by_mean_score",
 ]

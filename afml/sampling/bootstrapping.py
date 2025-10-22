@@ -6,7 +6,10 @@ import numpy as np
 import pandas as pd
 from numba import njit, prange
 
+from ..util.misc import log_performance
 
+
+@log_performance
 def get_ind_matrix(samples_info_sets, price_bars):
     """
     Advances in Financial Machine Learning, Snippet 4.3, page 65.
@@ -103,7 +106,7 @@ def get_ind_mat_label_uniqueness(ind_mat):
     return uniqueness
 
 
-@njit(parallel=True, cache=True)
+@njit(cache=True)
 def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
     """
     Part of Sequential Bootstrapping for-loop. Using previously accumulated concurrency array, loops through all samples
@@ -115,7 +118,7 @@ def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
     """
     avg_unique = np.zeros(ind_mat.shape[1])  # Array of label uniqueness
 
-    for i in prange(ind_mat.shape[1]):  # pylint: disable=not-an-iterable
+    for i in range(ind_mat.shape[1]):  # pylint: disable=not-an-iterable
         prev_average_uniqueness = 0
         number_of_elements = 0
         reduced_mat = ind_mat[:, i]

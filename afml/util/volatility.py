@@ -132,7 +132,7 @@ def get_parkinson_vol(high: pd.Series, low: pd.Series, window: int = 20) -> pd.S
     return np.sqrt(estimator.rolling(window=window).mean())
 
 
-def get_garman_class_vol(
+def get_garman_klass_vol(
     open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 20
 ) -> pd.Series:
     """
@@ -328,17 +328,17 @@ def two_time_scale_realized_vol(tick_prices: pd.Series, slow_freq: str = "5min")
 """
 VOLATILITY ESTIMATOR SELECTION GUIDE:
 
-╔══════════════════╦═══════════════╦══════════════════╦═══════════════════════╗
-║   Strategy Type  ║   Data Freq   ║   Time Horizon   ║   Recommended Method  ║
-╠══════════════════╬═══════════════╬══════════════════╬═══════════════════════╣
-║ Daily+ Swing     ║ Daily OHLC    ║ Days to Weeks    ║ Yang-Zhang            ║
-║ Daily+ Trend     ║ Daily Close   ║ Days to Months   ║ get_daily_vol (EWM)   ║
-║ Intraday Mean    ║ Intraday OHLC ║ Hours            ║ Garman-Klass          ║
-║ Scalping         ║ Minute/Tick   ║ Minutes          ║ Two-Time-Scale RV     ║
-║ Crypto/Forex     ║ Any frequency ║ Any              ║ Parkinson (24/7)      ║
-║ Risk Management  ║ Daily OHLC    ║ Portfolio level  ║ Yang-Zhang            ║
+╔══════════════════╦═══════════════╦═══════════════════╦═══════════════════════╗
+║   Strategy Type  ║   Data Freq   ║   Time Horizon    ║ Recommended Method    ║
+╠══════════════════╬═══════════════╬═══════════════════╬═══════════════════════╣
+║ Daily+ Swing     ║ Daily OHLC    ║ Days to Weeks     ║ Yang-Zhang            ║
+║ Daily+ Trend     ║ Daily Close   ║ Days to Months    ║ get_daily_vol (EWM)   ║
+║ Intraday Mean    ║ Intraday OHLC ║ Hours             ║ Garman-Klass          ║
+║ Scalping         ║ Minute/Tick   ║ Minutes           ║ Two-Time-Scale RV     ║
+║ Crypto/Forex     ║ Any frequency ║ Any               ║ Parkinson (24/7)      ║
+║ Risk Management  ║ Daily OHLC    ║ Portfolio level   ║ Yang-Zhang            ║
 ║ Research/Backtest║ Best available║ Strategy dependent║ Highest quality avail ║
-╚══════════════════╩═══════════════╩══════════════════╩═══════════════════════╝
+╚══════════════════╩═══════════════╩═══════════════════╩═══════════════════════╝
 
 KEY DECISION FACTORS:
 1. **Overnight Risk**: Yang-Zhang if overnight gaps matter, Parkinson if not

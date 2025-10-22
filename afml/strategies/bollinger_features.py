@@ -6,10 +6,10 @@ import mplfinance as mpf
 import pandas as pd
 
 from ..cache.selective_cleaner import smart_cacheable
-from ..features.moving_averages import calculate_ma_differences
+from ..features.moving_averages import calculate_ma_differences, get_ma_crossovers
 from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
-from ..util.volatility import get_period_vol, get_yang_zhang_vol
+from ..util.volatility import get_garman_klass_vol, get_period_vol
 from .signal_processing import get_entries
 from .strategies import BollingerStrategy
 
@@ -23,8 +23,8 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
     features["spread"] = df["spread"] / df["close"]
 
     # --- 1. Returns Features ---
-    # Yang-Zhang Volatility
-    features["vol"] = get_yang_zhang_vol(df.open, df.high, df.low, df.close, window=bb_period)
+    # Garman Volatility
+    features["vol"] = get_garman_klass_vol(df.open, df.high, df.low, df.close, window=bb_period)
 
     # Hourly EWM(num_hours) Volatility
     for num_hours in (1, 4, 24):
@@ -68,15 +68,16 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
     ta_features = [bbands, tr, atr, rsi, stochrsi, adx, macd]
     features = features.join(ta_features)
 
-    # --- 3. Moving Average Differences ---
-    windows = (5, 20, 50, 100, 200)
+    # --- 3. Moving Average Features ---
+    windows = (10, 20, 50, 100, 200)
     ma_diffs = calculate_ma_differences(df.close, windows)
     ma_diffs = ma_diffs.div(atr, axis=0)  # Normalize by ATR
-    features = features.join(ma_diffs)
+    ma_crossovers = get_ma_crossovers(df.close, windows)
+    features = features.join([ma_diffs, ma_crossovers])
 
-    # --- 4. Add side prediction after lagging other features ---
+    # --- 4. Add side prediction ---
     signals = BollingerStrategy(bb_period, bb_std).generate_signals(df)
-    features = features.shift().join(signals)
+    features = features.join(signals).shift().dropna()
 
     # --- 5. Formatting ---
     # Abbreviate "returns" to "ret" in columns
@@ -85,7 +86,7 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
     # Conserve memory
     features = optimize_dtypes(features, verbose=False)
 
-    return features.dropna()
+    return features
 
 
 def plot_bbands(
