@@ -4,34 +4,74 @@ Optimized implementation of logic regarding sequential bootstrapping from chapte
 
 import numpy as np
 import pandas as pd
-from numba import jit, njit
+from numba import jit, njit, prange
+from numba.core import types
+from numba.typed import Dict
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.utils.validation import check_array, check_is_fitted, check_X_y
 
 
-@jit(forceobj=True, cache=True)
+@njit(cache=True)
+def precompute_active_indices_nopython(t0_array, t1_array, price_bars_array):
+    """
+    Nopython implementation: Map each sample to the bars it influences.
+
+    Args:
+        t0_array (np.ndarray): Array of start times for each sample (int64 timestamps).
+        t1_array (np.ndarray): Array of end times for each sample (int64 timestamps).
+        price_bars_array (np.ndarray): Array of bar timestamps (int64).
+
+    Returns:
+        Dict[int64, int64[:]]: A numba typed dictionary mapping sample_id to array of bar indices.
+    """
+    n_samples = len(t0_array)
+
+    # Create a typed dictionary for numba
+    active_indices = Dict.empty(key_type=types.int64, value_type=types.int64[:])
+
+    for sample_id in range(n_samples):
+        t0 = t0_array[sample_id]
+        t1 = t1_array[sample_id]
+
+        # Find indices where price_bars are within [t0, t1]
+        mask = (price_bars_array >= t0) & (price_bars_array <= t1)
+        indices = np.where(mask)[0]
+
+        active_indices[sample_id] = indices
+
+    return active_indices
+
+
 def precompute_active_indices(samples_info_sets, price_bars_index):
     """
-    Map each sample to the bars it influences.
+    Wrapper function to convert pandas objects to numpy arrays for nopython implementation.
 
     Args:
         samples_info_sets (pd.Series): Triple barrier events(t1) from labeling.get_events.
-        price_bars_index (list or array-like): Array of bar indices which were used to form triple barrier events.
+            Index: start times (t0), Values: end times (t1)
+        price_bars_index (pd.DatetimeIndex or array-like): Bar indices/timestamps.
 
     Returns:
-        dict: A dictionary mapping each sample identifier to an array of indices
-              of the bars it influences.
+        dict: Standard Python dictionary mapping sample_id to numpy arrays of indices.
     """
-    price_bars_index = np.asarray(
-        price_bars_index
-    )  # Ensure bar indices are a numpy array for efficient computation.
-    active_indices = {}  # Initialize dictionary to store results.
-    for sample_id, (t0, t1) in enumerate(samples_info_sets.items()):
-        # Create a mask indicating the bars influenced by the sample.
-        mask = (price_bars_index >= t0) & (price_bars_index <= t1)
-        active_indices[sample_id] = np.where(mask)[0]  # Store the indices of the influenced bars.
-    return active_indices
+    # Convert to numpy arrays with int64 timestamps
+    t0_array = samples_info_sets.index.values.astype("int64")
+    t1_array = samples_info_sets.values.astype("int64")
+
+    # Ensure price_bars_index is int64
+    if hasattr(price_bars_index, "values"):
+        price_bars_array = price_bars_index.values.astype("int64")
+    else:
+        price_bars_array = np.asarray(price_bars_index, dtype="int64")
+
+    # Call nopython implementation
+    typed_dict = precompute_active_indices_nopython(t0_array, t1_array, price_bars_array)
+
+    # Convert numba typed dict to regular Python dict for compatibility
+    result = {int(k): v for k, v in typed_dict.items()}
+
+    return result
 
 
 def seq_bootstrap_optimized(active_indices, s_length=None, random_seed=None):
@@ -96,111 +136,3 @@ def _seq_bootstrap_optimized_loop(active_indices_values, concurrency):
     )  # Compute probabilities for sampling.
 
     return prob
-
-
-class SeqBootstrapRandomForestClassifier(BaseEstimator, ClassifierMixin):
-    """
-    A Random Forest classifier using sequential bootstrap sampling for training.
-
-    Attributes:
-        n_estimators (int): Number of decision trees in the random forest.
-        s_length (int): Length of the sequential bootstrap sample.
-        max_depth (int): Maximum depth of the decision trees.
-        random_seed (int): Random seed for reproducibility.
-        max_features (int or None): Number of features considered for splitting nodes.
-        min_weight_fraction_leaf (float): Minimum fraction of weight required in a leaf node.
-        criterion (str): Criterion for splitting nodes ('gini' or 'entropy').
-        estimators_ (list): List of trained decision tree estimators.
-    """
-
-    def __init__(
-        self,
-        n_estimators=10,
-        s_length=None,
-        max_depth=None,
-        random_seed=None,
-        max_features=None,
-        min_weight_fraction_leaf=0.0,
-        criterion="entropy",
-        class_weight="balanced",
-    ):
-        self.n_estimators = n_estimators
-        self.s_length = s_length
-        self.max_depth = max_depth
-        self.random_seed = random_seed
-        self.max_features = max_features
-        self.min_weight_fraction_leaf = min_weight_fraction_leaf
-        self.criterion = criterion
-        self.class_weight = class_weight
-        self.estimators_ = []  # List to store trained decision tree estimators.
-
-    def fit(self, X, y, sample_weight, samples_info_sets, price_bars_index):
-        """
-        Train the Random Forest using sequential bootstrap samples.
-
-        Args:
-            X (array-like): Input feature matrix.
-            y (array-like): Target labels.
-            sample_weight (array-like): Sample weights.
-            samples_info_sets (pd.Series): End times of sampled events.
-            price_bars_index (list or array-like): Array of bar indices which were used to form triple barrier events
-
-        Returns:
-            self: The fitted classifier instance.
-        """
-        X, y = check_X_y(X, y)  # Validate and format input arrays.
-        self.classes_ = np.unique(y)  # Determine unique classes in the target labels.
-        self.n_features_ = X.shape[1]  # Number of features in the input matrix.
-
-        self.active_indices_ = precompute_active_indices(
-            samples_info_sets, price_bars_index
-        )  # Compute active indices.
-        self.s_length_ = (
-            X.shape[0] if self.s_length is None else self.s_length
-        )  # Determine sample length.
-
-        # Initialize random seeds for each estimator if specified.
-        if self.random_seed is not None:
-            np.random.seed(self.random_seed)
-            seeds = np.random.randint(0, np.iinfo(np.int32).max, self.n_estimators)
-        else:
-            seeds = [None] * self.n_estimators
-
-        self.estimators_ = []  # Clear estimators before training.
-        for seed in seeds:
-            phi = seq_bootstrap_optimized(
-                self.active_indices_, self.s_length_, random_seed=seed
-            )  # Bootstrap samples.
-            X_boot = X[phi]  # Bootstrap feature matrix.
-            y_boot = y[phi]  # Bootstrap target labels.
-            w_boot = sample_weight[phi]  # Bootstrap sample weight.
-            # Initialize and train a decision tree classifier.
-            tree = DecisionTreeClassifier(
-                criterion=self.criterion,
-                max_depth=self.max_depth,
-                random_state=seed,
-                min_weight_fraction_leaf=self.min_weight_fraction_leaf,
-                max_features=self.max_features,
-                class_weight=self.class_weight,
-            ).set_fit_request(sample_weight=True)
-            tree.fit(X=X_boot, y=y_boot, sample_weight=w_boot)  # Fit the tree.
-            self.estimators_.append(tree)  # Append the trained tree to the list.
-        return self
-
-    def predict(self, X):
-        """
-        Predict labels for input samples.
-
-        Args:
-            X (array-like): Input feature matrix.
-
-        Returns:
-            array: Predicted labels for the input samples.
-        """
-        check_is_fitted(self)  # Ensure the classifier has been fitted.
-        X = check_array(X)  # Validate input feature matrix.
-        preds = np.array(
-            [tree.predict(X) for tree in self.estimators_]
-        )  # Predict using all estimators.
-        # Aggregate predictions by selecting the most frequent label for each sample.
-        return np.apply_along_axis(lambda x: np.bincount(x).argmax(), axis=0, arr=preds)
