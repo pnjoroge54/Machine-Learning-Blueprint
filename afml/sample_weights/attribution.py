@@ -139,7 +139,7 @@ def get_weights_by_time_decay(
     cum_time_weights = av_uniqueness["tW"].sort_index().cumsum()
 
     if linear:
-        # Apply linear decay (your existing linear code is correct)
+        # Apply linear decay
         if last_weight >= 0:
             slope = (1 - last_weight) / cum_time_weights.iloc[-1]
         else:
@@ -153,7 +153,7 @@ def get_weights_by_time_decay(
         if last_weight == 1:
             return pd.Series(1.0, index=cum_time_weights.index)
 
-        if cum_time_weights.iloc[-1] == 0:
+        elif cum_time_weights.iloc[-1] == 0:
             return pd.Series(1.0, index=cum_time_weights.index)
 
         # Calculate normalized position (0 = newest, 1 = oldest)

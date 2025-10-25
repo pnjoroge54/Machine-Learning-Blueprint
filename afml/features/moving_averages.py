@@ -36,12 +36,12 @@ def calculate_ma_differences(
 
     if drop:
         dcf = DropCorrelatedFeatures(threshold=threshold)
-        out = dcf.fit_transform(df)
-        dropped = df.columns.difference(out.columns).to_list()
+        df1 = dcf.fit_transform(df)
+        dropped = df.columns.difference(df1.columns).to_list()
         if len(dropped) > 0:
             logger.info(
                 f"\nDropped features with correlation > {threshold}: \n\t{dropped}"
-                f"\nKept features: \n\t{out.columns.to_list()}"
+                f"\nKept features: \n\t{df1.columns.to_list()}"
             )
             if verbose:
                 corr_matrix = df.corr()
@@ -60,7 +60,7 @@ def calculate_ma_differences(
 
                 plt.title("Correlation Matrix")
                 plt.show()
-        df = out.copy()
+        df = df1.copy()
 
     return df
 

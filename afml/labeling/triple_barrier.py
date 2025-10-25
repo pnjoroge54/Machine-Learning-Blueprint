@@ -496,7 +496,7 @@ def get_event_weights(triple_barrier_events: pd.DataFrame, close: pd.Series, ver
     Returns:
         pd.DataFrame: Events DataFrame with additional columns:
             - tW: Average uniqueness of the event (time-weighted).
-            - w: Sample weights from return-weighted attribution.
+            - w: Sample weights from return-attribution.
     Notes:
         - This function estimates the uniqueness of each event and assigns sample weights based on return attribution.
         - Requires helper functions: get_num_conc_events_optimized, get_av_uniqueness_from_triple_barrier_optimized, and get_weights_by_return_optimized.

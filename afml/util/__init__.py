@@ -44,7 +44,7 @@ from .multiprocess import (
 )
 from .volatility import (
     get_daily_vol,
-    get_garman_class_vol,
+    get_garman_klass_vol,
     get_parkinson_vol,
     get_period_vol,
     get_yang_zhang_vol,

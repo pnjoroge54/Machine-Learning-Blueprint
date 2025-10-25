@@ -341,6 +341,7 @@ def save_data_to_parquet(path, symbols, start_date, end_date, account_name):
             if df.empty:
                 logger.warning(f"{log_msg_prefix} No data found.")
                 missing_data.setdefault(symbol, []).append(start.strftime("%Y-%m"))
+                continue
 
             df.to_parquet(
                 file,

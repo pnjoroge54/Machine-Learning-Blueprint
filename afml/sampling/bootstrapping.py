@@ -4,12 +4,11 @@ Logic regarding sequential bootstrapping from chapter 4.
 
 import numpy as np
 import pandas as pd
-from numba import njit, prange
+from numba import njit
 
 from ..util.misc import log_performance
 
 
-@log_performance
 def get_ind_matrix(samples_info_sets, price_bars):
     """
     Advances in Financial Machine Learning, Snippet 4.3, page 65.
@@ -21,7 +20,7 @@ def get_ind_matrix(samples_info_sets, price_bars):
     is the best option.
 
     :param samples_info_sets: (pd.Series): Triple barrier events(t1) from labeling.get_events
-    :param price_bars: (pd.DataFrame): Price bars which were used to form triple barrier events
+    :param price_bars: (pd.Series): Price bars which were used to form triple barrier events
     :return: (np.array) Indicator binary matrix indicating what (price) bars influence the label for each observation
     """
     if (
@@ -114,7 +113,7 @@ def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
 
     :param ind_mat (np.array): Indicator matrix from get_ind_matrix function
     :param prev_concurrency (np.array): Accumulated concurrency from previous iterations of sequential bootstrapping
-    :return: (np.array): Label average uniqueness based on prev_concurrency
+    :return: (np.array): Draw probabilities based on previously accumulated concurrency
     """
     avg_unique = np.zeros(ind_mat.shape[1])  # Array of label uniqueness
 
@@ -131,7 +130,9 @@ def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
                 number_of_elements += 1
                 prev_average_uniqueness = average_uniqueness
         avg_unique[i] = average_uniqueness
-    return avg_unique
+
+    prob = avg_unique / avg_unique.sum()
+    return prob
 
 
 def seq_bootstrap(
@@ -168,8 +169,7 @@ def seq_bootstrap(
     phi = []  # Bootstrapped samples
     prev_concurrency = np.zeros(ind_mat.shape[0])  # Init with zeros (phi is empty)
     while len(phi) < sample_length:
-        avg_unique = _bootstrap_loop_run(ind_mat, prev_concurrency)
-        prob = avg_unique / sum(avg_unique)  # Draw prob
+        prob = _bootstrap_loop_run(ind_mat, prev_concurrency)  # Draw probabilities
         try:
             choice = warmup_samples.pop(0)  # It would get samples from warmup until it is empty
             # If it is empty from the beginning it would get samples based on prob from the first iteration
