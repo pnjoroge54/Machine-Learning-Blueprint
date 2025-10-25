@@ -7,6 +7,8 @@ from numba import njit
 from numba.core import types
 from numba.typed import Dict
 
+from ..util.misc import log_performance
+
 
 @njit(cache=True)
 def precompute_active_indices_nopython(t0_array, t1_array, price_bars_array):
@@ -70,13 +72,13 @@ def precompute_active_indices(samples_info_sets, price_bars_index):
     return result
 
 
-def seq_bootstrap_optimized(active_indices, s_length=None, random_seed=None):
+def seq_bootstrap_optimized(active_indices, sample_length=None, random_seed=None):
     """
     Generate sample indices using sequential bootstrap.
 
     Args:
         active_indices (dict): Dictionary mapping sample identifiers to arrays of bar indices.
-        s_length (int): Desired number of samples to generate.
+        sample_length (int): Desired number of samples to generate.
         random_seed (int, RandomState, or None): Seed for random number generation.
 
     Returns:
@@ -102,10 +104,10 @@ def seq_bootstrap_optimized(active_indices, s_length=None, random_seed=None):
     T = max(max(indices) for indices in active_indices_values) + 1 if active_indices else 0
     concurrency = np.zeros(T, dtype=int)
 
-    s_length = len(active_indices) if s_length is None else s_length
+    sample_length = len(active_indices) if sample_length is None else sample_length
 
     # Sequential bootstrap sampling loop
-    for _ in range(s_length):
+    for _ in range(sample_length):
         prob = _seq_bootstrap_optimized_loop(active_indices_values, concurrency)
         chosen = random_state.choice(sample_ids, p=prob)  # Use random_state instead of np.random
         phi.append(chosen)

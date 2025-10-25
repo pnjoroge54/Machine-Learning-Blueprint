@@ -156,7 +156,7 @@ def _apply_time_decay_numba(cumulative_time_weights, last_weight, linear_decay=T
                 if abs(last_weight) > 1e-12:
                     decay_weights[i] = np.exp(norm_age * np.log(abs(last_weight)))
                 else:
-                    decay_weights[i] = 0.0
+                    decay_weights[i] = 1.0
         else:
             decay_weights[:] = 1.0
 
@@ -340,7 +340,7 @@ def get_weights_by_return_optimized(
 def get_weights_by_time_decay_optimized(
     triple_barrier_events,
     close_index,
-    decay=1,
+    last_weight=1,
     linear=True,
     av_uniqueness=None,
     verbose=False,
@@ -370,12 +370,12 @@ def get_weights_by_time_decay_optimized(
         Events from labeling.get_events()
     close_index : pd.DatetimeIndex
         Close prices index
-    decay : float, default=1
+    last_weight : float, default=1
         Decay factor:
-        - decay = 1: no time decay
-        - 0 < decay < 1: linear decay over time with positive weights
-        - decay = 0: weights converge to zero as they age
-        - decay < 0: oldest observations receive zero weight
+        - last_weight = 1: no time decay
+        - 0 < last_weight < 1: decay over time with positive weights
+        - last_weight = 0: weights converge to zero as they age
+        - last_weight < 0: oldest observations receive zero weight
     linear : bool, default=True
         If True, linear decay is applied, else exponential decay
     av_uniqueness : pd.Series, optional
@@ -391,11 +391,11 @@ def get_weights_by_time_decay_optimized(
     Examples:
     ---------
     >>> # Basic usage with linear decay
-    >>> weights = get_weights_by_time_decay_optimized(events, close_prices, decay=0.5)
+    >>> weights = get_weights_by_time_decay_optimized(events, close_prices, last_weight=0.5)
     >>>
     >>> # Exponential decay
     >>> weights = get_weights_by_time_decay_optimized(events, close_prices,
-    ...                                              decay=0.8, linear=False)
+    ...                                              last_weight=0.8, linear=False)
     >>>
     >>> # With precomputed uniqueness for better performance
     >>> uniqueness = get_av_uniqueness_from_triple_barrier_optimized(events, close_prices)
@@ -432,7 +432,7 @@ def get_weights_by_time_decay_optimized(
     cum_weights = av_uniqueness["tW"].sort_index().cumsum()
 
     # Apply optimized decay calculation using Numba
-    decay_weights = _apply_time_decay_numba(cum_weights.values, decay, linear)
+    decay_weights = _apply_time_decay_numba(cum_weights.values, last_weight, linear)
 
     if verbose:
         print(
