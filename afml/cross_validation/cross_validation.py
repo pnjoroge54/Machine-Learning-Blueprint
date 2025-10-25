@@ -18,6 +18,7 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection._split import _BaseKFold
 
 from ..cross_validation.scoring import probability_weighted_accuracy
+from ..sampling import SequentiallyBootstrappedBaggingClassifier
 
 
 def ml_get_train_times(t1: pd.Series, test_times: pd.Series) -> pd.Series:
@@ -201,10 +202,16 @@ def ml_cross_val_score(
 
     if sample_weight_score is None:
         sample_weight_score = np.ones((X.shape[0],))
+        
+    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier):
+    if seq_bootstrap:
+    	t1 = getattr(classifier, "sample_info_sets")
 
     # Score model on KFolds
     ret_scores = []
     for train, test in cv_gen.split(X=X, y=y):
+        if seq_bootstrap:
+        	classifier = classifier.set_params(sample_info_sets=t1.iloc[train])
         fit = classifier.fit(
             X=X.iloc[train, :],
             y=y.iloc[train],
@@ -314,3 +321,4 @@ def ml_cross_val_scores_all(
         ret_scores[k] = np.array(v)
 
     return ret_scores
+    
