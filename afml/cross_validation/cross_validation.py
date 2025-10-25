@@ -205,13 +205,13 @@ def ml_cross_val_score(
         
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier):
     if seq_bootstrap:
-    	t1 = getattr(classifier, "sample_info_sets")
+        t1 = getattr(classifier, "sample_info_sets")
 
     # Score model on KFolds
     ret_scores = []
     for train, test in cv_gen.split(X=X, y=y):
         if seq_bootstrap:
-        	classifier = classifier.set_params(sample_info_sets=t1.iloc[train])
+            classifier = classifier.set_params(sample_info_sets=t1.iloc[train])
         fit = classifier.fit(
             X=X.iloc[train, :],
             y=y.iloc[train],
