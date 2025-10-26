@@ -7,11 +7,9 @@ from numba import njit
 from numba.core import types
 from numba.typed import Dict
 
-from ..util.misc import log_performance
-
 
 @njit(cache=True)
-def precompute_active_indices_nopython(t0_array, t1_array, price_bars_array):
+def _precompute_active_indices_nopython(t0_array, t1_array, price_bars_array):
     """
     Nopython implementation: Map each sample to the bars it influences.
 
@@ -26,7 +24,7 @@ def precompute_active_indices_nopython(t0_array, t1_array, price_bars_array):
     n_samples = len(t0_array)
 
     # Create a typed dictionary for numba
-    active_indices = Dict.empty(key_type=types.int64, value_type=types.int64[:])
+    active_indices = Dict.empty(key_type=types.int32, value_type=types.int32[:])
 
     for sample_id in range(n_samples):
         t0 = t0_array[sample_id]
@@ -35,7 +33,6 @@ def precompute_active_indices_nopython(t0_array, t1_array, price_bars_array):
         # Find indices where price_bars are within [t0, t1]
         mask = (price_bars_array >= t0) & (price_bars_array <= t1)
         indices = np.where(mask)[0]
-
         active_indices[sample_id] = indices
 
     return active_indices
@@ -64,7 +61,7 @@ def precompute_active_indices(samples_info_sets, price_bars_index):
         price_bars_array = np.asarray(price_bars_index, dtype="int64")
 
     # Call nopython implementation
-    typed_dict = precompute_active_indices_nopython(t0_array, t1_array, price_bars_array)
+    typed_dict = _precompute_active_indices_nopython(t0_array, t1_array, price_bars_array)
 
     # Convert numba typed dict to regular Python dict for compatibility
     result = {int(k): v for k, v in typed_dict.items()}
@@ -96,11 +93,11 @@ def seq_bootstrap_optimized(active_indices, sample_length=None, random_seed=None
         except (ValueError, TypeError):
             random_state = np.random.RandomState()
 
-    sample_ids = np.array(list(active_indices.keys()))
     phi = []
+    sample_ids = np.array(list(active_indices.keys()), dtype=np.int32)
 
     # Determine the maximum bar index
-    active_indices_values = list(active_indices.values())
+    active_indices_values = np.array(list(active_indices.values()), dtype=np.int32)
     T = max(max(indices) for indices in active_indices_values) + 1 if active_indices else 0
     concurrency = np.zeros(T, dtype=int)
 
