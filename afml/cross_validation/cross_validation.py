@@ -6,7 +6,7 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from sklearn.base import ClassifierMixin
+from sklearn.base import ClassifierMixin, clone
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -202,16 +202,21 @@ def ml_cross_val_score(
 
     if sample_weight_score is None:
         sample_weight_score = np.ones((X.shape[0],))
-        
-    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier):
+
+    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
     if seq_bootstrap:
-        t1 = getattr(classifier, "sample_info_sets")
+        t1 = classifier.samples_info_sets.loc[y.index].copy()
+        if not t1.index.isin(y.index).all():
+            raise KeyError(f"samples_info_sets not aligned with data")
+        classifier.set_params(oob_score=False)
 
     # Score model on KFolds
     ret_scores = []
     for train, test in cv_gen.split(X=X, y=y):
         if seq_bootstrap:
-            classifier = classifier.set_params(sample_info_sets=t1.iloc[train])
+            classifier = clone(classifier).set_params(
+                samples_info_sets=t1.iloc[train]
+            )  # Create new instance
         fit = classifier.fit(
             X=X.iloc[train, :],
             y=y.iloc[train],
@@ -272,7 +277,7 @@ def ml_cross_val_scores_all(
     :param cv_gen: (BaseCrossValidator) Cross Validation generator object instance.
     :param sample_weight_train: (np.array) Sample weights used to train the model for each record in the dataset.
     :param sample_weight_score: (np.array) Sample weights used to evaluate the model quality.
-    :return: (dict) The computed scores.
+    :return: tuple(dict, pd.DataFrame) The computed scores and a data frame of mean and std. deviation
     """
     scoring_methods = [
         accuracy_score,
@@ -283,7 +288,9 @@ def ml_cross_val_scores_all(
         f1_score,
     ]
     ret_scores = {
-        scoring.__name__.replace("_score", "") if scoring != log_loss else "neg_log_loss": []
+        scoring.__name__.replace("_score", "") if scoring != log_loss else "neg_log_loss": np.zeros(
+            cv_gen.n_splits
+        )
         for scoring in scoring_methods
     }
 
@@ -294,8 +301,19 @@ def ml_cross_val_scores_all(
     if sample_weight_score is None:
         sample_weight_score = np.ones((X.shape[0],))
 
+    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
+    if seq_bootstrap:
+        t1 = classifier.samples_info_sets.loc[y.index].copy()
+        if not t1.index.isin(y.index).all():
+            raise KeyError(f"samples_info_sets not aligned with data")
+        classifier.set_params(oob_score=False)
+
     # Score model on KFolds
-    for train, test in cv_gen.split(X=X, y=y):
+    for i, (train, test) in enumerate(cv_gen.split(X=X, y=y)):
+        if seq_bootstrap:
+            classifier = clone(classifier).set_params(
+                samples_info_sets=t1.iloc[train]
+            )  # Create new instance
         fit = classifier.fit(
             X=X.iloc[train, :],
             y=y.iloc[train],
@@ -315,10 +333,14 @@ def ml_cross_val_scores_all(
                     score *= -1
             else:
                 score = scoring(y.iloc[test], pred, sample_weight=sample_weight_score[test])
-            ret_scores[method].append(score)
+            ret_scores[method][i] = score
 
-    for k, v in ret_scores.items():
-        ret_scores[k] = np.array(v)
-
-    return ret_scores
-    
+    # Mean and standard deviation of scores
+    scores_df = pd.DataFrame.from_dict(
+        {
+            scoring: {"mean": scores.mean(), "std": scores.std()}
+            for scoring, scores in ret_scores.items()
+        },
+        orient="index",
+    )
+    return ret_scores, scores_df
