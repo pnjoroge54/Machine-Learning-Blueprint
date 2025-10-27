@@ -79,6 +79,7 @@ try:
         datasets,
         features,
         labeling,
+        mt5,
         sample_weights,
         sampling,
         util,
@@ -355,6 +356,7 @@ __all__ = [
     "bet_sizing",
     "strategies",
     "filters",
+    "mt5",
     # Heavy modules (lazy loaded)
     "ensemble",
     "clustering",

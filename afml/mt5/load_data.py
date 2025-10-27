@@ -51,7 +51,7 @@ def get_credentials_from_env(account):
     Returns:
         tuple: (login, password, server) or (None, None, None) if not found.
     """
-    load_dotenv()
+    load_dotenv()  # Load environment variables from .env file if present
     prefix = f"MT5_ACCOUNT_{account.upper()}"
     login = os.environ.get(f"{prefix}_LOGIN")
     password = os.environ.get(f"{prefix}_PASSWORD")
@@ -263,6 +263,56 @@ def get_ticks(symbol, start_date, end_date, datetime_index=True, verbose=True):
 
     except Exception as e:
         logger.error(f"An error occurred while getting ticks for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbose=True):
+    """
+    Downloads bar (OHLCV) data from the MT5 terminal for a given period.
+
+    Args:
+        symbol (str): The financial instrument symbol (e.g., 'EURUSD').
+        timeframe (int): MT5 timeframe constant (e.g., mt5.TIMEFRAME_M1, mt5.TIMEFRAME_H1).
+        start_date (pd.Timestamp): Timezone-aware start date.
+        end_date (pd.Timestamp): Timezone-aware end date.
+        datetime_index (bool): Set 'time' column to DatetimeIndex.
+        verbose (bool): Print DataFrame info.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing OHLCV data, or empty if no data/error.
+    """
+    if not mt5.terminal_info():
+        logger.error("MT5 connection lost. Cannot download data.")
+        return pd.DataFrame()
+
+    try:
+        start_date, end_date = date_conversion(start_date, end_date)
+        timeframe = getattr(mt5, f"TIMEFRAME_{timeframe}")
+        bars = mt5.copy_rates_range(symbol, timeframe, start_date, end_date)
+        if bars is None or len(bars) == 0:
+            logger.warning(
+                f"No bar data returned for {symbol} from {start_date.date()} to {end_date.date()}."
+            )
+            return pd.DataFrame()
+
+        df = pd.DataFrame(bars)
+        df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
+
+        if datetime_index:
+            df.set_index("time", inplace=True)
+
+        # Optimize memory usage
+        for col in ["open", "high", "low", "close", "tick_volume", "spread", "real_volume"]:
+            if col in df.columns:
+                df[col] = df[col].astype("float32")
+
+        if verbose:
+            log_df_info(df)
+
+        return df
+
+    except Exception as e:
+        logger.error(f"An error occurred while getting bars for {symbol}: {e}")
         return pd.DataFrame()
 
 

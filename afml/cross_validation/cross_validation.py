@@ -2,13 +2,16 @@
 Implements the book chapter 7 on Cross Validation for financial data.
 """
 
-from typing import Callable
+from calendar import c
+from os import replace
+from typing import Callable, Union
 
 import numpy as np
 import pandas as pd
 from sklearn.base import ClassifierMixin, clone
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
     f1_score,
     log_loss,
     precision_score,
@@ -162,7 +165,7 @@ def ml_cross_val_score(
     cv_gen: BaseCrossValidator,
     sample_weight_train: np.ndarray = None,
     sample_weight_score: np.ndarray = None,
-    scoring: Callable[[np.array, np.array], float] = log_loss,
+    scoring: Union[str, Callable[[np.array, np.array], float]] = log_loss,
 ):
     # pylint: disable=invalid-name
     # pylint: disable=comparison-with-callable
@@ -203,12 +206,23 @@ def ml_cross_val_score(
     if sample_weight_score is None:
         sample_weight_score = np.ones((X.shape[0],))
 
+    # Check for sequential bootstrap
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
     if seq_bootstrap:
         t1 = classifier.samples_info_sets.loc[y.index].copy()
         if not t1.index.isin(y.index).all():
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)
+
+    if isinstance(scoring, str):
+        if scoring == ("log_loss" or "neg_log_loss"):
+            scoring = log_loss
+        elif scoring == ("probability_weighted_accuracy" or "pwa"):
+            scoring = probability_weighted_accuracy
+        elif scoring == "accuracy":
+            scoring = accuracy_score
+        elif scoring == "f1":
+            scoring = f1_score
 
     # Score model on KFolds
     ret_scores = []
@@ -234,7 +248,18 @@ def ml_cross_val_score(
                 score *= -1
         else:
             pred = fit.predict(X.iloc[test, :])
-            score = scoring(y.iloc[test], pred, sample_weight=sample_weight_score[test])
+            params = dict(
+                y_true=y.iloc[test],
+                y_pred=pred,
+                labels=classifier.classes_,
+                sample_weight=sample_weight_score[test],
+            )
+            try:
+                score = scoring(**params)
+            except:
+                del params["labels"]
+                score = scoring(**params)
+
         ret_scores.append(score)
 
     return np.array(ret_scores)
@@ -288,9 +313,11 @@ def ml_cross_val_scores_all(
         f1_score,
     ]
     ret_scores = {
-        scoring.__name__.replace("_score", "") if scoring != log_loss else "neg_log_loss": np.zeros(
-            cv_gen.n_splits
-        )
+        (
+            scoring.__name__.replace("_score", "")
+            .replace("probability_weighted_accuracy", "pwa")
+            .replace("log_loss", "neg_log_loss")
+        ): np.zeros(cv_gen.n_splits)
         for scoring in scoring_methods
     }
 
@@ -308,6 +335,8 @@ def ml_cross_val_scores_all(
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)
 
+    cms = []  # To store confusion matrices
+
     # Score model on KFolds
     for i, (train, test) in enumerate(cv_gen.split(X=X, y=y)):
         if seq_bootstrap:
@@ -321,6 +350,13 @@ def ml_cross_val_scores_all(
         )
         prob = fit.predict_proba(X.iloc[test, :])
         pred = fit.predict(X.iloc[test, :])
+        params = dict(
+            y_true=y.iloc[test],
+            y_pred=pred,
+            labels=classifier.classes_,
+            sample_weight=sample_weight_score[test],
+        )
+
         for method, scoring in zip(ret_scores.keys(), scoring_methods):
             if scoring in (probability_weighted_accuracy, log_loss):
                 score = scoring(
@@ -332,8 +368,16 @@ def ml_cross_val_scores_all(
                 if method == "neg_log_loss":
                     score *= -1
             else:
-                score = scoring(y.iloc[test], pred, sample_weight=sample_weight_score[test])
+                try:
+                    score = scoring(**params)
+                except:
+                    del params["labels"]
+                    score = scoring(**params)
+                    params["labels"] = classifier.classes_
+
             ret_scores[method][i] = score
+
+        cms.append(confusion_matrix(**params).round(2))
 
     # Mean and standard deviation of scores
     scores_df = pd.DataFrame.from_dict(
@@ -343,4 +387,15 @@ def ml_cross_val_scores_all(
         },
         orient="index",
     )
-    return ret_scores, scores_df
+
+    # Extract TN, TP, FP, FN for each fold
+    confusion_matrix_breakdown = []
+    for i, cm in enumerate(cms, 1):
+        if cm.shape == (2, 2):  # Binary classification
+            tn, fp, fn, tp = cm.ravel()
+            confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
+        else:
+            # For multi-class, you might want different handling
+            confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
+
+    return ret_scores, scores_df, confusion_matrix_breakdown
