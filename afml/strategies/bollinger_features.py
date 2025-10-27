@@ -19,7 +19,7 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
     """
     Create features for meta-labeling model
     """
-    features = df[["close"]].copy()
+    features = pd.DataFrame(index=df.index)
     features["spread"] = df["spread"] / df["close"]
 
     # --- 1. Returns Features ---
@@ -50,7 +50,7 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 2. Technical Analysis Features ---
     # Bollinger Bands
-    bbands = df.ta.bbands(bb_period, bb_std)
+    bbands = df.ta.bbands(bb_period, bb_std).iloc[:, -2:]  # Use BBP and BBB only
 
     # Volatility
     tr = df.ta.true_range()
@@ -70,7 +70,7 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 3. Moving Average Features ---
     windows = (10, 20, 50, 100, 200)
-    ma_diffs = calculate_ma_differences(df.close, windows)
+    ma_diffs = calculate_ma_differences(df.close, windows, drop=True)
     ma_diffs = ma_diffs.div(atr, axis=0)  # Normalize by ATR
     ma_crossovers = get_ma_crossovers(df.close, windows)
     features = features.join([ma_diffs, ma_crossovers])
