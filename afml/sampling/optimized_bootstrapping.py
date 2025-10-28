@@ -24,14 +24,12 @@ def get_active_indices(samples_info_sets, price_bars_index):
             Standard Python dictionary mapping sample_id (int) to a numpy.ndarray of
             bar indices (dtype=int64). Example: {0: array([0,1,2], dtype=int64), 1: array([], dtype=int64), ...}
     """
-    t0 = samples_info_sets.index
-    t1 = samples_info_sets.values
     n = len(samples_info_sets)
     active_indices = {}
 
     # precompute searchsorted positions to restrict scanning range
-    starts = np.searchsorted(price_bars_index, t0, side="left")
-    ends = np.searchsorted(price_bars_index, t1, side="right")  # exclusive
+    starts = np.searchsorted(price_bars_index, samples_info_sets.index, side="left")
+    ends = np.searchsorted(price_bars_index, samples_info_sets.values, side="right")  # exclusive
 
     for sample_id in range(n):
         s = starts[sample_id]

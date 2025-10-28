@@ -210,7 +210,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         """
         return self._fit(X, y, self.max_samples, sample_weight=sample_weight)
 
-    def _fit(self, X, y, max_samples=None, max_depth=None, sample_weight=None):
+    def _fit(self, X, y, max_samples=None, sample_weight=None):
         """
         Build a Sequentially Bootstrapped Bagging ensemble of estimators from the training
         set (X, y).
@@ -224,10 +224,6 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
             The target values (class labels in classification, real numbers in
             regression).
         max_samples : (int or float), optional (default=None)
-            Argument to use instead of self.max_samples.
-        max_depth : (int), optional (default=None)
-            Override value used when constructing base estimator. Only
-            supported if the base estimator has a max_depth parameter.
         sample_weight : (array-like), shape = [n_samples] or None
             Sample weights. If None, then samples are equally weighted.
             Note that this is supported only if the base estimator supports
