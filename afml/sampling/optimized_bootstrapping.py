@@ -3,70 +3,45 @@ Optimized implementation of logic regarding sequential bootstrapping from chapte
 """
 
 import numpy as np
-from numba import njit
-from numba.core import types
-from numba.typed import Dict
+from numba import njit, prange
 
 
-@njit(cache=True)
-def _precompute_active_indices_nopython(t0_array, t1_array, price_bars_array):
+def get_active_indices(samples_info_sets, price_bars_index):
     """
-    Nopython implementation: Map each sample to the bars it influences.
+    Build an indicator mapping from each sample to the bar indices it influences.
 
     Args:
-        t0_array (np.ndarray): Array of start times for each sample (int64 timestamps).
-        t1_array (np.ndarray): Array of end times for each sample (int64 timestamps).
-        price_bars_array (np.ndarray): Array of bar timestamps (int64).
+        samples_info_sets (pd.Series):
+            Triple-barrier events (t1) returned by labeling.get_events.
+            Index: start times (t0) as pd.DatetimeIndex.
+            Values: end times (t1) as pd.Timestamp (or NaT for open events).
+        price_bars_index (pd.DatetimeIndex or array-like):
+            Sorted bar timestamps (pd.DatetimeIndex or array-like). Will be converted to
+            np.int64 timestamps for internal processing.
 
     Returns:
-        Dict[int64, int64[:]]: A numba typed dictionary mapping sample_id to array of bar indices.
+        dict:
+            Standard Python dictionary mapping sample_id (int) to a numpy.ndarray of
+            bar indices (dtype=int64). Example: {0: array([0,1,2], dtype=int64), 1: array([], dtype=int64), ...}
     """
-    n_samples = len(t0_array)
+    t0 = samples_info_sets.index
+    t1 = samples_info_sets.values
+    n = len(samples_info_sets)
+    active_indices = {}
 
-    # Create a typed dictionary for numba
-    active_indices = Dict.empty(key_type=types.int32, value_type=types.int32[:])
+    # precompute searchsorted positions to restrict scanning range
+    starts = np.searchsorted(price_bars_index, t0, side="left")
+    ends = np.searchsorted(price_bars_index, t1, side="right")  # exclusive
 
-    for sample_id in range(n_samples):
-        t0 = t0_array[sample_id]
-        t1 = t1_array[sample_id]
-
-        # Find indices where price_bars are within [t0, t1]
-        mask = (price_bars_array >= t0) & (price_bars_array <= t1)
-        indices = np.where(mask)[0]
-        active_indices[sample_id] = indices
+    for sample_id in range(n):
+        s = starts[sample_id]
+        e = ends[sample_id]
+        if e > s:
+            active_indices[sample_id] = np.arange(s, e, dtype=int)
+        else:
+            active_indices[sample_id] = np.empty(0, dtype=int)
 
     return active_indices
-
-
-def precompute_active_indices(samples_info_sets, price_bars_index):
-    """
-    Wrapper function to convert pandas objects to numpy arrays for nopython implementation.
-
-    Args:
-        samples_info_sets (pd.Series): Triple barrier events(t1) from labeling.get_events.
-            Index: start times (t0), Values: end times (t1)
-        price_bars_index (pd.DatetimeIndex or array-like): Bar indices/timestamps.
-
-    Returns:
-        dict: Standard Python dictionary mapping sample_id to numpy arrays of indices.
-    """
-    # Convert to numpy arrays with int64 timestamps
-    t0_array = samples_info_sets.index.values.astype("int64")
-    t1_array = samples_info_sets.values.astype("int64")
-
-    # Ensure price_bars_index is int64
-    if hasattr(price_bars_index, "values"):
-        price_bars_array = price_bars_index.values.astype("int64")
-    else:
-        price_bars_array = np.asarray(price_bars_index, dtype="int64")
-
-    # Call nopython implementation
-    typed_dict = _precompute_active_indices_nopython(t0_array, t1_array, price_bars_array)
-
-    # Convert numba typed dict to regular Python dict for compatibility
-    result = {int(k): v for k, v in typed_dict.items()}
-
-    return result
 
 
 def seq_bootstrap_optimized(active_indices, sample_length=None, random_seed=None):
@@ -94,11 +69,11 @@ def seq_bootstrap_optimized(active_indices, sample_length=None, random_seed=None
             random_state = np.random.RandomState()
 
     phi = []
-    sample_ids = np.array(list(active_indices.keys()), dtype=np.int32)
+    sample_ids = list(active_indices.keys())
 
     # Determine the maximum bar index
-    active_indices_values = np.array(list(active_indices.values()), dtype=np.int32)
-    T = max(max(indices) for indices in active_indices_values) + 1 if active_indices else 0
+    active_indices_values = list(active_indices.values())
+    T = max(indices.max() for indices in active_indices_values) + 1 if active_indices else 0
     concurrency = np.zeros(T, dtype=int)
 
     sample_length = len(active_indices) if sample_length is None else sample_length
@@ -113,21 +88,20 @@ def seq_bootstrap_optimized(active_indices, sample_length=None, random_seed=None
     return phi
 
 
-@njit(cache=True)
+@njit(cache=True, parallel=True)
 def _seq_bootstrap_optimized_loop(active_indices_values, concurrency):
     N = len(active_indices_values)
-    av_uniqueness = np.zeros(N)  # Array to store average uniqueness of each sample.
+    av_uniqueness = np.empty(N)
 
-    for i in range(N):
-        indices = active_indices_values[i]  # Get influenced bar indices for the sample.
-        c = concurrency[indices]  # Retrieve concurrency values for these indices.
-        uniqueness = 1 / (c + 1)  # Calculate uniqueness as the inverse of concurrency.
-        av_uniqueness[i] = (
-            np.mean(uniqueness) if len(uniqueness) > 0 else 0.0
-        )  # Compute average uniqueness.
-    total = av_uniqueness.sum()  # Sum of uniqueness values across all samples.
-    prob = (
-        av_uniqueness / total if total > 0 else np.ones(N) / N
-    )  # Compute probabilities for sampling.
+    for i in prange(N):
+        indices = active_indices_values[i]
+        if len(indices) > 0:
+            c = concurrency[indices]
+            uniqueness = 1.0 / (c + 1.0)
+            av_uniqueness[i] = uniqueness.mean()
+        else:
+            av_uniqueness[i] = 0.0
 
+    total = av_uniqueness.sum()
+    prob = av_uniqueness / total if total > 0 else np.ones(N) / N
     return prob
