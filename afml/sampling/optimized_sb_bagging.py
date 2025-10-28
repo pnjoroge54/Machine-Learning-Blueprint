@@ -7,7 +7,6 @@ from abc import ABCMeta, abstractmethod
 from warnings import warn
 
 import numpy as np
-import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor

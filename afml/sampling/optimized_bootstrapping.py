@@ -3,7 +3,7 @@ Optimized implementation of logic regarding sequential bootstrapping from chapte
 """
 
 import numpy as np
-from numba import njit, prange
+from numba import njit
 
 
 def get_active_indices(samples_info_sets, price_bars_index):
@@ -103,5 +103,8 @@ def _seq_bootstrap_optimized_loop(active_indices_values, concurrency):
             av_uniqueness[i] = 0.0
 
     total = np.sum(av_uniqueness)
-    prob = av_uniqueness / total if total > 0 else np.ones(N) / N
+    if total > 0:
+        prob = av_uniqueness / total
+    else:
+        prob = np.ones(N) / N
     return prob

@@ -6,8 +6,6 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
-from ..util.misc import log_performance
-
 
 def get_ind_matrix(samples_info_sets, price_bars):
     """
