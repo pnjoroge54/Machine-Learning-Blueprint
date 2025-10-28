@@ -88,20 +88,20 @@ def seq_bootstrap_optimized(active_indices, sample_length=None, random_seed=None
     return phi
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True)
 def _seq_bootstrap_optimized_loop(active_indices_values, concurrency):
     N = len(active_indices_values)
     av_uniqueness = np.empty(N)
 
-    for i in prange(N):
+    for i in range(N):
         indices = active_indices_values[i]
         if len(indices) > 0:
             c = concurrency[indices]
             uniqueness = 1.0 / (c + 1.0)
-            av_uniqueness[i] = uniqueness.mean()
+            av_uniqueness[i] = np.mean(uniqueness)
         else:
             av_uniqueness[i] = 0.0
 
-    total = av_uniqueness.sum()
+    total = np.sum(av_uniqueness)
     prob = av_uniqueness / total if total > 0 else np.ones(N) / N
     return prob

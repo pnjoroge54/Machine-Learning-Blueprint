@@ -56,26 +56,55 @@ def _generate_random_features(random_state, bootstrap, n_population, n_samples):
     return indices
 
 
-def _parallel_build_estimators_with_precomputed_indices(
-    n_estimators,
-    ensemble,
-    X,
-    y,
-    sample_indices_list,  # PRE-COMPUTED indices
-    feature_indices_list,  # PRE-COMPUTED indices
-    sample_weight,
-    seeds,
-    total_n_estimators,
-    verbose,
+def _generate_bagging_indices(
+    random_state, bootstrap_features, n_features, max_features, max_samples, active_indices
 ):
-    """
-    Build estimators using pre-computed indices.
-    This is much faster since we don't recompute bootstrap indices.
-    """
-    from sklearn.utils.validation import has_fit_parameter
+    """Randomly draw feature and sample indices."""
+    # Get valid random state - this returns a RandomState object
+    random_state_obj = check_random_state(random_state)
 
+    # Draw samples using sequential bootstrap
+    if isinstance(max_samples, numbers.Integral):
+        sample_indices = seq_bootstrap_optimized(
+            active_indices, sample_length=max_samples, random_seed=random_state_obj
+        )
+    elif isinstance(max_samples, numbers.Real):
+        n_samples = int(round(max_samples * len(active_indices)))
+        sample_indices = seq_bootstrap_optimized(
+            active_indices, sample_length=n_samples, random_seed=random_state_obj
+        )
+    else:
+        sample_indices = seq_bootstrap_optimized(
+            active_indices, sample_length=None, random_seed=random_state_obj
+        )
+
+    # Draw feature indices using the same random state
+    if isinstance(max_features, numbers.Integral):
+        n_feat = max_features
+    elif isinstance(max_features, numbers.Real):
+        n_feat = int(round(max_features * n_features))
+    else:
+        raise ValueError("max_features must be int or float")
+
+    feature_indices = _generate_random_features(
+        random_state_obj, bootstrap_features, n_features, n_feat
+    )
+
+    return sample_indices, feature_indices
+
+
+def _parallel_build_estimators(
+    n_estimators, ensemble, X, y, active_indices, sample_weight, seeds, total_n_estimators, verbose
+):
+    """Private function used to build a batch of estimators within a job."""
+    # Retrieve settings
+    n_samples, n_features = X.shape
+    max_samples = ensemble._max_samples
+    max_features = ensemble.max_features
+    bootstrap_features = ensemble.bootstrap_features
     support_sample_weight = has_fit_parameter(ensemble.estimator_, "sample_weight")
 
+    # Build estimators
     estimators = []
     estimators_samples = []
     estimators_features = []
@@ -90,11 +119,12 @@ def _parallel_build_estimators_with_precomputed_indices(
         random_state = seeds[i]
         estimator = ensemble._make_estimator(append=False, random_state=random_state)
 
-        # Use pre-computed indices (NO index generation here!)
-        sample_indices = sample_indices_list[i]
-        feature_indices = feature_indices_list[i]
+        # Draw samples and features
+        sample_indices, feature_indices = _generate_bagging_indices(
+            random_state, bootstrap_features, n_features, max_features, max_samples, active_indices
+        )
 
-        # Prepare sample weights
+        # Draw samples, using sample weights if supported
         if support_sample_weight and sample_weight is not None:
             curr_sample_weight = sample_weight[sample_indices]
         else:
@@ -103,7 +133,6 @@ def _parallel_build_estimators_with_precomputed_indices(
         estimators_features.append(feature_indices)
         estimators_samples.append(sample_indices)
 
-        # Train estimator
         X_ = X[sample_indices][:, feature_indices]
         y_ = y[sample_indices]
 
@@ -111,54 +140,6 @@ def _parallel_build_estimators_with_precomputed_indices(
         estimators.append(estimator)
 
     return estimators, estimators_features, estimators_samples
-
-
-def _generate_all_bootstrap_indices(
-    active_indices, n_features, max_samples, max_features, bootstrap_features, seeds
-):
-    """
-    Pre-generate all bootstrap indices for all estimators.
-
-    This separates the expensive sequential bootstrap computation from
-    the estimator building process.
-    """
-    sample_indices_list = []
-    feature_indices_list = []
-
-    # Determine sample size
-    if isinstance(max_samples, numbers.Integral):
-        n_samples = max_samples
-    elif isinstance(max_samples, numbers.Real):
-        n_samples = int(round(max_samples * len(active_indices)))
-    else:
-        n_samples = len(active_indices)
-
-    # Determine feature size
-    if isinstance(max_features, numbers.Integral):
-        n_feat = max_features
-    elif isinstance(max_features, numbers.Real):
-        n_feat = int(round(max_features * n_features))
-    else:
-        n_feat = n_features
-
-    # Generate indices for each estimator
-    for seed in seeds:
-        random_state = check_random_state(seed)
-
-        # Generate sample indices using sequential bootstrap
-        sample_indices = seq_bootstrap_optimized(
-            active_indices, sample_length=n_samples, random_seed=random_state
-        )
-
-        # Generate feature indices
-        feature_indices = _generate_random_features(
-            random_state, bootstrap_features, n_features, n_feat
-        )
-
-        sample_indices_list.append(sample_indices)
-        feature_indices_list.append(feature_indices)
-
-    return sample_indices_list, feature_indices_list
 
 
 class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
@@ -258,11 +239,15 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         """
         # Set classes_ and n_classes_ for classifier compatibility
         if hasattr(self, "classes_") and not hasattr(self, "n_classes_"):
+            # This is a classifier, set the required attributes
             self.classes_ = np.unique(y)
             self.n_classes_ = len(self.classes_)
-
         # Validate parameters
         random_state = check_random_state(self.random_state)
+
+        # Generate random seeds for each estimator, just like BaseBagging does
+        random_state = check_random_state(self.random_state)
+        self._seeds = random_state.randint(np.iinfo(np.int32).max, size=self.n_estimators)
 
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
@@ -273,7 +258,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
             sample_weight = check_array(sample_weight, ensure_2d=False)
             check_consistent_length(y, sample_weight)
 
-        # Validate estimator
+        # Remap output for continuous or binary classification
         self._validate_estimator()
 
         # Validate max_samples
@@ -285,11 +270,12 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
 
         if isinstance(max_samples, numbers.Integral):
             max_samples = min(max_samples, n_samples)
-        else:
+        else:  # float
             if not (0.0 < max_samples <= 1.0):
                 raise ValueError("max_samples must be in (0, 1], got %r" % max_samples)
             max_samples = int(round(max_samples * n_samples))
 
+        # Store max_samples
         self._max_samples = max_samples
 
         # Compute indicator matrix for sequential bootstrap
@@ -305,9 +291,10 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
 
         # Warm start handling
         if not self.warm_start or not hasattr(self, "estimators_"):
+            # Free allocated memory, if any
             self.estimators_ = []
             self.estimators_features_ = []
-            self._estimators_samples = []
+            self._estimators_samples = []  # Use private variable instead of property
 
         n_more_estimators = self.n_estimators - len(self.estimators_)
 
@@ -317,49 +304,32 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
                 "len(estimators_)=%d when warm_start==True"
                 % (self.n_estimators, len(self.estimators_))
             )
+
         elif n_more_estimators == 0:
-            warn("Warm-start fitting without increasing n_estimators does not fit new trees.")
+            warn("Warm-start fitting without increasing n_estimators does not " "fit new trees.")
             return self
+
+        # Parallel or sequential construction
+        n_jobs, n_estimators, starts = _partition_estimators(n_more_estimators, self.n_jobs)
+        total_n_estimators = sum(n_estimators)
 
         # Generate random seeds for each estimator
         seeds = random_state.randint(MAX_INT, size=n_more_estimators)
 
-        # Store seeds
+        # Store seeds for sklearn compatibility (used by estimators_samples_ property)
         if not hasattr(self, "_seeds"):
             self._seeds = seeds
         else:
             self._seeds = np.concatenate([self._seeds, seeds])
 
-        # ========== KEY CHANGE: Pre-generate all indices ==========
-        if self.verbose:
-            print("Generating bootstrap indices for all estimators...")
-
-        # Call the helper function (defined in the SAME file)
-        sample_indices_list, feature_indices_list = _generate_all_bootstrap_indices(
-            self.active_indices_,
-            n_features,
-            max_samples,
-            self.max_features,
-            self.bootstrap_features,
-            seeds,
-        )
-
-        if self.verbose:
-            print("Bootstrap indices generated. Building estimators in parallel...")
-
-        # ========== Build estimators in parallel with pre-computed indices ==========
-        n_jobs, n_estimators, starts = _partition_estimators(n_more_estimators, self.n_jobs)
-        total_n_estimators = sum(n_estimators)
-
-        # Use the NEW function (also defined in the SAME file)
+        # Build estimators in parallel
         all_results = Parallel(n_jobs=n_jobs, verbose=self.verbose)(
-            delayed(_parallel_build_estimators_with_precomputed_indices)(
+            delayed(_parallel_build_estimators)(
                 n_estimators[i],
                 self,
                 X,
                 y,
-                sample_indices_list[starts[i] : starts[i + 1]],
-                feature_indices_list[starts[i] : starts[i + 1]],
+                self.active_indices_,
                 sample_weight,
                 seeds[starts[i] : starts[i + 1]],
                 total_n_estimators,
@@ -372,7 +342,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         for result in all_results:
             self.estimators_ += result[0]
             self.estimators_features_ += result[1]
-            self._estimators_samples += result[2]
+            self._estimators_samples += result[2]  # Use private variable
 
         # Compute OOB score if requested
         if self.oob_score:
