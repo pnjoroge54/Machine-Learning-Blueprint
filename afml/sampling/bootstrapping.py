@@ -3,7 +3,6 @@ Logic regarding sequential bootstrapping from chapter 4.
 """
 
 import numpy as np
-import pandas as pd
 from numba import njit
 
 
@@ -27,40 +26,24 @@ def get_ind_matrix(samples_info_sets, price_bars):
     ):
         raise ValueError("NaN values in triple_barrier_events, delete nans")
 
-    triple_barrier_events = pd.DataFrame(samples_info_sets)  # Convert Series to DataFrame
+    mask = (price_bars.index >= samples_info_sets.index[0]) & (
+        price_bars.index <= samples_info_sets.max()
+    )
+    price_bars = price_bars.index[mask]
+    m = sum(mask)
+    n = len(samples_info_sets)
+    ind_mat = np.zeros((m, n), dtype=np.int8)  # Init indicator matrix
 
-    # Take only period covered in triple_barrier_events
-    trimmed_price_bars_index = price_bars[
-        (price_bars.index >= triple_barrier_events.index.min())
-        & (price_bars.index <= triple_barrier_events.t1.max())
-    ].index
+    # precompute searchsorted positions to restrict scanning range
+    starts = np.searchsorted(price_bars, samples_info_sets.index, side="left")
+    ends = np.searchsorted(price_bars, samples_info_sets.values, side="right")  # exclusive
 
-    label_endtime = triple_barrier_events.t1
-    bar_index = list(
-        triple_barrier_events.index
-    )  # Generate index for indicator matrix from t1 and index
-    bar_index.extend(triple_barrier_events.t1)
-    bar_index.extend(trimmed_price_bars_index)  # Add price bars index
-    bar_index = sorted(list(set(bar_index)))  # Drop duplicates and sort
+    for sample_id in range(n):
+        s = starts[sample_id]
+        e = ends[sample_id]
+        if e > s:
+            ind_mat[s:e, sample_id] = 1
 
-    # Get sorted timestamps with index in sorted array
-    sorted_timestamps = dict(zip(bar_index, range(len(bar_index))))
-
-    tokenized_endtimes = np.column_stack(
-        (
-            label_endtime.index.map(sorted_timestamps).to_numpy(),
-            label_endtime.map(sorted_timestamps).to_numpy(),
-        )
-    )  # Create array of arrays: [label_index_position, label_endtime_position]
-
-    ind_mat = np.zeros((len(bar_index), len(label_endtime)), dtype=np.int8)  # Init indicator matrix
-    for sample_num, label_array in enumerate(tokenized_endtimes):
-        label_index = label_array[0]
-        label_endtime = label_array[1]
-        ones_array = np.ones(
-            (1, label_endtime - label_index + 1), dtype=np.int8
-        )  # Ones array which corresponds to number of 1 to insert
-        ind_mat[label_index : label_endtime + 1, sample_num] = ones_array
     return ind_mat
 
 
