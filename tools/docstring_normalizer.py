@@ -22,7 +22,6 @@ import re
 import textwrap
 from typing import Dict, List, Optional, Tuple
 
-
 # ---------- Helpers: parse docstrings (best-effort) ----------
 
 _PARAM_RE_SPHINX = re.compile(r":param\s+(?P<name>\w+)\s*:\s*(?P<desc>.*)")
@@ -37,7 +36,9 @@ def _split_sections(doc: str) -> List[str]:
     return doc.splitlines()
 
 
-def parse_docstring(doc: Optional[str]) -> Tuple[str, Dict[str, Dict[str, str]], Optional[Dict[str, str]]]:
+def parse_docstring(
+    doc: Optional[str],
+) -> Tuple[str, Dict[str, Dict[str, str]], Optional[Dict[str, str]]]:
     """
     Return (short_description, params, return_info)
     params: {name: {"type": type_str or "", "desc": description or ""}}
@@ -158,7 +159,10 @@ def parse_docstring(doc: Optional[str]) -> Tuple[str, Dict[str, Dict[str, str]],
 
 # ---------- Renderers ----------
 
-def _render_google(short: str, params: Dict[str, Dict[str, str]], ret: Optional[Dict[str, str]], indent: str) -> str:
+
+def _render_google(
+    short: str, params: Dict[str, Dict[str, str]], ret: Optional[Dict[str, str]], indent: str
+) -> str:
     parts: List[str] = []
     if short:
         parts.append(short)
@@ -183,7 +187,9 @@ def _render_google(short: str, params: Dict[str, Dict[str, str]], ret: Optional[
     return body
 
 
-def _render_numpy(short: str, params: Dict[str, Dict[str, str]], ret: Optional[Dict[str, str]], indent: str) -> str:
+def _render_numpy(
+    short: str, params: Dict[str, Dict[str, str]], ret: Optional[Dict[str, str]], indent: str
+) -> str:
     parts: List[str] = []
     if short:
         parts.append(short)
@@ -213,7 +219,9 @@ def _render_numpy(short: str, params: Dict[str, Dict[str, str]], ret: Optional[D
     return body
 
 
-def _render_sphinx(short: str, params: Dict[str, Dict[str, str]], ret: Optional[Dict[str, str]], indent: str) -> str:
+def _render_sphinx(
+    short: str, params: Dict[str, Dict[str, str]], ret: Optional[Dict[str, str]], indent: str
+) -> str:
     parts: List[str] = []
     if short:
         parts.append(short)
@@ -246,11 +254,14 @@ _RENDERERS = {
 
 # ---------- Normalizer class ----------
 
+
 class DocstringNormalizer:
     def __init__(self, target_style: str = "google"):
         target_style = target_style.lower()
         if target_style not in _RENDERERS:
-            raise ValueError(f"Unsupported style {target_style!r}; choose one of {list(_RENDERERS)}")
+            raise ValueError(
+                f"Unsupported style {target_style!r}; choose one of {list(_RENDERERS)}"
+            )
         self.target_style = target_style
 
     def normalize_file(self, path: str, write: bool = False) -> Optional[str]:
@@ -275,13 +286,17 @@ class DocstringNormalizer:
         Strategy:
         - For each node that can have a docstring (Module, FunctionDef, AsyncFunctionDef, ClassDef),
           extract the docstring and its location, build a normalized docstring, and replace it in source.
-        - Replacement preserves triple-quote style (''' or """) when possible and indentation.
+        - Replacement preserves triple-quote style (''') when possible and indentation.
         """
         # Collect edits as (start_idx, end_idx, replacement_text)
         edits: List[Tuple[int, int, str]] = []
 
         # Helper to get node docstring range
-        for node in [tree] + [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]:
+        for node in [tree] + [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        ]:
             # Only consider top-level FunctionDef/ClassDef or nested ones too (methods)
             doc = ast.get_docstring(node, clean=False)
             if doc is None:
@@ -307,7 +322,11 @@ class DocstringNormalizer:
                 start_idx = sum(len(l) for l in src_lines[: start_line - 1]) + start_col
                 end_idx = sum(len(l) for l in src_lines[: end_line - 1]) + end_col
                 # Determine indentation for docstring content (based on node.col_offset)
-                indent = " " * (node.col_offset + 4) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else " " * node.col_offset
+                indent = (
+                    " " * (node.col_offset + 4)
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    else " " * node.col_offset
+                )
                 # Parse old docstring into structured pieces
                 short, params, ret = parse_docstring(doc)
                 # Render new docstring body
@@ -326,11 +345,21 @@ class DocstringNormalizer:
                 # Indent body lines to match node indentation
                 if body:
                     # indent body by node indentation + 4 spaces for function content
-                    target_indent = " " * (node.col_offset + 4) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else " " * node.col_offset
+                    target_indent = (
+                        " " * (node.col_offset + 4)
+                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        else " " * node.col_offset
+                    )
                     # ensure body lines are indented, but keep leading blank lines minimal
                     body_lines = body.splitlines()
-                    body_indented = "\n".join((target_indent + line) if line.strip() != "" else "" for line in body_lines)
-                    new_inner = "\n" + body_indented + ("\n" + target_indent if not body_indented.endswith("\n") else "")
+                    body_indented = "\n".join(
+                        (target_indent + line) if line.strip() != "" else "" for line in body_lines
+                    )
+                    new_inner = (
+                        "\n"
+                        + body_indented
+                        + ("\n" + target_indent if not body_indented.endswith("\n") else "")
+                    )
                 else:
                     new_inner = "\n" + (" " * (node.col_offset + 4)) + "\n"
 
@@ -350,7 +379,10 @@ class DocstringNormalizer:
 
 # ---------- CLI utility to process directory ----------
 
-def normalize_directory(root: str, target_style: str = "google", write: bool = False) -> List[Tuple[str, bool]]:
+
+def normalize_directory(
+    root: str, target_style: str = "google", write: bool = False
+) -> List[Tuple[str, bool]]:
     """
     Walk `root` and normalize all .py files. Returns list of (path, changed_bool).
     If write=True, files are overwritten.
@@ -379,10 +411,13 @@ def normalize_directory(root: str, target_style: str = "google", write: bool = F
 
 if __name__ == "__main__":
     import argparse
+
     p = argparse.ArgumentParser(description="Normalize docstrings to a uniform style.")
     p.add_argument("root", help="Path to package or folder (e.g., ./afml)")
     p.add_argument("--style", choices=list(_RENDERERS.keys()), default="google")
-    p.add_argument("--write", action="store_true", help="Overwrite files with normalized docstrings")
+    p.add_argument(
+        "--write", action="store_true", help="Overwrite files with normalized docstrings"
+    )
     args = p.parse_args()
     results = normalize_directory(args.root, target_style=args.style, write=args.write)
     for path, changed in results:
