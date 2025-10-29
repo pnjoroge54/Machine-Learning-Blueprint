@@ -143,7 +143,110 @@ def _parallel_build_estimators(
 
 class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     """
-    Base class for Sequentially Bootstrapped Classifier and Regressor, extension of sklearn's BaseBagging
+    SequentiallyBootstrappedBaseBagging
+
+    Base class implementing an ensemble built with a sequential bootstrap sampler for
+    row selection and optional per-estimator feature subsampling. This base class
+    provides the common plumbing for training sets, feature-selection, and
+    out-of-bag (OOB) bookkeeping used by SequentiallyBootstrappedBaggingClassifier and
+    related concrete subclasses.
+
+    The implementation assumes concrete subclasses implement label- or task-specific
+    aggregation and prediction logic (for example majority-vote vs probability
+    averaging). The class focuses on sampling, estimator lifecycle (fit/clone),
+    OOB bookkeeping, and ergonomics for financial-style evaluation (purging/embargo).
+
+    Parameters
+    ----------
+    base_estimator : estimator object
+        A scikit-learn-compatible, unfitted estimator implementing fit and predict.
+        For probability-based aggregation or scoring, base_estimator should implement
+        predict_proba.
+    n_estimators : int, optional (default=10)
+        Number of base estimators to build in the ensemble.
+    max_samples : int or float, optional (default=1.0)
+        If int, the exact number of training rows drawn per estimator; if float in
+        (0, 1], the fraction of the training set drawn per estimator.
+    replacement : bool, optional (default=True)
+        If True, sample training rows with replacement. If False, sample without
+        replacement.
+    bootstrap_features : bool, optional (default=False)
+        If True, features are sampled with replacement for each base estimator
+        (feature bagging). When enabled, each estimator is trained on a randomly
+        drawn subset of columns in addition to the sampled rows. This increases
+        estimator diversity and can reduce ensemble variance but may weaken
+        individual learners when the feature set is small or highly informative.
+        Use `max_features` to control the number (or fraction) of features drawn
+        per estimator.
+    max_features : int or float or None, optional (default=None)
+        If None and bootstrap_features is True, the full feature set is sampled
+        (with replacement). If int, draw exactly `max_features` columns per
+        estimator. If float in (0, 1], draw that fraction of the total feature
+        count per estimator. Ignored when bootstrap_features is False.
+    oob_score : bool, optional (default=False)
+        Whether to compute and store the estimator's out-of-bag score after fit.
+        Matches scikit-learn semantics: a boolean flag only. If True the estimator
+        will compute the built-in OOB score and expose `oob_score_`. Use external
+        helpers to compute custom OOB metrics without changing this flag.
+    random_state : int or np.random.Generator or None, optional (default=None)
+        RNG seed or generator used for reproducible sampling.
+    n_jobs : int or None, optional (default=None)
+        Parallel jobs for fitting/predicting (None=1, -1=all cores). Concrete
+        subclasses may implement parallel dispatch.
+    verbose : int, optional (default=0)
+        Verbosity level.
+
+    Attributes
+    ----------
+    estimators_ : list
+        Fitted base estimator instances (length == n_estimators) after fit.
+    samples_ : list of ndarray
+        List of integer index arrays used as training indices for each fitted
+        estimator. Used for reconstructing OOB masks or external OOB analysis.
+    features_ : list of ndarray or None
+        If bootstrap_features is True, a list of integer arrays of feature indices
+        drawn for each estimator; otherwise None.
+    oob_score_ : float or None
+        The built-in OOB score computed by the estimator when oob_score=True; None
+        when OOB scoring is disabled or unavailable.
+    samples_info_sets : pd.Series or None
+        Optional per-sample metadata used by sequential samplers (e.g., timestamps or
+        label overlap extents). Concrete subclasses may require this to build
+        purged/embargoed splits.
+
+    Notes
+    -----
+    - Sequential bootstrap samplers are designed for settings where observations
+      overlap in label exposure (for example, overlapping trade labels in
+      financial datasets). Use purging and embargo strategies when evaluating to
+      avoid temporal leakage.
+    - Feature bootstrapping (bootstrap_features=True) is orthogonal to sequential
+      bootstrapping: row sampling respects temporal/label structure while feature
+      sampling increases estimator diversity. Always validate feature-subsampling
+      choices with purged/embargoed cross-validation and domain-appropriate
+      backtesting.
+    - The class intentionally preserves `oob_score` as a boolean flag to remain
+      API-compatible with scikit-learn. To compute custom OOB metrics (F1, AUC,
+      weighted metrics) use an external helper that aggregates per-estimator OOB
+      predictions (or the `samples_` list) and applies the desired scorer.
+
+    Examples
+    --------
+    >>> from sklearn.tree import DecisionTreeClassifier
+    >>> base = DecisionTreeClassifier(max_depth=6)
+    >>> ens = SequentiallyBootstrappedBaseBagging(
+    ...     base_estimator=base,
+    ...     n_estimators=50,
+    ...     max_samples=0.5,
+    ...     replacement=True,
+    ...     bootstrap_features=True,
+    ...     max_features=0.3,
+    ...     oob_score=False,
+    ...     aggregation="probability",
+    ...     random_state=42,
+    ... )
+    >>> ens.fit(X_train, y_train)
+    >>> proba = ens.predict_proba(X_test)  # if implemented in subclass
     """
 
     @abstractmethod
@@ -246,7 +349,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
 
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
-        n_samples, n_features = X.shape
+        n_samples = X.shape[0]
 
         # Check sample weight
         if sample_weight is not None:
@@ -410,11 +513,6 @@ class SequentiallyBootstrappedBaggingClassifier(
         The number of classes.
     :ivar oob_score_: (float)
         Score of the training dataset obtained using an out-of-bag estimate.
-    :ivar oob_decision_function_: (array) of shape = [n_samples, n_classes]
-        Decision function computed with out-of-bag estimate on the training
-        set. If n_estimators is small it might be possible that a data point
-        was never left out during the bootstrap. In this case,
-        `oob_decision_function_` might contain NaN.
     """
 
     def __init__(
