@@ -13,7 +13,6 @@ from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 from sklearn.ensemble._bagging import BaseBagging
 from sklearn.ensemble._base import _partition_estimators
 
-# from sklearn.utils import indices_to_mask
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.utils import (
@@ -26,7 +25,7 @@ from sklearn.utils.random import sample_without_replacement
 from sklearn.utils.validation import has_fit_parameter
 
 from ..util.misc import indices_to_mask
-from .optimized_bootstrapping import get_active_indices, seq_bootstrap_optimized
+from .bootstrapping import get_active_indices, seq_bootstrap_optimized
 
 MAX_INT = np.iinfo(np.int32).max
 
@@ -455,8 +454,8 @@ class SequentiallyBootstrappedBaggingClassifier(
     """
     A Sequentially Bootstrapped Bagging classifier is an ensemble meta-estimator that fits base
     classifiers each on random subsets of the original dataset generated using
-    Sequential Bootstrapping sampling procedure and then aggregate their individual predictions (
-    either by voting or by averaging) to form a final prediction. Such a meta-estimator can typically be used as
+    Sequential Bootstrapping sampling procedure and then aggregate their individual predictions
+    to form a final prediction. Such a meta-estimator can typically be used as
     a way to reduce the variance of a black-box estimator (e.g., a decision
     tree), by introducing randomization into its construction procedure and
     then making an ensemble out of it.
@@ -549,7 +548,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         """Check the estimator and set the estimator_ attribute."""
         super()._validate_estimator(default=DecisionTreeClassifier())
 
-    def _fit(self, X, y, max_samples=None, max_depth=None, sample_weight=None):
+    def _fit(self, X, y, max_samples=None, sample_weight=None):
         """
         Override _fit to set classes_ and n_classes_ for classifier compatibility.
         """
@@ -558,7 +557,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         self.n_classes_ = len(self.classes_)
 
         # Call parent _fit method
-        return super()._fit(X, y, max_samples, max_depth, sample_weight)
+        return super()._fit(X, y, max_samples, sample_weight)
 
     def _set_oob_score(self, X, y):
         """Compute out-of-bag score"""
@@ -725,3 +724,58 @@ class SequentiallyBootstrappedBaggingRegressor(
 
         self.oob_prediction_ = predictions
         self.oob_score_ = r2_score(y[mask], predictions[mask])
+
+
+def compute_custom_oob_metrics(clf, X, y, sample_weight=None):
+    """
+    Compute custom OOB metrics (F1, AUC, precision/recall) for a fitted ensemble.
+
+    Args:
+        clf: Fitted SequentiallyBootstrappedBaggingClassifier
+        X: Feature matrix used in training
+        y: True labels
+        sample_weight: Optional sample weights
+
+    Returns:
+        dict: Custom OOB metric values
+    """
+    from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+
+    n_samples = y.shape[0]
+    n_classes = clf.n_classes_
+
+    # Accumulate OOB predictions
+    oob_proba = np.zeros((n_samples, n_classes))
+    oob_count = np.zeros(n_samples)
+
+    for estimator, samples, features in zip(
+        clf.estimators_, clf.estimators_samples_, clf.estimators_features_
+    ):
+        mask = ~indices_to_mask(samples, n_samples)
+        if np.any(mask):
+            X_oob = X[mask][:, features]
+            oob_proba[mask] += estimator.predict_proba(X_oob)
+            oob_count[mask] += 1
+
+    # Average and get predictions
+    oob_mask = oob_count > 0
+    oob_proba[oob_mask] /= oob_count[oob_mask, np.newaxis]
+    oob_pred = np.argmax(oob_proba, axis=1)
+
+    # Compute metrics on samples with OOB predictions
+    y_oob = y[oob_mask]
+    pred_oob = oob_pred[oob_mask]
+    proba_oob = oob_proba[oob_mask]
+
+    metrics = {
+        "f1": f1_score(y_oob, pred_oob, average="weighted"),
+        "precision": precision_score(y_oob, pred_oob, average="weighted"),
+        "recall": recall_score(y_oob, pred_oob, average="weighted"),
+        "coverage": oob_mask.sum() / n_samples,  # Fraction with OOB predictions
+    }
+
+    # Add AUC for binary classification
+    if n_classes == 2:
+        metrics["auc"] = roc_auc_score(y_oob, proba_oob[:, 1])
+
+    return metrics
