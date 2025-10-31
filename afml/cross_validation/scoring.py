@@ -3,7 +3,7 @@ import pandas as pd
 from sklearn.utils.multiclass import unique_labels
 
 
-def probability_weighted_accuracy(y_true, y_prob, sample_weight=None, labels=None, eps=1e-15):
+def probability_weighted_accuracy(y_true, y_pred, sample_weight=None, labels=None, eps=1e-15):
     """
     Calculates the Probability-Weighted Accuracy (PWA) score.
 
@@ -14,12 +14,12 @@ def probability_weighted_accuracy(y_true, y_prob, sample_weight=None, labels=Non
 
     Args:
         y_true (array-like): True class labels, shape (n_samples,).
-        y_prob (array-like or DataFrame): Predicted probabilities,
+        y_pred (array-like or DataFrame): Predicted probabilities,
             shape (n_samples, n_classes). If DataFrame, columns must be
             class labels.
         sample_weight (array-like, optional): Per-sample weights.
         labels (array-like, optional): List of all expected class labels
-            (in the order corresponding to columns of y_prob).
+            (in the order corresponding to columns of y_pred).
         eps (float): Small value to clip probabilities into [eps, 1 - eps].
 
     Returns:
@@ -27,15 +27,15 @@ def probability_weighted_accuracy(y_true, y_prob, sample_weight=None, labels=Non
     """
     # 1) Convert inputs to numpy arrays (or reorder DataFrame)
     y_true = np.asarray(y_true)
-    if isinstance(y_prob, pd.DataFrame):
+    if isinstance(y_pred, pd.DataFrame):
         # If labels given, reorder columns; otherwise infer column order
-        cols = labels if labels is not None else y_prob.columns.tolist()
-        y_prob = y_prob[cols].to_numpy()
+        cols = labels if labels is not None else y_pred.columns.tolist()
+        y_pred = y_pred[cols].to_numpy()
     else:
-        y_prob = np.asarray(y_prob)
+        y_pred = np.asarray(y_pred)
 
     # 2) Clip probabilities to avoid zeros or ones
-    y_prob = np.clip(y_prob, eps, 1 - eps)
+    y_pred = np.clip(y_pred, eps, 1 - eps)
 
     # 3) Determine class list and validate
     if labels is not None:
@@ -45,16 +45,16 @@ def probability_weighted_accuracy(y_true, y_prob, sample_weight=None, labels=Non
         classes = unique_labels(y_true)
     n_classes = classes.shape[0]
 
-    # 4) Handle binary case where y_prob might be 1D
-    if y_prob.ndim == 1:
+    # 4) Handle binary case where y_pred might be 1D
+    if y_pred.ndim == 1:
         # Interpret as probability of class classes[1]
-        y_prob = np.vstack([1 - y_prob, y_prob]).T
+        y_pred = np.vstack([1 - y_pred, y_pred]).T
         n_classes = 2
 
     # 5) Shape checks
-    if y_prob.ndim != 2 or y_prob.shape[1] != n_classes:
+    if y_pred.ndim != 2 or y_pred.shape[1] != n_classes:
         raise ValueError(
-            f"y_prob must be shape (n_samples, n_classes={n_classes}), " f"but got {y_prob.shape}"
+            f"y_pred must be shape (n_samples, n_classes={n_classes}), " f"but got {y_pred.shape}"
         )
 
     if not np.all(np.isin(y_true, classes)):
@@ -70,8 +70,8 @@ def probability_weighted_accuracy(y_true, y_prob, sample_weight=None, labels=Non
             raise ValueError("sample_weight must have same length as y_true")
 
     # 7) Predicted class index and its probability
-    pred_idx = np.argmax(y_prob, axis=1)
-    p_n = y_prob[np.arange(len(y_true)), pred_idx]
+    pred_idx = np.argmax(y_pred, axis=1)
+    p_n = y_pred[np.arange(len(y_true)), pred_idx]
 
     # 8) Correctness indicator y_n ∈ {0,1}
     #    Map y_true labels to indices in `classes`

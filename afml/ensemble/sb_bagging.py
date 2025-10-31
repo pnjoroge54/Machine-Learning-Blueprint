@@ -12,7 +12,6 @@ from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 from sklearn.ensemble._bagging import BaseBagging
 from sklearn.ensemble._base import _partition_estimators
-
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.utils import (
@@ -24,8 +23,8 @@ from sklearn.utils import (
 from sklearn.utils.random import sample_without_replacement
 from sklearn.utils.validation import has_fit_parameter
 
+from ..sampling.bootstrapping import get_active_indices, seq_bootstrap
 from ..util.misc import indices_to_mask
-from .bootstrapping import get_active_indices, seq_bootstrap_optimized
 
 MAX_INT = np.iinfo(np.int32).max
 
@@ -63,16 +62,16 @@ def _generate_bagging_indices(
 
     # Draw samples using sequential bootstrap
     if isinstance(max_samples, numbers.Integral):
-        sample_indices = seq_bootstrap_optimized(
+        sample_indices = seq_bootstrap(
             active_indices, sample_length=max_samples, random_seed=random_state_obj
         )
     elif isinstance(max_samples, numbers.Real):
         n_samples = int(round(max_samples * len(active_indices)))
-        sample_indices = seq_bootstrap_optimized(
+        sample_indices = seq_bootstrap(
             active_indices, sample_length=n_samples, random_seed=random_state_obj
         )
     else:
-        sample_indices = seq_bootstrap_optimized(
+        sample_indices = seq_bootstrap(
             active_indices, sample_length=None, random_seed=random_state_obj
         )
 

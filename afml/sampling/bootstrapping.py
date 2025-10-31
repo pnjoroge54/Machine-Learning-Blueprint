@@ -1,42 +1,36 @@
 """
-Logic regarding sequential bootstrapping from chapter 4.
+Optimized implementation of logic regarding sequential bootstrapping from chapter 4.
 """
 
 import numpy as np
 from numba import njit
 
 
-def get_ind_matrix(samples_info_sets, price_bars):
+def get_ind_matrix(samples_info_sets, price_bars_index):
     """
-    Advances in Financial Machine Learning, Snippet 4.3, page 65.
+    Build an indicator mapping from each sample to the bar indices it influences.
 
-    Build an Indicator Matrix
+    Args:
+        samples_info_sets (pd.Series):
+            Triple-barrier events (t1) returned by labeling.get_events.
+            Index: start times (t0) as pd.DatetimeIndex.
+            Values: end times (t1) as pd.Timestamp (or NaT for open events).
+        price_bars_index (pd.DatetimeIndex or array-like):
+            Sorted bar timestamps (pd.DatetimeIndex or array-like).
 
-    Get indicator matrix. The book implementation uses bar_index as input, however there is no explanation
-    how to form it. We decided that using triple_barrier_events and price bars by analogy with concurrency
-    is the best option.
-
-    :param samples_info_sets: (pd.Series): Triple barrier events(t1) from labeling.get_events
-    :param price_bars: (pd.Series): Price bars which were used to form triple barrier events
-    :return: (np.array) Indicator binary matrix indicating what (price) bars influence the label for each observation
+    Returns:
+        np.array: Indicator matrix
     """
-    if (
-        bool(samples_info_sets.isnull().values.any()) is True
-        or bool(samples_info_sets.index.isnull().any()) is True
-    ):
-        raise ValueError("NaN values in triple_barrier_events, delete nans")
-
-    mask = (price_bars.index >= samples_info_sets.index[0]) & (
-        price_bars.index <= samples_info_sets.max()
+    m = sum(
+        (price_bars_index >= samples_info_sets.index.min())
+        & (price_bars_index <= samples_info_sets.max())
     )
-    price_bars = price_bars.index[mask]
-    m = sum(mask)
     n = len(samples_info_sets)
-    ind_mat = np.zeros((m, n), dtype=np.int8)  # Init indicator matrix
+    ind_mat = np.zeros((m, n), dtype=np.int8)
 
     # precompute searchsorted positions to restrict scanning range
-    starts = np.searchsorted(price_bars, samples_info_sets.index, side="left")
-    ends = np.searchsorted(price_bars, samples_info_sets.values, side="right")  # exclusive
+    starts = np.searchsorted(price_bars_index, samples_info_sets.index, side="left")
+    ends = np.searchsorted(price_bars_index, samples_info_sets.values, side="right")  # exclusive
 
     for sample_id in range(n):
         s = starts[sample_id]
@@ -45,6 +39,41 @@ def get_ind_matrix(samples_info_sets, price_bars):
             ind_mat[s:e, sample_id] = 1
 
     return ind_mat
+
+
+def get_active_indices(samples_info_sets, price_bars_index):
+    """
+    Build an indicator mapping from each sample to the bar indices it influences.
+
+    Args:
+        samples_info_sets (pd.Series):
+            Triple-barrier events (t1) returned by labeling.get_events.
+            Index: start times (t0) as pd.DatetimeIndex.
+            Values: end times (t1) as pd.Timestamp (or NaT for open events).
+        price_bars_index (pd.DatetimeIndex or array-like):
+            Sorted bar timestamps (pd.DatetimeIndex or array-like).
+
+    Returns:
+        dict:
+            Standard Python dictionary mapping sample_id (int) to a numpy.ndarray of
+            bar indices (dtype=int64). Example: {0: array([0,1,2], dtype=int64), 1: array([], dtype=int64), ...}
+    """
+    n = len(samples_info_sets)
+    active_indices = {}
+
+    # precompute searchsorted positions to restrict scanning range
+    starts = np.searchsorted(price_bars_index, samples_info_sets.index, side="left")
+    ends = np.searchsorted(price_bars_index, samples_info_sets.values, side="right")  # exclusive
+
+    for sample_id in range(n):
+        s = starts[sample_id]
+        e = ends[sample_id]
+        if e > s:
+            active_indices[sample_id] = np.arange(s, e, dtype=int)
+        else:
+            active_indices[sample_id] = np.empty(0, dtype=int)
+
+    return active_indices
 
 
 def get_ind_mat_average_uniqueness(ind_mat):
@@ -69,104 +98,253 @@ def get_ind_mat_average_uniqueness(ind_mat):
     return avg_uniqueness
 
 
-def get_ind_mat_label_uniqueness(ind_mat):
+# -----------------
+# Packing helpers
+# -----------------
+def pack_active_indices(active_indices):
     """
-    Advances in Financial Machine Learning, An adaption of Snippet 4.4. page 65.
+    Convert dict/list-of-arrays active_indices into flattened arrays and offsets.
 
-    Returns the indicator matrix element uniqueness.
+    Args:
+        active_indices (dict or list): mapping sample_id -> 1D ndarray of bar indices
 
-    :param ind_mat: (np.matrix) Indicator binary matrix
-    :return: (np.matrix) Element uniqueness
+    Returns:
+        flat_indices (ndarray int64): concatenated bar indices for all samples
+        offsets (ndarray int64): start index in flat_indices for each sample (len = n+1)
+        lengths (ndarray int64): number of indices per sample (len = n)
+        sample_ids (list): list of sample ids in the order used to pack data
     """
-    ind_mat = np.array(ind_mat, dtype=np.float64)
-    concurrency = ind_mat.sum(axis=1)
-    uniqueness = np.divide(
-        ind_mat.T, concurrency, out=np.zeros_like(ind_mat.T), where=concurrency != 0
-    )
-    return uniqueness
+    # Preserve sample id ordering to allow mapping between chosen index and original id
+    if isinstance(active_indices, dict):
+        sample_ids = list(active_indices.keys())
+        values = [active_indices[sid] for sid in sample_ids]
+    else:
+        # assume list-like ordered by sample id 0..n-1
+        sample_ids = list(range(len(active_indices)))
+        values = list(active_indices)
+
+    lengths = np.array([v.size for v in values], dtype=np.int64)
+    offsets = np.empty(len(values) + 1, dtype=np.int64)
+    offsets[0] = 0
+    offsets[1:] = np.cumsum(lengths)
+
+    total = int(offsets[-1])
+    if total == 0:
+        flat_indices = np.empty(0, dtype=np.int64)
+    else:
+        flat_indices = np.empty(total, dtype=np.int64)
+        pos = 0
+        for v in values:
+            l = v.size
+            if l:
+                flat_indices[pos : pos + l] = v
+            pos += l
+
+    return flat_indices, offsets, lengths, sample_ids
+
+
+# ------------------------------
+# Numba-accelerated primitives
+# ------------------------------
+@njit(cache=True)
+def _compute_scores_flat(flat_indices, offsets, lengths, concurrency):
+    """
+    Compute average uniqueness for each sample using flattened indices.
+
+    This follows de Prado's approach: for each bar in a sample, compute uniqueness as 1/(c+1),
+    then average across all bars in that sample.
+
+    Args:
+        flat_indices (ndarray int64): concatenated indices
+        offsets (ndarray int64): start positions (len = n+1)
+        lengths (ndarray int64): counts per sample
+        concurrency (ndarray int64): current concurrency counts per bar
+
+    Returns:
+        scores (ndarray float64): average uniqueness per sample
+    """
+    n = offsets.shape[0] - 1
+    scores = np.empty(n, dtype=np.float64)
+
+    for i in range(n):
+        s = offsets[i]
+        e = offsets[i + 1]
+        length = lengths[i]
+
+        if length == 0:
+            # If a sample covers no bars, assign zero average uniqueness
+            scores[i] = 0.0
+        else:
+            # Compute uniqueness = 1/(c+1) for each bar, then average
+            sum_uniqueness = 0.0
+            for k in range(s, e):
+                bar = flat_indices[k]
+                c = concurrency[bar]
+                uniqueness = 1.0 / (c + 1.0)
+                sum_uniqueness += uniqueness
+            avg_uniqueness = sum_uniqueness / length
+            scores[i] = avg_uniqueness
+
+    return scores
 
 
 @njit(cache=True)
-def _bootstrap_loop_run(ind_mat, prev_concurrency):  # pragma: no cover
+def _normalize_to_prob(scores):
     """
-    Part of Sequential Bootstrapping for-loop. Using previously accumulated concurrency array, loops through all samples
-    and generates averages uniqueness array of label based on previously accumulated concurrency
-
-    :param ind_mat (np.array): Indicator matrix from get_ind_matrix function
-    :param prev_concurrency (np.array): Accumulated concurrency from previous iterations of sequential bootstrapping
-    :return: (np.array): Draw probabilities based on previously accumulated concurrency
+    Normalize non-negative scores to a probability vector. If all zero, return uniform.
     """
-    avg_unique = np.zeros(ind_mat.shape[1])  # Array of label uniqueness
+    n = scores.shape[0]
+    total = 0.0
+    for i in range(n):
+        total += scores[i]
 
-    for i in range(ind_mat.shape[1]):  # pylint: disable=not-an-iterable
-        prev_average_uniqueness = 0
-        number_of_elements = 0
-        reduced_mat = ind_mat[:, i]
-        for j in range(len(reduced_mat)):  # pylint: disable=consider-using-enumerate
-            if reduced_mat[j] > 0:
-                new_el = reduced_mat[j] / (reduced_mat[j] + prev_concurrency[j])
-                average_uniqueness = (prev_average_uniqueness * number_of_elements + new_el) / (
-                    number_of_elements + 1
-                )
-                number_of_elements += 1
-                prev_average_uniqueness = average_uniqueness
-        avg_unique[i] = average_uniqueness
-
-    prob = avg_unique / avg_unique.sum()
+    prob = np.empty(n, dtype=np.float64)
+    if total == 0.0:
+        # fallback to uniform distribution
+        uni = 1.0 / n
+        for i in range(n):
+            prob[i] = uni
+    else:
+        for i in range(n):
+            prob[i] = scores[i] / total
     return prob
 
 
-def seq_bootstrap(
-    ind_mat,
-    sample_length=None,
-    warmup_samples=None,
-    compare=False,
-    verbose=False,
-    random_state=np.random.RandomState(),
-):
+@njit(cache=True)
+def _choose_index_from_cdf(prob, u):
     """
-    Advances in Financial Machine Learning, Snippet 4.5, Snippet 4.6, page 65.
+    Convert a uniform random number u in [0,1) to an index using the cumulative distribution.
 
-    Return Sample from Sequential Bootstrap
-
-    Generate a sample via sequential bootstrap.
-    Note: Moved from pd.DataFrame to np.matrix for performance increase
-
-    :param ind_mat: (pd.DataFrame) Indicator matrix from triple barrier events
-    :param sample_length: (int) Length of bootstrapped sample
-    :param warmup_samples: (list) List of previously drawn samples
-    :param compare: (boolean) Flag to print standard bootstrap uniqueness vs sequential bootstrap uniqueness
-    :param verbose: (boolean) Flag to print updated probabilities on each step
-    :param random_state: (np.random.RandomState) Random state
-    :return: (array) Bootstrapped samples indexes
+    This avoids calling numpy.choice inside numba and is efficient.
     """
+    n = prob.shape[0]
+    cum = 0.0
+    for i in range(n):
+        cum += prob[i]
+        if u < cum:
+            return i
+    # numerical fallback: return last index
+    return n - 1
+
+
+@njit(cache=True)
+def _increment_concurrency_flat(flat_indices, offsets, chosen, concurrency):
+    """
+    Increment concurrency for the bars covered by sample `chosen`.
+    """
+    s = offsets[chosen]
+    e = offsets[chosen + 1]
+    for k in range(s, e):
+        bar = flat_indices[k]
+        concurrency[bar] += 1
+
+
+# ------------------------------------------------------------------
+# Fully njitted sampling procedure (no Python loops per-iteration)
+# ------------------------------------------------------------------
+@njit(cache=True)
+def _seq_bootstrap_loop(flat_indices, offsets, lengths, concurrency, uniforms):
+    """
+    Njitted sequential bootstrap loop.
+
+    Args:
+        flat_indices, offsets, lengths: flattened index layout
+        concurrency (ndarray int64): initial concurrency vector (will be mutated)
+        uniforms (ndarray float64): pre-drawn uniform random numbers in [0,1), length = sample_length
+
+    Returns:
+        chosen_indices (ndarray int64): sequence of chosen sample indices (positions in packed order)
+    """
+    sample_length = uniforms.shape[0]
+    chosen_indices = np.empty(sample_length, dtype=np.int64)
+
+    for it in range(sample_length):
+        # compute scores and probabilities given current concurrency
+        scores = _compute_scores_flat(flat_indices, offsets, lengths, concurrency)
+        prob = _normalize_to_prob(scores)
+
+        # map uniform to a sample index
+        u = uniforms[it]
+        idx = _choose_index_from_cdf(prob, u)
+        chosen_indices[it] = idx
+
+        # update concurrency for selected sample
+        _increment_concurrency_flat(flat_indices, offsets, idx, concurrency)
+
+    return chosen_indices
+
+
+# -----------------------------------------------------------------------------------
+# Public wrapper: reproducible, packs data, runs njit sampler, maps to original ids
+# -----------------------------------------------------------------------------------
+def seq_bootstrap(active_indices, sample_length=None, random_seed=None):
+    """
+    End-to-end sequential bootstrap using flattened arrays + Numba.
+
+    Implements the sequential bootstrap as described in de Prado's "Advances in Financial
+    Machine Learning" Chapter 4: average uniqueness per sample where uniqueness per bar
+    is 1/(concurrency+1).
+
+    Args:
+        active_indices (dict or list): mapping sample id -> ndarray of bar indices
+        sample_length (int or None): requested number of draws; defaults to number of samples
+        random_seed (int, RandomState, or None): seed controlling the pre-drawn uniforms
+
+    Returns:
+        phi (list): list of chosen original sample ids (length = sample_length)
+    """
+    # Pack into contiguous arrays and keep mapping from packed index -> original sample id
+    flat_indices, offsets, lengths, sample_ids = pack_active_indices(active_indices)
+    n_samples = offsets.shape[0] - 1
 
     if sample_length is None:
-        sample_length = ind_mat.shape[1]
+        sample_length = n_samples
 
-    if warmup_samples is None:
-        warmup_samples = []
+    # Concurrency vector length: bars are indices into price-bar positions.
+    # When there are no bars (flat_indices empty), create an empty concurrency of length 0.
+    if flat_indices.size == 0:
+        T = 0
+    else:
+        # max bar index + 1 (bars are zero-based indices)
+        T = int(flat_indices.max()) + 1
 
-    phi = []  # Bootstrapped samples
-    prev_concurrency = np.zeros(ind_mat.shape[0])  # Init with zeros (phi is empty)
-    while len(phi) < sample_length:
-        prob = _bootstrap_loop_run(ind_mat, prev_concurrency)  # Draw probabilities
+    concurrency = np.zeros(T, dtype=np.int64)
+
+    # Prepare reproducible uniforms. Accept either integer seed or RandomState.
+    if random_seed is None:
+        rng = np.random.RandomState()
+    elif isinstance(random_seed, np.random.RandomState):
+        rng = random_seed
+    else:
         try:
-            choice = warmup_samples.pop(0)  # It would get samples from warmup until it is empty
-            # If it is empty from the beginning it would get samples based on prob from the first iteration
-        except IndexError:
-            choice = random_state.choice(range(ind_mat.shape[1]), p=prob)
-        phi += [choice]
-        prev_concurrency += ind_mat[:, choice]  # Add recorded label array from ind_mat
-        if verbose:
-            print(prob)
+            rng = np.random.RandomState(int(random_seed))
+        except (ValueError, TypeError):
+            rng = np.random.RandomState()
 
-    if compare:
-        standard_indx = np.random.choice(ind_mat.shape[1], size=sample_length)
-        standard_unq = get_ind_mat_average_uniqueness(ind_mat[:, standard_indx])
-        sequential_unq = get_ind_mat_average_uniqueness(ind_mat[:, phi])
-        print(
-            f"Standard uniqueness: {standard_unq:.4f}\nSequential uniqueness: {sequential_unq:.4f}"
-        )
+    # Pre-draw uniforms in Python and pass them into njit function (numba cannot accept RandomState)
+    uniforms = rng.random_sample(sample_length).astype(np.float64)
+
+    # Run njit loop (this mutates concurrency but we don't need concurrency afterwards)
+    chosen_packed = _seq_bootstrap_loop(flat_indices, offsets, lengths, concurrency, uniforms)
+
+    # Map packed indices back to original sample ids
+    phi = [sample_ids[int(i)] for i in chosen_packed.tolist()]
 
     return phi
+
+
+# --------------------------------------
+# Example usage (for quick manual test)
+# --------------------------------------
+if __name__ == "__main__":
+    # small synthetic test: 4 samples with overlapping bar ranges
+    # sample 0 covers bars [0,1], sample 1 covers [1,2], sample 2 covers [2,3], sample 3 covers []
+    active = {
+        0: np.array([0, 1], dtype=np.int64),
+        1: np.array([1, 2], dtype=np.int64),
+        2: np.array([2, 3], dtype=np.int64),
+        3: np.empty(0, dtype=np.int64),
+    }
+
+    phi = seq_bootstrap(active, sample_length=6, random_seed=42)
+    print("phi:", phi)

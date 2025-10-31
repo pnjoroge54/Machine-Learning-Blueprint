@@ -8,6 +8,7 @@ import sys
 from types import ModuleType
 from typing import Dict, List
 
+import numpy as np
 from loguru import logger
 
 from .cache import (
@@ -34,6 +35,19 @@ from .cache import (
     setup_auto_reloading,
     smart_cacheable,
 )
+
+# at top-level of afml/__init__.py add:
+from .numba_warmup import lazy_warmup, prewarm_numba_in_package, register_numba_dummy
+
+# Register realistic dummy signatures for critical functions
+# Adjust these as needed after inspecting actual function signatures in your codebase.
+# register_numba_dummy(
+#     "_precompute_active_indices_nopython",
+#     args=(np.array([np.int64(0)]), np.array([np.int64(0)]), np.array([np.int64(0)])),
+# )
+
+# Optional: export helpers for convenience
+# __all__ = ["register_numba_dummy", "lazy_warmup", "prewarm_numba_in_package"]
 
 # =============================================================================
 # 1) INITIALIZE CACHE SYSTEM FIRST (before any heavy imports)

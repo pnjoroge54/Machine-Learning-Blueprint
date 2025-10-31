@@ -76,8 +76,8 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
     features = features.join([ma_diffs, ma_crossovers])
 
     # --- 4. Add side prediction ---
-    signals = BollingerStrategy(bb_period, bb_std).generate_signals(df)
-    features = features.join(signals).shift().dropna()
+    features["prev_signal"] = BollingerStrategy(bb_period, bb_std).generate_signals(df)
+    features = features.shift().dropna()
 
     # --- 5. Formatting ---
     # Abbreviate "returns" to "ret" in columns
