@@ -11,10 +11,12 @@ from typing import Dict, List
 import numpy as np
 from loguru import logger
 
-from .cache import (
+from .cache import (  # Core cache (existing); NEW: Robust cache keys; NEW: Enhanced functions
     AUTO_RELOAD_AVAILABLE,
     CACHE_DIRS,
     CacheAnalyzer,
+    CacheKeyGenerator,
+    TimeSeriesCacheKey,
     auto_cacheable,
     cache_maintenance,
     cache_stats,
@@ -27,17 +29,70 @@ from .cache import (
     get_cache_hit_rate,
     get_cache_stats,
     get_cache_summary,
+    get_comprehensive_cache_status,
     get_function_tracker,
     initialize_cache_system,
     jupyter_auto_setup,
     memory,
+    optimize_cache_system,
+    robust_cacheable,
     selective_cache_clear,
     setup_auto_reloading,
+    setup_jupyter_cache,
+    setup_production_cache,
     smart_cacheable,
+    time_aware_cacheable,
 )
 
-# at top-level of afml/__init__.py add:
+# =============================================================================
+# 1) IMPORT CACHE SYSTEM - Updated with new features
+# =============================================================================
+
+
+# NEW: Import monitoring (optional - only if you want it at top level)
+try:
+    from .cache import (
+        analyze_cache_patterns,
+        get_cache_efficiency_report,
+        get_cache_monitor,
+        print_cache_health,
+    )
+
+    CACHE_MONITORING_AVAILABLE = True
+except ImportError:
+    CACHE_MONITORING_AVAILABLE = False
+    logger.debug("Cache monitoring not available")
+
+# NEW: Import MLflow integration (optional)
+try:
+    from .cache import (
+        MLFLOW_INTEGRATION_AVAILABLE,
+        get_mlflow_cache,
+        mlflow_cached,
+        setup_mlflow_cache,
+    )
+except ImportError:
+    MLFLOW_INTEGRATION_AVAILABLE = False
+    logger.debug("MLflow integration not available")
+
+# NEW: Import backtest caching (optional)
+try:
+    from .cache import BacktestCache, cached_backtest, get_backtest_cache
+
+    BACKTEST_CACHE_AVAILABLE = True
+except ImportError:
+    BACKTEST_CACHE_AVAILABLE = False
+    logger.debug("Backtest cache not available")
+
+# Numba warmup utilities
 from .numba_warmup import lazy_warmup, prewarm_numba_in_package, register_numba_dummy
+
+# =============================================================================
+# 2) INITIALIZE CACHE SYSTEM FIRST (before any heavy imports)
+# =============================================================================
+
+# Initialize cache system immediately
+initialize_cache_system()
 
 # Register realistic dummy signatures for critical functions
 # Adjust these as needed after inspecting actual function signatures in your codebase.
@@ -46,25 +101,14 @@ from .numba_warmup import lazy_warmup, prewarm_numba_in_package, register_numba_
 #     args=(np.array([np.int64(0)]), np.array([np.int64(0)]), np.array([np.int64(0)])),
 # )
 
-# Optional: export helpers for convenience
-# __all__ = ["register_numba_dummy", "lazy_warmup", "prewarm_numba_in_package"]
-
 # =============================================================================
-# 1) INITIALIZE CACHE SYSTEM FIRST (before any heavy imports)
-# =============================================================================
-
-
-# Initialize cache system immediately
-initialize_cache_system()
-
-# =============================================================================
-# 2) LIGHTWEIGHT CORE IMPORTS (always available)
+# 3) LIGHTWEIGHT CORE IMPORTS (always available)
 # =============================================================================
 
 from .core import AFMLApplication, pattern_jupyter_notebook
 
 # =============================================================================
-# 3) LAZY LOADING SETUP
+# 4) LAZY LOADING SETUP
 # =============================================================================
 
 # Module mapping - only add modules that are actually heavy to import
@@ -111,7 +155,7 @@ except ImportError as e:
 _module_cache: Dict[str, ModuleType] = {}
 
 # =============================================================================
-# 4) LAZY LOADING FOR HEAVY MODULES ONLY
+# 5) LAZY LOADING FOR HEAVY MODULES ONLY
 # =============================================================================
 
 
@@ -156,8 +200,6 @@ def __getattr__(name: str) -> ModuleType:
 def _get_module_size(module) -> str:
     """Rough estimate of module memory footprint."""
     try:
-        import sys
-
         # Count objects in module namespace
         obj_count = len(
             [
@@ -172,7 +214,7 @@ def _get_module_size(module) -> str:
 
 
 # =============================================================================
-# 5) SIMPLE MODULE MANAGEMENT (only what's actually useful)
+# 6) SIMPLE MODULE MANAGEMENT (only what's actually useful)
 # =============================================================================
 
 
@@ -218,20 +260,39 @@ def preload_portfolio_modules() -> Dict[str, ModuleType]:
 
 
 # =============================================================================
-# 6) JUPYTER INTEGRATION
+# 7) JUPYTER INTEGRATION - Enhanced
 # =============================================================================
 
 
 def setup_jupyter(
-    preload_ml: bool = False, preload_portfolio: bool = False, enable_auto_reload: bool = True
+    preload_ml: bool = False,
+    preload_portfolio: bool = False,
+    enable_auto_reload: bool = True,
+    enable_mlflow: bool = False,
+    enable_monitoring: bool = True,
 ):
-    """Safe Jupyter setup that doesn't fail on AFMLApplication issues."""
+    """
+    Enhanced Jupyter setup with new cache features.
+
+    Args:
+        preload_ml: Preload ML modules
+        preload_portfolio: Preload portfolio modules
+        enable_auto_reload: Enable auto-reload for development
+        enable_mlflow: Enable MLflow experiment tracking
+        enable_monitoring: Enable cache monitoring
+
+    Returns:
+        Dict with cache components and helpers
+    """
     logger.info("Setting up AFML for Jupyter notebook...")
 
-    # Initialize cache system first
-    initialize_cache_system()
+    # Use the new enhanced setup function
+    components = setup_jupyter_cache(
+        enable_mlflow=enable_mlflow,
+        enable_monitoring=enable_monitoring,
+    )
 
-    # Setup auto-reload
+    # Setup auto-reload if requested
     if enable_auto_reload and AUTO_RELOAD_AVAILABLE:
         try:
             setup_auto_reloading(watch_paths=["afml/", "."])
@@ -247,15 +308,20 @@ def setup_jupyter(
         except Exception as e:
             logger.warning("ML module preload failed: {}", e)
 
-    # Skip AFMLApplication for now - just return cache status
-    summary = get_cache_summary()
-    logger.info("Cache ready: {:.1%} hit rate", summary["hit_rate"])
+    if preload_portfolio:
+        try:
+            loaded_portfolio = preload_portfolio_modules()
+            logger.info("Preloaded portfolio modules: {}", list(loaded_portfolio.keys()))
+        except Exception as e:
+            logger.warning("Portfolio module preload failed: {}", e)
 
-    return summary  # Return something useful instead of the failing app
+    logger.info("✅ AFML Jupyter environment ready!")
+
+    return components
 
 
 # =============================================================================
-# 7) CACHE MONITORING UTILITIES
+# 8) CACHE MONITORING UTILITIES - Enhanced
 # =============================================================================
 
 
@@ -317,48 +383,77 @@ def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days
 
 
 # =============================================================================
-# 8) __all__ AND METADATA
+# 9) __all__ AND METADATA
 # =============================================================================
 
 __version__ = "1.0.0"
 __author__ = "AFML Team"
 
 __all__ = [
-    # Cache system
+    # Core cache system
     "memory",
     "cacheable",
-    "smart_cacheable",  # NEW
+    "smart_cacheable",
     "get_cache_hit_rate",
     "get_cache_stats",
     "clear_cache_stats",
     "clear_afml_cache",
     "get_cache_summary",
     "CacheAnalyzer",
-    # Core
+    "initialize_cache_system",
+    # NEW: Robust cache keys
+    "robust_cacheable",
+    "time_aware_cacheable",
+    "CacheKeyGenerator",
+    "TimeSeriesCacheKey",
+    # NEW: Enhanced cache functions
+    "get_comprehensive_cache_status",
+    "optimize_cache_system",
+    "setup_production_cache",
+    "setup_jupyter_cache",
+    # Cache monitoring (if available)
+    "print_cache_health",
+    "get_cache_efficiency_report",
+    "analyze_cache_patterns",
+    "get_cache_monitor",
+    # MLflow integration (if available)
+    "setup_mlflow_cache",
+    "get_mlflow_cache",
+    "mlflow_cached",
+    # Backtest caching (if available)
+    "cached_backtest",
+    "get_backtest_cache",
+    "BacktestCache",
+    # Core components
     "AFMLApplication",
     "pattern_jupyter_notebook",
     # Jupyter setup
     "setup_jupyter",
-    # Module management (simplified)
+    # Module management
     "preload_heavy_modules",
     "preload_ml_modules",
     "preload_portfolio_modules",
     "get_loaded_heavy_modules",
     # Utilities
     "cache_status",
-    # NEW: Smart cache management
     "smart_cache_clear",
     "maintain_cache",
+    # Selective cache management
     "selective_cache_clear",
     "cache_maintenance",
     "clear_changed_ml_functions",
     "clear_changed_labeling_functions",
     "clear_changed_features_functions",
-    "get_function_tracker",  # Updated from function_tracker
+    "get_function_tracker",
+    # Auto-reload
     "auto_cacheable",
     "setup_auto_reloading",
     "jupyter_auto_setup",
     "AUTO_RELOAD_AVAILABLE",
+    # Numba utilities
+    "lazy_warmup",
+    "prewarm_numba_in_package",
+    "register_numba_dummy",
     # Lightweight modules (directly imported)
     "data_structures",
     "util",
@@ -385,10 +480,18 @@ __all__ = [
 ]
 
 # =============================================================================
-# 9) STARTUP
+# 10) STARTUP
 # =============================================================================
 
 logger.info(
     "AFML v{} ready - {} heavy modules available for lazy loading", __version__, len(HEAVY_MODULES)
 )
 logger.debug("Cache status: {}", cache_status())
+
+# Log available enhanced features
+if CACHE_MONITORING_AVAILABLE:
+    logger.debug("✓ Cache monitoring available")
+if MLFLOW_INTEGRATION_AVAILABLE:
+    logger.debug("✓ MLflow integration available")
+if BACKTEST_CACHE_AVAILABLE:
+    logger.debug("✓ Backtest caching available")

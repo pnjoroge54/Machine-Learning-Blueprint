@@ -249,7 +249,7 @@ class TimeSeriesCacheKey(CacheKeyGenerator):
 
 
 # =============================================================================
-# Integration with existing cacheable decorator
+# Integration with existing cacheable decorator - FIXED CIRCULAR IMPORT
 # =============================================================================
 
 
@@ -265,10 +265,11 @@ def create_robust_cacheable(use_time_awareness: bool = False):
     """
     from functools import wraps
 
-    from . import cache_stats, memory
-
     def cacheable(func):
         """Enhanced cacheable decorator with robust key generation."""
+        # Import at runtime to avoid circular imports
+        from . import cache_stats, memory
+
         func_name = f"{func.__module__}.{func.__qualname__}"
         cached_func = memory.cache(func)
 
@@ -309,14 +310,42 @@ def create_robust_cacheable(use_time_awareness: bool = False):
 
 
 # =============================================================================
-# Convenience exports
+# Convenience exports - LAZY INITIALIZATION TO AVOID CIRCULAR IMPORT
 # =============================================================================
 
-# Standard decorator
-robust_cacheable = create_robust_cacheable(use_time_awareness=False)
+# These will be created lazily when first accessed
+_robust_cacheable = None
+_time_aware_cacheable = None
 
-# Time-series aware decorator
-time_aware_cacheable = create_robust_cacheable(use_time_awareness=True)
+
+def robust_cacheable(func):
+    """
+    Standard decorator with robust cache key generation.
+
+    Usage:
+        @robust_cacheable
+        def my_function(df, params):
+            ...
+    """
+    global _robust_cacheable
+    if _robust_cacheable is None:
+        _robust_cacheable = create_robust_cacheable(use_time_awareness=False)
+    return _robust_cacheable(func)
+
+
+def time_aware_cacheable(func):
+    """
+    Time-series aware decorator.
+
+    Usage:
+        @time_aware_cacheable
+        def my_function(df, window):
+            ...
+    """
+    global _time_aware_cacheable
+    if _time_aware_cacheable is None:
+        _time_aware_cacheable = create_robust_cacheable(use_time_awareness=True)
+    return _time_aware_cacheable(func)
 
 
 __all__ = [

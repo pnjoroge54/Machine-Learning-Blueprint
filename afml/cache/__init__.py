@@ -16,264 +16,8 @@ from appdirs import user_cache_dir
 from joblib import Memory
 from loguru import logger
 
-# Robust cache key generation
-from .robust_cache_keys import (
-    CacheKeyGenerator,
-    TimeSeriesCacheKey,
-    robust_cacheable,
-    time_aware_cacheable,
-    create_robust_cacheable,
-)
-
-# MLflow integration
-try:
-    from .mlflow_integration import (
-        MLflowCacheIntegration,
-        setup_mlflow_cache,
-        get_mlflow_cache,
-        mlflow_cached,
-        MLFLOW_AVAILABLE,
-    )
-
-    MLFLOW_INTEGRATION_AVAILABLE = True
-except ImportError:
-    MLFLOW_INTEGRATION_AVAILABLE = False
-    logger.debug("MLflow integration not available (install mlflow)")
-
-# Backtest caching
-from .backtest_cache import (
-    BacktestCache,
-    BacktestMetadata,
-    BacktestResult,
-    get_backtest_cache,
-    cached_backtest,
-)
-
-# Cache monitoring
-from .cache_monitoring import (
-    CacheMonitor,
-    FunctionCacheStats,
-    CacheHealthReport,
-    get_cache_monitor,
-    print_cache_health,
-    get_cache_efficiency_report,
-    analyze_cache_patterns,
-)
-
 # =============================================================================
-# ENHANCED CONVENIENCE FUNCTIONS
-# =============================================================================
-
-
-def get_comprehensive_cache_status() -> dict:
-    """
-    Get comprehensive cache status including all subsystems.
-
-    Returns:
-        Dict with status of all cache components
-    """
-    status = {
-        "core": get_cache_summary(),
-        "health": None,
-        "backtest": None,
-        "mlflow": {"available": MLFLOW_INTEGRATION_AVAILABLE},
-    }
-
-    # Get health report
-    try:
-        monitor = get_cache_monitor()
-        report = monitor.generate_health_report()
-        status["health"] = {
-            "total_functions": report.total_functions,
-            "hit_rate": report.overall_hit_rate,
-            "total_calls": report.total_calls,
-            "cache_size_mb": report.total_cache_size_mb,
-        }
-    except Exception as e:
-        logger.debug(f"Health report failed: {e}")
-
-    # Get backtest cache stats
-    try:
-        backtest_cache = get_backtest_cache()
-        status["backtest"] = backtest_cache.get_cache_stats()
-    except Exception as e:
-        logger.debug(f"Backtest cache stats failed: {e}")
-
-    return status
-
-
-def optimize_cache_system(
-    clear_changed: bool = True,
-    max_size_mb: int = 1000,
-    max_age_days: int = 30,
-    print_report: bool = True,
-) -> dict:
-    """
-    Comprehensive cache optimization and maintenance.
-
-    Args:
-        clear_changed: Clear caches for changed functions
-        max_size_mb: Maximum total cache size in MB
-        max_age_days: Remove caches older than this
-        print_report: Print detailed report
-
-    Returns:
-        Dict with optimization results
-    """
-    logger.info("Running comprehensive cache optimization...")
-
-    results = {
-        "maintenance": None,
-        "health_report": None,
-        "backtest_cleanup": None,
-    }
-
-    # Run core cache maintenance
-    try:
-        results["maintenance"] = cache_maintenance(
-            auto_clear_changed=clear_changed,
-            max_cache_size_mb=max_size_mb,
-            max_age_days=max_age_days,
-        )
-    except Exception as e:
-        logger.warning(f"Cache maintenance failed: {e}")
-
-    # Get health report
-    try:
-        monitor = get_cache_monitor()
-        results["health_report"] = monitor.generate_health_report()
-
-        if print_report:
-            monitor.print_health_report(detailed=False)
-    except Exception as e:
-        logger.warning(f"Health report failed: {e}")
-
-    # Clean old backtest caches
-    try:
-        backtest_cache = get_backtest_cache()
-        cleared = backtest_cache.clear_old_runs(days=max_age_days)
-        results["backtest_cleanup"] = {"runs_cleared": cleared}
-        logger.info(f"Cleared {cleared} old backtest runs")
-    except Exception as e:
-        logger.warning(f"Backtest cleanup failed: {e}")
-
-    return results
-
-
-def setup_production_cache(
-    enable_mlflow: bool = True,
-    mlflow_experiment: str = "production",
-    mlflow_uri: str = None,
-    max_cache_size_mb: int = 2000,
-) -> dict:
-    """
-    Setup cache system for production use.
-
-    Args:
-        enable_mlflow: Enable MLflow integration
-        mlflow_experiment: MLflow experiment name
-        mlflow_uri: MLflow tracking URI
-        max_cache_size_mb: Maximum cache size
-
-    Returns:
-        Dict with initialized components
-    """
-    logger.info("Initializing production cache system...")
-
-    components = {
-        "core_cache": None,
-        "mlflow_cache": None,
-        "backtest_cache": None,
-        "monitor": None,
-    }
-
-    # Initialize core cache
-    initialize_cache_system()
-    components["core_cache"] = True
-
-    # Setup MLflow if available and requested
-    if enable_mlflow and MLFLOW_INTEGRATION_AVAILABLE:
-        try:
-            components["mlflow_cache"] = setup_mlflow_cache(
-                experiment_name=mlflow_experiment,
-                tracking_uri=mlflow_uri,
-            )
-            logger.info(f"MLflow tracking enabled: {mlflow_experiment}")
-        except Exception as e:
-            logger.warning(f"MLflow setup failed: {e}")
-
-    # Initialize backtest cache
-    try:
-        components["backtest_cache"] = get_backtest_cache()
-    except Exception as e:
-        logger.warning(f"Backtest cache setup failed: {e}")
-
-    # Initialize monitor
-    try:
-        components["monitor"] = get_cache_monitor()
-    except Exception as e:
-        logger.warning(f"Cache monitor setup failed: {e}")
-
-    # Run initial maintenance
-    try:
-        optimize_cache_system(max_size_mb=max_cache_size_mb, print_report=False)
-    except Exception as e:
-        logger.warning(f"Initial optimization failed: {e}")
-
-    logger.info("✅ Production cache system ready")
-    return components
-
-
-def setup_jupyter_cache(
-    enable_mlflow: bool = False,
-    enable_monitoring: bool = True,
-) -> dict:
-    """
-    Setup cache system optimized for Jupyter notebooks.
-
-    Args:
-        enable_mlflow: Enable MLflow tracking
-        enable_monitoring: Enable cache monitoring
-
-    Returns:
-        Dict with initialized components and helper functions
-    """
-    logger.info("Setting up cache for Jupyter notebook...")
-
-    # Initialize core
-    initialize_cache_system()
-
-    components = {
-        "core": True,
-        "mlflow": None,
-        "backtest": get_backtest_cache(),
-        "monitor": get_cache_monitor() if enable_monitoring else None,
-    }
-
-    # Setup MLflow if requested
-    if enable_mlflow and MLFLOW_INTEGRATION_AVAILABLE:
-        try:
-            components["mlflow"] = setup_mlflow_cache(experiment_name="jupyter_experiments")
-        except Exception as e:
-            logger.warning(f"MLflow setup failed: {e}")
-
-    # Create helper namespace for notebook
-    helpers = {
-        "cache_status": lambda: get_comprehensive_cache_status(),
-        "print_health": print_cache_health,
-        "optimize": lambda: optimize_cache_system(print_report=True),
-        "clear_all": lambda: clear_afml_cache(warn=True),
-        "smart_clear": smart_cache_clear,
-    }
-
-    logger.info("✅ Jupyter cache ready!")
-    logger.info("   Use helpers: cache_status(), print_health(), optimize()")
-
-    return {**components, "helpers": helpers}
-
-
-# =============================================================================
-# 1) CACHE DIRECTORY SETUP
+# 1) CACHE DIRECTORY SETUP - MUST BE FIRST
 # =============================================================================
 
 
@@ -573,10 +317,19 @@ def initialize_cache_system():
 
 
 # =============================================================================
-# 9) IMPORT SELECTIVE CLEANER FUNCTIONS (after everything else is defined)
+# 9) NOW SAFE TO IMPORT OTHER MODULES
 # =============================================================================
 
-# Import selective cleaner functions after all the base components are defined
+# Import robust cache key generation - NOW SAFE (memory and cache_stats exist)
+from .robust_cache_keys import (
+    CacheKeyGenerator,
+    TimeSeriesCacheKey,
+    create_robust_cacheable,
+    robust_cacheable,
+    time_aware_cacheable,
+)
+
+# Import selective cleaner functions after base components are defined
 from .selective_cleaner import (
     cache_maintenance,
     clear_changed_features_functions,
@@ -585,6 +338,41 @@ from .selective_cleaner import (
     get_function_tracker,
     selective_cache_clear,
     smart_cacheable,
+)
+
+# MLflow integration (optional)
+try:
+    from .mlflow_integration import (
+        MLFLOW_AVAILABLE,
+        MLflowCacheIntegration,
+        get_mlflow_cache,
+        mlflow_cached,
+        setup_mlflow_cache,
+    )
+
+    MLFLOW_INTEGRATION_AVAILABLE = True
+except ImportError:
+    MLFLOW_INTEGRATION_AVAILABLE = False
+    logger.debug("MLflow integration not available (install mlflow)")
+
+# Backtest caching
+from .backtest_cache import (
+    BacktestCache,
+    BacktestMetadata,
+    BacktestResult,
+    cached_backtest,
+    get_backtest_cache,
+)
+
+# Cache monitoring
+from .cache_monitoring import (
+    CacheHealthReport,
+    CacheMonitor,
+    FunctionCacheStats,
+    analyze_cache_patterns,
+    get_cache_efficiency_report,
+    get_cache_monitor,
+    print_cache_health,
 )
 
 # =============================================================================
@@ -615,7 +403,221 @@ except ImportError:
 
 
 # =============================================================================
-# 11) EXPORTS
+# 11) ENHANCED CONVENIENCE FUNCTIONS
+# =============================================================================
+
+
+def get_comprehensive_cache_status() -> dict:
+    """
+    Get comprehensive cache status including all subsystems.
+
+    Returns:
+        Dict with status of all cache components
+    """
+    status = {
+        "core": get_cache_summary(),
+        "health": None,
+        "backtest": None,
+        "mlflow": {"available": MLFLOW_INTEGRATION_AVAILABLE},
+    }
+
+    # Get health report
+    try:
+        monitor = get_cache_monitor()
+        report = monitor.generate_health_report()
+        status["health"] = {
+            "total_functions": report.total_functions,
+            "hit_rate": report.overall_hit_rate,
+            "total_calls": report.total_calls,
+            "cache_size_mb": report.total_cache_size_mb,
+        }
+    except Exception as e:
+        logger.debug(f"Health report failed: {e}")
+
+    # Get backtest cache stats
+    try:
+        backtest_cache = get_backtest_cache()
+        status["backtest"] = backtest_cache.get_cache_stats()
+    except Exception as e:
+        logger.debug(f"Backtest cache stats failed: {e}")
+
+    return status
+
+
+def optimize_cache_system(
+    clear_changed: bool = True,
+    max_size_mb: int = 1000,
+    max_age_days: int = 30,
+    print_report: bool = True,
+) -> dict:
+    """
+    Comprehensive cache optimization and maintenance.
+
+    Args:
+        clear_changed: Clear caches for changed functions
+        max_size_mb: Maximum total cache size in MB
+        max_age_days: Remove caches older than this
+        print_report: Print detailed report
+
+    Returns:
+        Dict with optimization results
+    """
+    logger.info("Running comprehensive cache optimization...")
+
+    results = {
+        "maintenance": None,
+        "health_report": None,
+        "backtest_cleanup": None,
+    }
+
+    # Run core cache maintenance
+    try:
+        results["maintenance"] = cache_maintenance(
+            auto_clear_changed=clear_changed,
+            max_cache_size_mb=max_size_mb,
+            max_age_days=max_age_days,
+        )
+    except Exception as e:
+        logger.warning(f"Cache maintenance failed: {e}")
+
+    # Get health report
+    try:
+        monitor = get_cache_monitor()
+        results["health_report"] = monitor.generate_health_report()
+
+        if print_report:
+            monitor.print_health_report(detailed=False)
+    except Exception as e:
+        logger.warning(f"Health report failed: {e}")
+
+    # Clean old backtest caches
+    try:
+        backtest_cache = get_backtest_cache()
+        cleared = backtest_cache.clear_old_runs(days=max_age_days)
+        results["backtest_cleanup"] = {"runs_cleared": cleared}
+        logger.info(f"Cleared {cleared} old backtest runs")
+    except Exception as e:
+        logger.warning(f"Backtest cleanup failed: {e}")
+
+    return results
+
+
+def setup_production_cache(
+    enable_mlflow: bool = True,
+    mlflow_experiment: str = "production",
+    mlflow_uri: str = None,
+    max_cache_size_mb: int = 2000,
+) -> dict:
+    """
+    Setup cache system for production use.
+
+    Args:
+        enable_mlflow: Enable MLflow integration
+        mlflow_experiment: MLflow experiment name
+        mlflow_uri: MLflow tracking URI
+        max_cache_size_mb: Maximum cache size
+
+    Returns:
+        Dict with initialized components
+    """
+    logger.info("Initializing production cache system...")
+
+    components = {
+        "core_cache": None,
+        "mlflow_cache": None,
+        "backtest_cache": None,
+        "monitor": None,
+    }
+
+    # Initialize core cache
+    initialize_cache_system()
+    components["core_cache"] = True
+
+    # Setup MLflow if available and requested
+    if enable_mlflow and MLFLOW_INTEGRATION_AVAILABLE:
+        try:
+            components["mlflow_cache"] = setup_mlflow_cache(
+                experiment_name=mlflow_experiment,
+                tracking_uri=mlflow_uri,
+            )
+            logger.info(f"MLflow tracking enabled: {mlflow_experiment}")
+        except Exception as e:
+            logger.warning(f"MLflow setup failed: {e}")
+
+    # Initialize backtest cache
+    try:
+        components["backtest_cache"] = get_backtest_cache()
+    except Exception as e:
+        logger.warning(f"Backtest cache setup failed: {e}")
+
+    # Initialize monitor
+    try:
+        components["monitor"] = get_cache_monitor()
+    except Exception as e:
+        logger.warning(f"Cache monitor setup failed: {e}")
+
+    # Run initial maintenance
+    try:
+        optimize_cache_system(max_size_mb=max_cache_size_mb, print_report=False)
+    except Exception as e:
+        logger.warning(f"Initial optimization failed: {e}")
+
+    logger.info("✅ Production cache system ready")
+    return components
+
+
+def setup_jupyter_cache(
+    enable_mlflow: bool = False,
+    enable_monitoring: bool = True,
+) -> dict:
+    """
+    Setup cache system optimized for Jupyter notebooks.
+
+    Args:
+        enable_mlflow: Enable MLflow tracking
+        enable_monitoring: Enable cache monitoring
+
+    Returns:
+        Dict with initialized components and helper functions
+    """
+    logger.info("Setting up cache for Jupyter notebook...")
+
+    # Initialize core
+    initialize_cache_system()
+
+    components = {
+        "core": True,
+        "mlflow": None,
+        "backtest": get_backtest_cache(),
+        "monitor": get_cache_monitor() if enable_monitoring else None,
+    }
+
+    # Setup MLflow if requested
+    if enable_mlflow and MLFLOW_INTEGRATION_AVAILABLE:
+        try:
+            components["mlflow"] = setup_mlflow_cache(experiment_name="jupyter_experiments")
+        except Exception as e:
+            logger.warning(f"MLflow setup failed: {e}")
+
+    # Create helper namespace for notebook
+    helpers = {
+        "cache_status": lambda: get_comprehensive_cache_status(),
+        "print_health": print_cache_health,
+        "optimize": lambda: optimize_cache_system(print_report=True),
+        "clear_all": lambda: clear_afml_cache(warn=True),
+        "smart_clear": lambda module=None: selective_cache_clear(
+            modules=[module] if module else None
+        ),
+    }
+
+    logger.info("✅ Jupyter cache ready!")
+    logger.info("   Use helpers: cache_status(), print_health(), optimize()")
+
+    return {**components, "helpers": helpers}
+
+
+# =============================================================================
+# 12) EXPORTS
 # =============================================================================
 
 __all__ = [
