@@ -5,7 +5,7 @@ import matplotlib.lines as mlines
 import mplfinance as mpf
 import pandas as pd
 
-from ..cache.selective_cleaner import smart_cacheable
+from ..cache import robust_cacheable
 from ..features.moving_averages import calculate_ma_differences, get_ma_crossovers
 from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
@@ -14,7 +14,7 @@ from .signal_processing import get_entries
 from .strategies import BollingerStrategy
 
 
-@smart_cacheable
+@robust_cacheable
 def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: float = 2):
     """
     Create features for meta-labeling model

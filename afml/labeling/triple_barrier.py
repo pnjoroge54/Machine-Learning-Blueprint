@@ -10,7 +10,7 @@ import pandas as pd
 from loguru import logger
 from numba import njit, prange
 
-from ..cache import smart_cacheable
+from ..cache import robust_cacheable
 from ..sample_weights.optimized_attribution import get_weights_by_return_optimized
 from ..sampling.optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,
@@ -39,15 +39,16 @@ def apply_pt_sl_on_t1_optimized(close: pd.Series, events: pd.DataFrame, pt_sl: l
     """
     # 1. Prepare data for Numba
     # Get integer locations for events and vertical barriers relative to the `close` series
+    dtype = np.min_scalar_type(len(close))
     event_locs = close.index.get_indexer(events.index)
-    t1_locs = close.index.get_indexer(events["t1"])
+    t1_locs = close.index.get_indexer(events["t1"].values)
 
     # Convert pandas objects to NumPy arrays for Numba compatibility
     close_val = close.values
     t1_locs[t1_locs == -1] = len(close_val) - 1  # Handle NaT in t1
     trgt_val = events["trgt"].values
     side_val = events["side"].values
-    pt_sl_arr = np.array(pt_sl, dtype=float)
+    pt_sl_arr = np.array(pt_sl)
 
     # 2. Call the Numba-jitted function
     sl_hit_locs, pt_hit_locs = _find_barrier_hits(
@@ -84,12 +85,13 @@ def _find_barrier_hits(close_val, event_locs, t1_locs, trgt, side, pt_sl_arr):
     """
     pt_level = pt_sl_arr[0]
     sl_level = pt_sl_arr[1]
+    N = event_locs.shape[0]
 
     # Use arrays of int64 to store integer index locations of hits
-    sl_hit_locs, pt_hit_locs = np.full((2, event_locs.shape[0]), -1, dtype=np.int64)
+    pt_hit_locs, sl_hit_locs = np.full((2, N), -1, dtype=np.int64)
 
     # Numba can parallelize this loop automatically
-    for i in prange(event_locs.shape[0]):
+    for i in prange(N):
         start_loc = event_locs[i]
         end_loc = t1_locs[i]
 
@@ -122,73 +124,6 @@ def _find_barrier_hits(close_val, event_locs, t1_locs, trgt, side, pt_sl_arr):
                 break
 
     return sl_hit_locs, pt_hit_locs
-
-
-# Snippet 3.4 page 49, Adding a Vertical Barrier
-def add_vertical_barrier(
-    t_events: pd.DatetimeIndex, close: pd.Series, num_bars: int = 0, **time_delta_kwargs
-):
-    """
-    Advances in Financial Machine Learning, Enhanced Implementation.
-
-    Adding a Vertical Barrier
-
-    For each event in t_events, finds the timestamp of the next price bar at or immediately after:
-    - A fixed number of bars (for activity-based sampling), OR
-    - A time delta (for time-based sampling)
-
-    This function creates a series of vertical barrier timestamps aligned with the original events index.
-    Out-of-bound barriers are marked with NaT for downstream handling.
-
-    :param t_events: (pd.Series) Series of event timestamps (e.g., from symmetric CUSUM filter)
-    :param close: (pd.Series) Close price series with DateTimeIndex
-    :param num_bars: (int) Number of bars for vertical barrier (activity-based mode).
-                     Takes precedence over time delta parameters when > 0.
-    :param time_delta_kwargs: Time components for time-based barrier (mutually exclusive with num_bars):
-    - **days** (int) Number of days
-    - **hours** (int) Number of hours
-    - **minutes** (int) Number of minutes
-    - **seconds** (int) Number of seconds
-    :return (pd.Series) Vertical barrier timestamps with same index as t_events.
-        Out-of-bound events return pd.NaT.
-
-    Example:
-        ### Activity-bar mode (tick/volume/dollar bars)
-        vertical_barriers = add_vertical_barrier(t_events, close, num_bars=10)
-
-        ### Time-based mode
-        vertical_barriers = add_vertical_barrier(t_events, close, days=1, hours=3)
-    """
-    # Validate inputs
-    if num_bars and time_delta_kwargs:
-        raise ValueError("Use either num_bars OR time deltas, not both")
-
-    # BAR-BASED VERTICAL BARRIERS
-    if num_bars > 0:
-        indices = close.index.get_indexer(t_events, method="nearest")
-        t1 = []
-        for i in indices:
-            if i == -1:  # Event not found
-                t1.append(pd.NaT)
-            else:
-                end_loc = i + num_bars
-                t1.append(close.index[end_loc] if end_loc < len(close) else pd.NaT)
-        return pd.Series(t1, index=t_events, name="t1")
-
-    # TIME-BASED VERTICAL BARRIERS
-    td = pd.Timedelta(**time_delta_kwargs) if time_delta_kwargs else pd.Timedelta(0)
-    barrier_times = t_events + td
-
-    # Find next index positions
-    t1_indices = np.searchsorted(close.index, barrier_times, side="left")
-    t1 = []
-    for idx in t1_indices:
-        if idx < len(close):
-            t1.append(close.index[idx])
-        else:
-            t1.append(pd.NaT)  # Mark out-of-bound for downstream
-
-    return pd.Series(t1, index=t_events, name="t1")
 
 
 # Snippet 3.3 -> 3.6 page 50, Getting the Time of the First Touch, with Meta Labels
@@ -260,6 +195,73 @@ def get_events(
         events = events.drop("side", axis=1)
 
     return events
+
+
+# Snippet 3.4 page 49, Adding a Vertical Barrier
+def add_vertical_barrier(
+    t_events: pd.DatetimeIndex, close: pd.Series, num_bars: int = 0, **time_delta_kwargs
+):
+    """
+    Advances in Financial Machine Learning, Enhanced Implementation.
+
+    Adding a Vertical Barrier
+
+    For each event in t_events, finds the timestamp of the next price bar at or immediately after:
+    - A fixed number of bars (for activity-based sampling), OR
+    - A time delta (for time-based sampling)
+
+    This function creates a series of vertical barrier timestamps aligned with the original events index.
+    Out-of-bound barriers are marked with NaT for downstream handling.
+
+    :param t_events: (pd.Series) Series of event timestamps (e.g., from symmetric CUSUM filter)
+    :param close: (pd.Series) Close price series with DateTimeIndex
+    :param num_bars: (int) Number of bars for vertical barrier (activity-based mode).
+                     Takes precedence over time delta parameters when > 0.
+    :param time_delta_kwargs: Time components for time-based barrier (mutually exclusive with num_bars):
+    - **days** (int) Number of days
+    - **hours** (int) Number of hours
+    - **minutes** (int) Number of minutes
+    - **seconds** (int) Number of seconds
+    :return (pd.Series) Vertical barrier timestamps with same index as t_events.
+        Out-of-bound events return pd.NaT.
+
+    Example:
+        ### Activity-bar mode (tick/volume/dollar bars)
+        vertical_barriers = add_vertical_barrier(t_events, close, num_bars=10)
+
+        ### Time-based mode
+        vertical_barriers = add_vertical_barrier(t_events, close, days=1, hours=3)
+    """
+    # Validate inputs
+    if num_bars and time_delta_kwargs:
+        raise ValueError("Use either num_bars OR time deltas, not both")
+
+    # BAR-BASED VERTICAL BARRIERS
+    if num_bars > 0:
+        indices = close.index.get_indexer(t_events, method="nearest")
+        t1 = []
+        for i in indices:
+            if i == -1:  # Event not found
+                t1.append(pd.NaT)
+            else:
+                end_loc = i + num_bars
+                t1.append(close.index[end_loc] if end_loc < len(close) else pd.NaT)
+        return pd.Series(t1, index=t_events, name="t1")
+
+    # TIME-BASED VERTICAL BARRIERS
+    td = pd.Timedelta(**time_delta_kwargs) if time_delta_kwargs else pd.Timedelta(0)
+    barrier_times = t_events + td
+
+    # Find next index positions
+    t1_indices = np.searchsorted(close.index, barrier_times, side="left")
+    t1 = []
+    for idx in t1_indices:
+        if idx < len(close):
+            t1.append(close.index[idx])
+        else:
+            t1.append(pd.NaT)  # Mark out-of-bound for downstream
+
+    return pd.Series(t1, index=t_events, name="t1")
 
 
 # Snippet 3.9, page 55, Question 3.3
@@ -399,7 +401,7 @@ def drop_labels(triple_barrier_events, min_pct=0.05):
     return triple_barrier_events
 
 
-@smart_cacheable
+@robust_cacheable
 def triple_barrier_labels(
     close: pd.Series,
     target: pd.Series,
@@ -480,7 +482,7 @@ def triple_barrier_labels(
     return events
 
 
-@smart_cacheable
+@robust_cacheable
 def get_event_weights(triple_barrier_events: pd.DataFrame, close: pd.Series, verbose: bool = False):
     """Calculate event weights and average uniqueness for triple-barrier events.
     Args:
