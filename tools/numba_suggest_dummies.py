@@ -40,7 +40,9 @@ def find_dispatchers(package_name="afml"):
 
 if __name__ == "__main__":
     for module_name, attr_name, src_head in find_dispatchers():
-        print(f"{module_name}:{attr_name}")
+        print(f"{module_name}: {attr_name}")
         for ln in src_head:
             print("  ", ln)
+        print("-" * 60)
+        print("-" * 60)
         print("-" * 60)
