@@ -75,17 +75,21 @@ def _generate_bagging_indices(
             active_indices, sample_length=None, random_seed=random_state_obj
         )
 
-    # Draw feature indices using the same random state
-    if isinstance(max_features, numbers.Integral):
-        n_feat = max_features
-    elif isinstance(max_features, numbers.Real):
-        n_feat = int(round(max_features * n_features))
-    else:
-        raise ValueError("max_features must be int or float")
+    # Draw feature indices only if bootstrap_features is True
+    if bootstrap_features:
+        if isinstance(max_features, numbers.Integral):
+            n_feat = max_features
+        elif isinstance(max_features, numbers.Real):
+            n_feat = int(round(max_features * n_features))
+        else:
+            raise ValueError("max_features must be int or float when bootstrap_features=True")
 
-    feature_indices = _generate_random_features(
-        random_state_obj, bootstrap_features, n_features, n_feat
-    )
+        feature_indices = _generate_random_features(
+            random_state_obj, bootstrap_features, n_features, n_feat
+        )
+    else:
+        # When not bootstrapping features, return None (will be handled downstream)
+        feature_indices = None
 
     return sample_indices, feature_indices
 
@@ -127,10 +131,20 @@ def _parallel_build_estimators(
         else:
             curr_sample_weight = None
 
-        estimators_features.append(feature_indices)
+        # Store None for features if no bootstrapping (memory optimization)
+        if bootstrap_features:
+            estimators_features.append(feature_indices)
+        else:
+            estimators_features.append(None)  # Don't store redundant feature arrays
+
         estimators_samples.append(sample_indices)
 
-        X_ = X[sample_indices][:, feature_indices]
+        # Select data
+        if bootstrap_features:
+            X_ = X[sample_indices][:, feature_indices]
+        else:
+            X_ = X[sample_indices]  # Use all features
+
         y_ = y[sample_indices]
 
         estimator.fit(X_, y_, sample_weight=curr_sample_weight)
@@ -165,9 +179,6 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     max_samples : int or float, optional (default=1.0)
         If int, the exact number of training rows drawn per estimator; if float in
         (0, 1], the fraction of the training set drawn per estimator.
-    replacement : bool, optional (default=True)
-        If True, sample training rows with replacement. If False, sample without
-        replacement.
     bootstrap_features : bool, optional (default=False)
         If True, features are sampled with replacement for each base estimator
         (feature bagging). When enabled, each estimator is trained on a randomly
@@ -256,7 +267,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         n_estimators=10,
         max_samples=1.0,
         max_features=1.0,
-        bootstrap_features=False,
+        bootstrap_features=True,
         oob_score=False,
         warm_start=False,
         n_jobs=None,
@@ -521,7 +532,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         n_estimators=10,
         max_samples=1.0,
         max_features=1.0,
-        bootstrap_features=False,
+        bootstrap_features=True,
         oob_score=False,
         warm_start=False,
         n_jobs=None,
@@ -579,7 +590,12 @@ class SequentiallyBootstrappedBaggingClassifier(
 
             if np.any(mask):
                 # Get predictions for OOB samples
-                X_oob = X[mask][:, features]
+                X_oob = X[mask]
+
+                # If features is None, use all features; otherwise subset
+                if features is not None:
+                    X_oob = X_oob[:, features]
+
                 predictions[mask] += estimator.predict_proba(X_oob)
 
         # Average predictions
@@ -627,7 +643,7 @@ class SequentiallyBootstrappedBaggingRegressor(
     :param max_features: (int or float), optional (default=1.0)
         The number of features to draw from X to train each base estimator.
         If int, then draw `max_features` features. If float, then draw `max_features * X.shape[1]` features.
-    :param bootstrap_features: (bool), optional (default=False)
+    :param bootstrap_features: (bool), optional (default=True)
         Whether features are drawn with replacement.
     :param oob_score: (bool)
         Whether to use out-of-bag samples to estimate
@@ -672,7 +688,7 @@ class SequentiallyBootstrappedBaggingRegressor(
         n_estimators=10,
         max_samples=1.0,
         max_features=1.0,
-        bootstrap_features=False,
+        bootstrap_features=True,
         oob_score=False,
         warm_start=False,
         n_jobs=None,
@@ -712,7 +728,12 @@ class SequentiallyBootstrappedBaggingRegressor(
 
             if np.any(mask):
                 # Get predictions for OOB samples
-                X_oob = X[mask][:, features]
+                X_oob = X[mask]
+
+                # If features is None, use all features; otherwise subset
+                if features is not None:
+                    X_oob = X_oob[:, features]
+
                 predictions[mask] += estimator.predict(X_oob)
                 n_predictions[mask] += 1
 
@@ -752,7 +773,12 @@ def compute_custom_oob_metrics(clf, X, y, sample_weight=None):
     ):
         mask = ~indices_to_mask(samples, n_samples)
         if np.any(mask):
-            X_oob = X[mask][:, features]
+            X_oob = X[mask]
+
+            # Handle None features (use all features)
+            if features is not None:
+                X_oob = X_oob[:, features]
+
             oob_proba[mask] += estimator.predict_proba(X_oob)
             oob_count[mask] += 1
 
