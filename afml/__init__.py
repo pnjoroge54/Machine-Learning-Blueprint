@@ -11,13 +11,11 @@ from typing import Dict, List
 import numpy as np
 from loguru import logger
 
-from .cache import (  # Core cache (existing); NEW: Robust cache keys; NEW: Enhanced functions
-    AUTO_RELOAD_AVAILABLE,
+from .cache import (
     CACHE_DIRS,
     CacheAnalyzer,
     CacheKeyGenerator,
     TimeSeriesCacheKey,
-    auto_cacheable,
     cache_maintenance,
     cache_stats,
     cacheable,
@@ -32,12 +30,10 @@ from .cache import (  # Core cache (existing); NEW: Robust cache keys; NEW: Enha
     get_comprehensive_cache_status,
     get_function_tracker,
     initialize_cache_system,
-    jupyter_auto_setup,
     memory,
     optimize_cache_system,
     robust_cacheable,
     selective_cache_clear,
-    setup_auto_reloading,
     setup_jupyter_cache,
     setup_production_cache,
     smart_cacheable,
@@ -267,7 +263,6 @@ def preload_portfolio_modules() -> Dict[str, ModuleType]:
 def setup_jupyter(
     preload_ml: bool = False,
     preload_portfolio: bool = False,
-    enable_auto_reload: bool = True,
     enable_mlflow: bool = False,
     enable_monitoring: bool = True,
 ):
@@ -277,7 +272,6 @@ def setup_jupyter(
     Args:
         preload_ml: Preload ML modules
         preload_portfolio: Preload portfolio modules
-        enable_auto_reload: Enable auto-reload for development
         enable_mlflow: Enable MLflow experiment tracking
         enable_monitoring: Enable cache monitoring
 
@@ -291,14 +285,6 @@ def setup_jupyter(
         enable_mlflow=enable_mlflow,
         enable_monitoring=enable_monitoring,
     )
-
-    # Setup auto-reload if requested
-    if enable_auto_reload and AUTO_RELOAD_AVAILABLE:
-        try:
-            setup_auto_reloading(watch_paths=["afml/", "."])
-            logger.info("Auto-reload enabled")
-        except Exception as e:
-            logger.warning("Auto-reload setup failed: {}", e)
 
     # Try to preload modules (optional)
     if preload_ml:
@@ -445,11 +431,6 @@ __all__ = [
     "clear_changed_labeling_functions",
     "clear_changed_features_functions",
     "get_function_tracker",
-    # Auto-reload
-    "auto_cacheable",
-    "setup_auto_reloading",
-    "jupyter_auto_setup",
-    "AUTO_RELOAD_AVAILABLE",
     # Numba utilities
     "lazy_warmup",
     "prewarm_numba_in_package",
