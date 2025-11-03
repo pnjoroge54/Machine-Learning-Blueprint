@@ -68,7 +68,7 @@ def get_credentials_from_env(account):
     return login, password, server
 
 
-def login_mt5(account, timeout=20000, verbose=True):
+def login_mt5(account, timeout=60000, verbose=True):
     """
     Logs in to a MetaTrader5 account using credentials from environment variables.
 
@@ -89,7 +89,7 @@ def login_mt5(account, timeout=20000, verbose=True):
     if not mt5.initialize(login=login, password=password, server=server, timeout=timeout):
         logger.error(f"MT5 initialize() failed for account {account}. Error: {mt5.last_error()}")
         mt5.shutdown()
-        return None
+        return
 
     logger.success(f"Successfully logged in to MT5 as {account}.")
     if verbose:
@@ -234,6 +234,7 @@ def get_ticks(symbol, start_date, end_date, datetime_index=True, verbose=True):
 
     try:
         start_date, end_date = date_conversion(start_date, end_date)
+        mt5.symbol_select(symbol, True)
         ticks = mt5.copy_ticks_range(symbol, start_date, end_date, mt5.COPY_TICKS_ALL)
         if ticks is None or len(ticks) == 0:
             logger.warning(
@@ -288,6 +289,7 @@ def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbo
     try:
         start_date, end_date = date_conversion(start_date, end_date)
         timeframe = getattr(mt5, f"TIMEFRAME_{timeframe}")
+        mt5.symbol_select(symbol, True)
         bars = mt5.copy_rates_range(symbol, timeframe, start_date, end_date)
         if bars is None or len(bars) == 0:
             logger.warning(
@@ -316,18 +318,18 @@ def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbo
         return pd.DataFrame()
 
 
-def save_data_to_parquet(path, symbols, start_date, end_date, account_name):
+def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None):
     """
     Downloads and saves tick data to a partitioned Parquet structure.
 
     Args:
-        path (Union[str, Path]): The root folder where data will be saved.
         symbols (Union[str, list, tuple]): A single symbol or a collection of symbols to download.
         start_date (Union[str, dt, pd.Timestamp]): The start date for the data range.
         end_date (Union[str, dt, pd.Timestamp]): The end date for the data range.
         account_name (str): The name of the account used for the download.
+        path (Union[str, Path]): The root folder where data will be saved.
     """
-    root_path = Path(path)
+    root_path = Path(path) if path is not None else Path().home() / "tick_data_parquet"
     root_path.mkdir(parents=True, exist_ok=True)
 
     if not verify_or_create_account_info(root_path, account_name):
@@ -367,7 +369,7 @@ def save_data_to_parquet(path, symbols, start_date, end_date, account_name):
     dates_to = pd.date_range(start=start_dt, end=end_dt, freq="ME", tz="UTC") + pd.Timedelta(days=1)
 
     for i, symbol in enumerate(symbols):
-        logger.info(f"Processing symbol: {symbol} [{i+1}/{len(symbols)}]")
+        logger.info(f"\nProcessing symbol: {symbol} [{i+1}/{len(symbols)}]")
         symbol_path = root_path / symbol
         symbol_path.mkdir(parents=True, exist_ok=True)
 
@@ -400,13 +402,19 @@ def save_data_to_parquet(path, symbols, start_date, end_date, account_name):
             )
             logger.success(f"{log_msg_prefix} Saved {len(df):,} rows.")
 
+        # Delete empty year folders
+        try:
+            year_path.rmdir()
+        except:
+            pass
+
     logger.info("Download process finished.")
     if missing_data:
         logger.warning("Missing data summary:")
         for symbol, months in missing_data.items():
             logger.warning(f"  - {symbol}: {', '.join(months)}")
 
-    logger.success("All operations complete.")
+    logger.success(f"All operations complete. Files saved to {root_path}")
 
 
 # --- Loading Data from Files ---
@@ -530,13 +538,12 @@ def clean_tick_data(
     else:
         df = df.tz_convert(timezone)
 
-    # 3. Price validity checks (more comprehensive)
+    # 3. Price validity checks (FIXED: removed incorrect parentheses)
     price_filter = (
         (df["bid"] > 0)
         & (df["ask"] > 0)
-        & (df["ask"] > df["bid"])(  # Spread must be positive
-            df["ask"] - df["bid"] >= min_spread
-        )  # Minimum spread filter
+        & (df["ask"] > df["bid"])  # Spread must be positive
+        & ((df["ask"] - df["bid"]) >= min_spread)  # Minimum spread filter
     )
     df = df[price_filter]
 
@@ -565,6 +572,164 @@ def clean_tick_data(
         return None
 
     return df
+
+
+def _save_cleaned_with_structure(df_cleaned: pd.DataFrame, cleaned_data_path: Path, symbol: str):
+    """
+    Save cleaned data preserving the original directory structure
+
+    Args:
+        df_cleaned: Cleaned DataFrame with datetime index
+        cleaned_data_path: Root path for cleaned data
+        symbol: Symbol name for directory structure
+    """
+    # Ensure the index is datetime and in UTC
+    if not isinstance(df_cleaned.index, pd.DatetimeIndex):
+        df_cleaned.index = pd.to_datetime(df_cleaned.index, utc=True)
+    elif df_cleaned.index.tz is None:
+        df_cleaned.index = df_cleaned.index.tz_localize("UTC")
+    else:
+        df_cleaned.index = df_cleaned.index.tz_convert("UTC")
+
+    # Extract year and month from the index
+    df_temp = df_cleaned.copy()
+    df_temp["year"] = df_temp.index.year
+    df_temp["month"] = df_temp.index.month
+
+    # Group by year and month to replicate original structure
+    for (year, month), group_df in df_temp.groupby(["year", "month"]):
+        if group_df.empty:
+            continue
+
+        # Recreate identical directory structure: path/symbol/year/month.parquet
+        output_dir = cleaned_data_path / symbol / str(year)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_file = output_dir / f"month-{month:02d}.parquet"
+
+        # Remove helper columns and ensure proper index
+        final_df = group_df.drop(["year", "month"], axis=1)
+
+        # Save with same compression settings as original data
+        final_df.to_parquet(output_file, engine="pyarrow", compression="zstd", index=True)
+
+        logger.debug(
+            f"Saved {len(final_df):,} rows to {output_file.relative_to(cleaned_data_path)}"
+        )
+
+
+def clean_and_repartition_data(
+    raw_data_path: Path,
+    cleaned_data_path: Path,
+    account_name: str,
+    start_date: str = None,
+    end_date: str = None,
+):
+    """
+    Efficiently clean and save data while preserving directory structure
+    """
+    # Verify account first
+    if not verify_or_create_account_info(raw_data_path, account_name):
+        return None
+
+    try:
+        # Get all symbols from directory structure
+        symbols = [
+            d.name for d in raw_data_path.iterdir() if d.is_dir() and not d.name.startswith(".")
+        ]
+
+        all_cleaned_dfs = []
+
+        for symbol in symbols:
+            logger.info(f"Processing symbol: {symbol}")
+
+            # Read data for this symbol with optional filtering
+            filters = []
+            if start_date and end_date:
+                start_dt, end_dt = date_conversion(start_date, end_date)
+                filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
+
+            symbol_path = raw_data_path / symbol / "**" / "*.parquet"
+
+            try:
+                ddf = dd.read_parquet(symbol_path, filters=filters, engine="pyarrow")
+                df = ddf.compute()
+
+                if df.empty:
+                    logger.warning(f"No data found for {symbol}")
+                    continue
+
+                # Clean the data
+                logger.info(f"Cleaning data for {symbol}...")
+                df_cleaned = clean_tick_data(df)
+
+                if df_cleaned is None or df_cleaned.empty:
+                    logger.warning(f"No data remaining after cleaning for {symbol}")
+                    continue
+
+                # Save cleaned data with proper structure
+                _save_cleaned_with_structure(df_cleaned, cleaned_data_path, symbol)
+                all_cleaned_dfs.append(df_cleaned)
+
+                logger.success(f"Cleaned and saved {len(df_cleaned):,} rows for {symbol}")
+
+            except Exception as e:
+                logger.error(f"Failed to process {symbol}: {e}")
+                continue
+
+        if all_cleaned_dfs:
+            final_df = pd.concat(all_cleaned_dfs, ignore_index=False)
+            logger.success(
+                f"Successfully cleaned {len(all_cleaned_dfs)} symbols, total {len(final_df):,} rows"
+            )
+            return final_df
+        else:
+            logger.warning("No data was cleaned")
+            return pd.DataFrame()
+
+    except MemoryError:
+        logger.error("Insufficient memory. Using chunked processing by symbol.")
+        # Process symbols one by one without concatenating
+        return _clean_data_chunked(
+            raw_data_path, cleaned_data_path, account_name, start_date, end_date
+        )
+
+
+def _clean_data_chunked(
+    raw_data_path, cleaned_data_path, account_name, start_date=None, end_date=None
+):
+    """
+    Fallback for memory-constrained environments - process by symbol without concatenating
+    """
+    logger.info("Using memory-efficient chunked approach by symbol...")
+
+    # Get all unique symbols from directory structure
+    symbols = [d.name for d in raw_data_path.iterdir() if d.is_dir() and not d.name.startswith(".")]
+
+    for symbol in symbols:
+        try:
+            # Process one symbol at a time
+            symbol_path = raw_data_path / symbol / "**" / "*.parquet"
+
+            filters = []
+            if start_date and end_date:
+                start_dt, end_dt = date_conversion(start_date, end_date)
+                filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
+
+            ddf = dd.read_parquet(symbol_path, filters=filters, engine="pyarrow")
+            df = ddf.compute()
+
+            df_cleaned = clean_tick_data(df)
+            if df_cleaned is not None and not df_cleaned.empty:
+                _save_cleaned_with_structure(df_cleaned, cleaned_data_path, symbol)
+                logger.success(f"Processed {symbol}: {len(df_cleaned):,} rows")
+
+        except Exception as e:
+            logger.error(f"Failed to clean data for {symbol}: {e}")
+            continue
+
+    logger.success("Chunked processing completed")
+    return pd.DataFrame()  # Return empty as we're not concatenating in chunked mode
 
 
 # --- Main Execution Block ---

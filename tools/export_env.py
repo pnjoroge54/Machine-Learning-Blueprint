@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 
 # === CONFIG ===
-ENV_NAME = "myenv"  # Replace with your environment name
+ENV_NAME = "afml"  # Replace with your environment name
 OUTPUT_FILE = Path("environment.yml")
 PINNED_PACKAGES = ["python", "numpy", "pandas"]  # Add more if needed
 
