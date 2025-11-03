@@ -263,8 +263,8 @@ def ml_cross_val_score(
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
-    sample_weight_train: Optional[np.ndarray] = None,
-    sample_weight_score: Optional[np.ndarray] = None,
+    sample_weight_train: Optional[pd.Series] = None,
+    sample_weight_score: Optional[pd.Series] = None,
     scoring: Union[str, Callable[[np.ndarray, np.ndarray], float]] = log_loss,
 ):
     # pylint: disable=invalid-name
@@ -297,10 +297,10 @@ def ml_cross_val_score(
         Target labels aligned with X (index used to align samples_info_sets when required).
     cv_gen : BaseCrossValidator
         Cross-validation generator instance with a split(X, y) method (e.g., PurgedKFold).
-    sample_weight_train : np.ndarray, optional (default=None)
+    sample_weight_train : pd.Series, optional (default=None)
         Per-sample weights used when calling classifier.fit on the train split. If None, all ones
         are used (no weighting).
-    sample_weight_score : np.ndarray, optional (default=None)
+    sample_weight_score : pd.Series, optional (default=None)
         Per-sample weights used when calling the scoring function on the test split. If None, all ones
         are used.
     scoring : str or callable, optional (default=log_loss)
@@ -351,6 +351,8 @@ def ml_cross_val_score(
         t1 = classifier.samples_info_sets.copy()
         common_idx = t1.index.intersection(y.index)
         X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
+        sample_weight_train = sample_weight_train[common_idx].values
+        sample_weight_score = sample_weight_score[common_idx].values
         if t1.empty:
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)
@@ -410,8 +412,8 @@ def analyze_cross_val_scores(
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
-    sample_weight_train: np.ndarray = None,
-    sample_weight_score: np.ndarray = None,
+    sample_weight_train: pd.Series = None,
+    sample_weight_score: pd.Series = None,
 ):
     # pylint: disable=invalid-name
     # pylint: disable=comparison-with-callable
@@ -440,8 +442,8 @@ def analyze_cross_val_scores(
     :param X: (pd.DataFrame) The dataset of records to evaluate.
     :param y: (pd.Series) The labels corresponding to the X dataset.
     :param cv_gen: (BaseCrossValidator) Cross Validation generator object instance.
-    :param sample_weight_train: (np.array) Sample weights used to train the model for each record in the dataset.
-    :param sample_weight_score: (np.array) Sample weights used to evaluate the model quality.
+    :param sample_weight_train: (pd.Series) Sample weights used to train the model for each record in the dataset.
+    :param sample_weight_score: (pd.Series) Sample weights used to evaluate the model quality.
     :return: tuple(dict, pd.DataFrame, dict) The computed scores, a data frame of mean and std. deviation, and a dict of data in each fold
     """
     scoring_methods = [
@@ -473,6 +475,8 @@ def analyze_cross_val_scores(
         t1 = classifier.samples_info_sets.copy()
         common_idx = t1.index.intersection(y.index)
         X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
+        sample_weight_train = sample_weight_train[common_idx].values
+        sample_weight_score = sample_weight_score[common_idx].values
         if t1.empty:
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)
@@ -501,15 +505,12 @@ def analyze_cross_val_scores(
 
         for method, scoring in zip(ret_scores.keys(), scoring_methods):
             if scoring in (probability_weighted_accuracy, log_loss):
-                score = scoring(
-                    y.iloc[test],
-                    prob,
-                    sample_weight=sample_weight_score[test],
-                    labels=classifier.classes_,
-                )
+                params["y_pred"] = prob
+                score = scoring(**params)
                 if method == "neg_log_loss":
                     score *= -1
             else:
+                params["y_pred"] = pred
                 try:
                     score = scoring(**params)
                 except:
