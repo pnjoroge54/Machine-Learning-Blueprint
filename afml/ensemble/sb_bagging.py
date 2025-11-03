@@ -3,6 +3,7 @@ Implementation of Sequentially Bootstrapped Bagging Classifier using sklearn's l
 """
 
 import numbers
+import sys
 from abc import ABCMeta, abstractmethod
 from warnings import warn
 
@@ -251,7 +252,6 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     ...     bootstrap_features=True,
     ...     max_features=0.3,
     ...     oob_score=False,
-    ...     aggregation="probability",
     ...     random_state=42,
     ... )
     >>> ens.fit(X_train, y_train)
@@ -761,6 +761,11 @@ def compute_custom_oob_metrics(clf, X, y, sample_weight=None):
     """
     from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 
+    if hasattr(X, "values"):
+        X = X.values
+    if hasattr(y, "values"):
+        y = y.values
+
     n_samples = y.shape[0]
     n_classes = clf.n_classes_
 
@@ -804,3 +809,24 @@ def compute_custom_oob_metrics(clf, X, y, sample_weight=None):
         metrics["auc"] = roc_auc_score(y_oob, proba_oob[:, 1])
 
     return metrics
+
+
+# Check ensemble memory footprint
+def estimate_ensemble_size(clf):
+    """Estimate memory usage of fitted ensemble."""
+    total_bytes = 0
+
+    # Estimators
+    for est in clf.estimators_:
+        total_bytes += sys.getsizeof(est)
+
+    # Sample indices
+    for samples in clf.estimators_samples_:
+        total_bytes += sys.getsizeof(samples)
+
+    # Feature indices
+    if clf.estimators_features_ is not None:
+        for features in clf.estimators_features_:
+            total_bytes += sys.getsizeof(features)
+
+    return total_bytes / (1024**2)  # Convert to MB
