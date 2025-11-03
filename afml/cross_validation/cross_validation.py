@@ -156,107 +156,6 @@ class PurgedSplit:
             return np.array(train_indices), test_indices
 
 
-class PurgedWalkForwardCV(_BaseKFold):
-    """
-    Purged Walk-Forward Cross-Validation
-
-    This class implements walk-forward cross-validation with purging to prevent
-    information leakage in financial time series data. In walk-forward validation:
-    - Training data always comes before test data (respects temporal order)
-    - The training window can be expanding or fixed-size
-    - Purging removes training samples that overlap with test labels
-    - Embargo prevents using samples immediately after the test set
-
-    :param n_splits: (int) Number of splits/folds. Default to 5
-    :param t1: (pd.Series) Information range for each observation
-        *t1.index*: Time when information extraction started
-        *t1.value*: Time when information extraction ended
-    :param pct_embargo: (float) Embargo as fraction of dataset (e.g., 0.01 = 1%)
-    :param expanding_window: (bool) If True, use expanding window; if False, use fixed-size window
-    :param min_train_size: (float) Minimum training set size as fraction of total (for fixed window)
-    """
-
-    def __init__(
-        self, n_splits=5, t1=None, pct_embargo=0.01, expanding_window=True, min_train_size=0.3
-    ):
-        if not isinstance(t1, pd.Series):
-            raise ValueError("t1 must be a pd.Series")
-
-        super().__init__(n_splits, shuffle=False, random_state=None)
-
-        self.t1 = t1
-        self.pct_embargo = pct_embargo
-        self.expanding_window = expanding_window
-        self.min_train_size = min_train_size
-
-    def split(self, X, y=None, groups=None):
-        """
-        Generate train/test splits for walk-forward cross-validation.
-
-        :param X: (pd.DataFrame) Feature dataset
-        :param y: (pd.Series) Labels (optional)
-        :param groups: (array-like) Group labels (optional)
-        :yield: (tuple) Train and test indices for each split
-        """
-        if (X.index == self.t1.index).sum() != len(self.t1):
-            raise ValueError("X and t1 must have the same index")
-
-        indices = np.arange(X.shape[0])
-        n_samples = X.shape[0]
-        embargo_size = int(n_samples * self.pct_embargo)
-
-        # Calculate test set boundaries
-        test_splits = np.array_split(np.arange(n_samples), self.n_splits)
-
-        for split_idx in range(self.n_splits):
-            # Define test set
-            test_indices = test_splits[split_idx]
-            test_start_idx = test_indices[0]
-            test_end_idx = test_indices[-1] + 1
-
-            # Get test times for purging
-            test_times = pd.Series(
-                index=[self.t1.index[test_start_idx]], data=[self.t1.iloc[test_end_idx - 1]]
-            )
-
-            # Determine training set based on window type
-            if self.expanding_window:
-                # Expanding window: use all data before test set
-                initial_train_indices = indices[:test_start_idx]
-            else:
-                # Fixed window: use minimum training size
-                min_train_samples = int(n_samples * self.min_train_size)
-                train_start = max(0, test_start_idx - min_train_samples)
-                initial_train_indices = indices[train_start:test_start_idx]
-
-            # Apply purging to remove overlapping observations
-            if len(initial_train_indices) > 0:
-                initial_train_times = self.t1.iloc[initial_train_indices]
-                purged_train_times = ml_get_train_times(initial_train_times, test_times)
-
-                # Convert purged times back to indices
-                train_indices = []
-                for train_time in purged_train_times.index:
-                    loc = self.t1.index.get_loc(train_time)
-                    if isinstance(loc, int):
-                        train_indices.append(loc)
-                    else:
-                        # Handle duplicate indices
-                        train_indices.extend(range(loc.start, loc.stop))
-
-                train_indices = np.array(train_indices)
-            else:
-                train_indices = np.array([])
-
-            # Apply embargo: remove samples immediately after test set
-            embargo_start = test_end_idx
-            embargo_end = min(test_end_idx + embargo_size, n_samples)
-
-            # Only yield if we have training data
-            if len(train_indices) > 0:
-                yield train_indices, test_indices
-
-
 # noinspection PyPep8Naming
 def ml_cross_val_score(
     classifier: ClassifierMixin,
@@ -412,8 +311,8 @@ def analyze_cross_val_scores(
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
-    sample_weight_train: pd.Series = None,
-    sample_weight_score: pd.Series = None,
+    sample_weight_train: Optional[pd.Series] = None,
+    sample_weight_score: Optional[pd.Series] = None,
 ):
     # pylint: disable=invalid-name
     # pylint: disable=comparison-with-callable
