@@ -249,9 +249,10 @@ def ml_cross_val_score(
     if seq_bootstrap:
         t1 = classifier.samples_info_sets.copy()
         common_idx = t1.index.intersection(y.index)
+        iloc = t1.index.searchsorted(common_idx[[0, -1]])
         X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
-        sample_weight_train = sample_weight_train[common_idx].values
-        sample_weight_score = sample_weight_score[common_idx].values
+        sample_weight_train = sample_weight_train[iloc[0] : iloc[1] + 1]
+        sample_weight_score = sample_weight_score[iloc[0] : iloc[1] + 1]
         if t1.empty:
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)
@@ -373,9 +374,10 @@ def analyze_cross_val_scores(
     if seq_bootstrap:
         t1 = classifier.samples_info_sets.copy()
         common_idx = t1.index.intersection(y.index)
+        iloc = t1.index.searchsorted(common_idx[[0, -1]])
         X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
-        sample_weight_train = sample_weight_train[common_idx].values
-        sample_weight_score = sample_weight_score[common_idx].values
+        sample_weight_train = sample_weight_train[iloc[0] : iloc[1] + 1]
+        sample_weight_score = sample_weight_score[iloc[0] : iloc[1] + 1]
         if t1.empty:
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)
