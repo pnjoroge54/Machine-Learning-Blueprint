@@ -318,7 +318,7 @@ def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbo
         return pd.DataFrame()
 
 
-def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None):
+def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None, clean=True):
     """
     Downloads and saves tick data to a partitioned Parquet structure.
 
@@ -328,11 +328,13 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None)
         end_date (Union[str, dt, pd.Timestamp]): The end date for the data range.
         account_name (str): The name of the account used for the download.
         path (Union[str, Path]): The root folder where data will be saved.
+        clean (bool): Clean data and save to its own directory
     """
     root_path = Path(path) if path is not None else Path().home() / "tick_data_parquet"
-    root_path.mkdir(parents=True, exist_ok=True)
+    data_path = root_path / "raw"
+    data_path.mkdir(parents=True, exist_ok=True)
 
-    if not verify_or_create_account_info(root_path, account_name):
+    if not verify_or_create_account_info(data_path, account_name):
         return
 
     date_range = date_conversion(start_date, end_date)
@@ -348,7 +350,7 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None)
     dates_to_check = pd.date_range(start=start_dt, end=end_dt, freq="MS")
     for symbol in symbols:
         for d in dates_to_check:
-            file_path = root_path / symbol / str(d.year) / f"month-{d.month:02d}.parquet"
+            file_path = data_path / symbol / str(d.year) / f"month-{d.month:02d}.parquet"
             if file_path.exists():
                 overwrite_response = TimedMessageBox(
                     title="Overwrite Existing Files?",
@@ -369,15 +371,14 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None)
     dates_to = pd.date_range(start=start_dt, end=end_dt, freq="ME", tz="UTC") + pd.Timedelta(days=1)
 
     for i, symbol in enumerate(symbols):
+        all_dfs = []
         logger.info(f"\nProcessing symbol: {symbol} [{i+1}/{len(symbols)}]")
-        symbol_path = root_path / symbol
-        symbol_path.mkdir(parents=True, exist_ok=True)
-
+        symbol_path = data_path / symbol
         for j, (start, end) in enumerate(zip(dates_from, dates_to), 1):
             year_path = symbol_path / str(start.year)
             year_path.mkdir(parents=True, exist_ok=True)
-            file = year_path / f"month-{start.month:02d}.parquet"
 
+            file = year_path / f"month-{start.month:02d}.parquet"
             log_msg_prefix = f"  -> Month {start.strftime('%Y-%m')}..."
 
             # Display symbol info every 10 lines
@@ -389,24 +390,29 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None)
                 continue
 
             df = get_ticks(symbol, start, end, verbose=False)
+            if clean:
+                all_dfs.append(df)
 
             if df.empty:
-                logger.warning(f"{log_msg_prefix} No data found.")
+                logger.warning(f"{log_msg_prefix} No data found")
                 missing_data.setdefault(symbol, []).append(start.strftime("%Y-%m"))
-                continue
+                try:
+                    year_path.rmdir()
+                except:
+                    continue
+            else:
+                df.to_parquet(
+                    file,
+                    engine="pyarrow",
+                    compression="zstd",
+                )
+                logger.success(f"{log_msg_prefix} Saved {len(df):,} rows.")
 
-            df.to_parquet(
-                file,
-                engine="pyarrow",
-                compression="zstd",
-            )
-            logger.success(f"{log_msg_prefix} Saved {len(df):,} rows.")
-
-        # Delete empty year folders
-        try:
-            year_path.rmdir()
-        except:
-            pass
+        # Clean and save data
+        if clean and not df.empty:
+            cleaned_data_path = root_path / "clean"
+            df_cleaned = clean_tick_data(pd.concat(all_dfs))
+            _save_cleaned_with_structure(df_cleaned, cleaned_data_path, symbol)
 
     logger.info("Download process finished.")
     if missing_data:
@@ -414,97 +420,10 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None)
         for symbol, months in missing_data.items():
             logger.warning(f"  - {symbol}: {', '.join(months)}")
 
-    logger.success(f"All operations complete. Files saved to {root_path}")
+    logger.success(f"All operations complete. Files saved to {data_path}")
 
 
-# --- Loading Data from Files ---
-
-
-def load_tick_data(
-    path,
-    symbol,
-    start_date,
-    end_date,
-    account_name,
-    columns=None,
-    compress=True,
-    verbose=True,
-):
-    """
-    Loads tick data from a partitioned Parquet structure after verifying account.
-
-    Args:
-        path (Union[str, Path]): The root folder where the data is stored.
-        symbol (str): The financial instrument symbol to load.
-        start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
-        end_date (Union[str, dt, pd.Timestamp]): The end date of the desired data range.
-        account_name (str): The account name to verify against the data directory.
-        columns (Optional[list]): A list of specific columns to load. Loads all if None.
-        compress (bool): If True, save memory by optimizing dtypes.
-        verbose (bool): If True, logs detailed DataFrame info upon successful load.
-
-    Returns:
-        pd.DataFrame: A DataFrame with the requested tick data, or an empty DataFrame
-                      if the account verification fails, dates are invalid, or an error occurs.
-    """
-    root_path = Path(path)
-    if not verify_or_create_account_info(root_path, account_name):
-        return pd.DataFrame()
-
-    date_range = date_conversion(start_date, end_date)
-    if not date_range:
-        return pd.DataFrame()
-    start_dt, end_dt = date_range
-
-    fname = root_path / symbol
-
-    try:
-        filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
-
-        ddf = dd.read_parquet(
-            fname,
-            columns=columns,
-            filters=filters,
-            engine="pyarrow",
-        )
-        df = ddf.compute()
-
-        to_drop = []
-        for col in df.columns:
-            # Drop columns
-            if any(np.isnan(df[col].unique())):
-                to_drop.append(col)
-            # Optimise dtype of flags column for memory
-            if col == "flags" and compress:
-                mem = df.memory_usage(deep=True).sum()  # memory before downcasting
-                dtype_orig = df["flags"].dtype
-                limit = df["flags"].max()
-                for x in (8, 16, 32):
-                    dtype = f"uint{x}"
-                    if dtype_orig != dtype and np.iinfo(dtype).max >= limit:
-                        df = df.astype({"flags": dtype})
-                        mem = (mem - df.memory_usage(deep=True).sum()) / 1024**2
-                        logger.info(
-                            f"Converted flags from {dtype_orig} to {df['flags'].dtype} saving {mem:,.1f} MB."
-                        )
-                        break
-
-        if to_drop:
-            df.drop(columns=to_drop, inplace=True)
-            logger.info(f"Dropped empty columns {to_drop}.")
-
-        if not df.index.is_monotonic_increasing:
-            df.sort_index(inplace=True)
-
-        logger.success(f"Loaded {len(df):,} rows of {symbol} tick data for account {account_name}.")
-        if verbose:
-            log_df_info(df)
-
-        return df
-
-    except Exception as e:
-        logger.error(f"Failed to load data for {symbol}. Error: {e}")
-        return pd.DataFrame()
+# --- Clean Raw Data and Save ---
 
 
 def clean_tick_data(
@@ -618,118 +537,94 @@ def _save_cleaned_with_structure(df_cleaned: pd.DataFrame, cleaned_data_path: Pa
         )
 
 
-def clean_and_repartition_data(
-    raw_data_path: Path,
-    cleaned_data_path: Path,
-    account_name: str,
-    start_date: str = None,
-    end_date: str = None,
+# --- Loading Data from Files ---
+
+
+def load_tick_data(
+    path,
+    symbol,
+    start_date,
+    end_date,
+    account_name,
+    columns=None,
+    compress=True,
+    verbose=True,
 ):
     """
-    Efficiently clean and save data while preserving directory structure
+    Loads tick data from a partitioned Parquet structure after verifying account.
+
+    Args:
+        path (Union[str, Path]): The root folder where the data is stored.
+        symbol (str): The financial instrument symbol to load.
+        start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
+        end_date (Union[str, dt, pd.Timestamp]): The end date of the desired data range.
+        account_name (str): The account name to verify against the data directory.
+        columns (Optional[list]): A list of specific columns to load. Loads all if None.
+        compress (bool): If True, save memory by optimizing dtypes.
+        verbose (bool): If True, logs detailed DataFrame info upon successful load.
+
+    Returns:
+        pd.DataFrame: A DataFrame with the requested tick data, or an empty DataFrame
+                      if the account verification fails, dates are invalid, or an error occurs.
     """
-    # Verify account first
-    if not verify_or_create_account_info(raw_data_path, account_name):
-        return None
+    root_path = Path(path)
+    if not verify_or_create_account_info(root_path, account_name):
+        return pd.DataFrame()
+
+    date_range = date_conversion(start_date, end_date)
+    if not date_range:
+        return pd.DataFrame()
+    start_dt, end_dt = date_range
+
+    fname = root_path / symbol
 
     try:
-        # Get all symbols from directory structure
-        symbols = [
-            d.name for d in raw_data_path.iterdir() if d.is_dir() and not d.name.startswith(".")
-        ]
+        filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
 
-        all_cleaned_dfs = []
-
-        for symbol in symbols:
-            logger.info(f"Processing symbol: {symbol}")
-
-            # Read data for this symbol with optional filtering
-            filters = []
-            if start_date and end_date:
-                start_dt, end_dt = date_conversion(start_date, end_date)
-                filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
-
-            symbol_path = raw_data_path / symbol / "**" / "*.parquet"
-
-            try:
-                ddf = dd.read_parquet(symbol_path, filters=filters, engine="pyarrow")
-                df = ddf.compute()
-
-                if df.empty:
-                    logger.warning(f"No data found for {symbol}")
-                    continue
-
-                # Clean the data
-                logger.info(f"Cleaning data for {symbol}...")
-                df_cleaned = clean_tick_data(df)
-
-                if df_cleaned is None or df_cleaned.empty:
-                    logger.warning(f"No data remaining after cleaning for {symbol}")
-                    continue
-
-                # Save cleaned data with proper structure
-                _save_cleaned_with_structure(df_cleaned, cleaned_data_path, symbol)
-                all_cleaned_dfs.append(df_cleaned)
-
-                logger.success(f"Cleaned and saved {len(df_cleaned):,} rows for {symbol}")
-
-            except Exception as e:
-                logger.error(f"Failed to process {symbol}: {e}")
-                continue
-
-        if all_cleaned_dfs:
-            final_df = pd.concat(all_cleaned_dfs, ignore_index=False)
-            logger.success(
-                f"Successfully cleaned {len(all_cleaned_dfs)} symbols, total {len(final_df):,} rows"
-            )
-            return final_df
-        else:
-            logger.warning("No data was cleaned")
-            return pd.DataFrame()
-
-    except MemoryError:
-        logger.error("Insufficient memory. Using chunked processing by symbol.")
-        # Process symbols one by one without concatenating
-        return _clean_data_chunked(
-            raw_data_path, cleaned_data_path, account_name, start_date, end_date
+        ddf = dd.read_parquet(
+            fname,
+            columns=columns,
+            filters=filters,
+            engine="pyarrow",
         )
+        df = ddf.compute()
 
+        to_drop = []
+        for col in df.columns:
+            # Drop columns
+            if any(np.isnan(df[col].unique())):
+                to_drop.append(col)
+            # Optimise dtype of flags column for memory
+            if col == "flags" and compress:
+                mem = df.memory_usage(deep=True).sum()  # memory before downcasting
+                dtype_orig = df["flags"].dtype
+                limit = df["flags"].max()
+                for x in (8, 16, 32):
+                    dtype = f"uint{x}"
+                    if dtype_orig != dtype and np.iinfo(dtype).max >= limit:
+                        df = df.astype({"flags": dtype})
+                        mem = (mem - df.memory_usage(deep=True).sum()) / 1024**2
+                        logger.info(
+                            f"Converted flags from {dtype_orig} to {df['flags'].dtype} saving {mem:,.1f} MB."
+                        )
+                        break
 
-def _clean_data_chunked(
-    raw_data_path, cleaned_data_path, account_name, start_date=None, end_date=None
-):
-    """
-    Fallback for memory-constrained environments - process by symbol without concatenating
-    """
-    logger.info("Using memory-efficient chunked approach by symbol...")
+        if to_drop:
+            df.drop(columns=to_drop, inplace=True)
+            logger.info(f"Dropped empty columns {to_drop}.")
 
-    # Get all unique symbols from directory structure
-    symbols = [d.name for d in raw_data_path.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        if not df.index.is_monotonic_increasing:
+            df.sort_index(inplace=True)
 
-    for symbol in symbols:
-        try:
-            # Process one symbol at a time
-            symbol_path = raw_data_path / symbol / "**" / "*.parquet"
+        logger.success(f"Loaded {len(df):,} rows of {symbol} tick data for account {account_name}.")
+        if verbose:
+            log_df_info(df)
 
-            filters = []
-            if start_date and end_date:
-                start_dt, end_dt = date_conversion(start_date, end_date)
-                filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
+        return df
 
-            ddf = dd.read_parquet(symbol_path, filters=filters, engine="pyarrow")
-            df = ddf.compute()
-
-            df_cleaned = clean_tick_data(df)
-            if df_cleaned is not None and not df_cleaned.empty:
-                _save_cleaned_with_structure(df_cleaned, cleaned_data_path, symbol)
-                logger.success(f"Processed {symbol}: {len(df_cleaned):,} rows")
-
-        except Exception as e:
-            logger.error(f"Failed to clean data for {symbol}: {e}")
-            continue
-
-    logger.success("Chunked processing completed")
-    return pd.DataFrame()  # Return empty as we're not concatenating in chunked mode
+    except Exception as e:
+        logger.error(f"Failed to load data for {symbol}. Error: {e}")
+        return pd.DataFrame()
 
 
 # --- Main Execution Block ---

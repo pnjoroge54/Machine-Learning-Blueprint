@@ -10,7 +10,7 @@ from .cross_validation import (
     ml_cross_val_score,
     ml_get_train_times,
 )
-from .hyperfit import MyPipeline, clf_hyper_fit
+from .hyperfit import MyPipeline, clf_hyper_fit, param_grid_size
 from .scoring import probability_weighted_accuracy
 
 __all__ = [
@@ -23,5 +23,5 @@ __all__ = [
     "MyPipeline",
     "clf_hyper_fit",
     "CombinatorialPurgedKFold",
-    # "best_weighting_by_mean_score",
+    "param_grid_size",
 ]

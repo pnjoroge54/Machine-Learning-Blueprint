@@ -17,7 +17,7 @@ from joblib import Memory
 from loguru import logger
 
 # =============================================================================
-# 1) CACHE DIRECTORY SETUP - MUST BE FIRST
+# 1) CACHE DIRECTORY SETUP
 # =============================================================================
 
 
@@ -375,35 +375,9 @@ from .cache_monitoring import (
     print_cache_health,
 )
 
-# =============================================================================
-# 10) AUTO-RELOAD FUNCTIONALITY (Optional)
-# =============================================================================
-
-try:
-    from .auto_reload import auto_cacheable, jupyter_auto_setup, setup_auto_reloading
-
-    AUTO_RELOAD_AVAILABLE = True
-    logger.debug("Auto-reload functionality available")
-except ImportError:
-    AUTO_RELOAD_AVAILABLE = False
-    logger.debug("Auto-reload not available (install watchdog for file watching)")
-
-    # Provide fallbacks that work with your existing system
-    def auto_cacheable(func):
-        """Fallback: use smart_cacheable instead."""
-        return smart_cacheable(func)
-
-    def setup_auto_reloading(*args, **kwargs):
-        logger.info("Auto-reload not available - using standard selective cache clearing")
-        return None
-
-    def jupyter_auto_setup():
-        logger.info("Auto-reload not available - using standard caching")
-        return None
-
 
 # =============================================================================
-# 11) ENHANCED CONVENIENCE FUNCTIONS
+# 10) ENHANCED CONVENIENCE FUNCTIONS
 # =============================================================================
 
 
@@ -566,56 +540,6 @@ def setup_production_cache(
     return components
 
 
-def setup_jupyter_cache(
-    enable_mlflow: bool = False,
-    enable_monitoring: bool = True,
-) -> dict:
-    """
-    Setup cache system optimized for Jupyter notebooks.
-
-    Args:
-        enable_mlflow: Enable MLflow tracking
-        enable_monitoring: Enable cache monitoring
-
-    Returns:
-        Dict with initialized components and helper functions
-    """
-    logger.info("Setting up cache for Jupyter notebook...")
-
-    # Initialize core
-    initialize_cache_system()
-
-    components = {
-        "core": True,
-        "mlflow": None,
-        "backtest": get_backtest_cache(),
-        "monitor": get_cache_monitor() if enable_monitoring else None,
-    }
-
-    # Setup MLflow if requested
-    if enable_mlflow and MLFLOW_INTEGRATION_AVAILABLE:
-        try:
-            components["mlflow"] = setup_mlflow_cache(experiment_name="jupyter_experiments")
-        except Exception as e:
-            logger.warning(f"MLflow setup failed: {e}")
-
-    # Create helper namespace for notebook
-    helpers = {
-        "cache_status": lambda: get_comprehensive_cache_status(),
-        "print_health": print_cache_health,
-        "optimize": lambda: optimize_cache_system(print_report=True),
-        "clear_all": lambda: clear_afml_cache(warn=True),
-        "smart_clear": lambda module=None: selective_cache_clear(
-            modules=[module] if module else None
-        ),
-    }
-
-    logger.info("✅ Jupyter cache ready!")
-    logger.info("   Use helpers: cache_status(), print_health(), optimize()")
-
-    return {**components, "helpers": helpers}
-
-
 # =============================================================================
 # 12) EXPORTS
 # =============================================================================
@@ -641,11 +565,6 @@ __all__ = [
     "clear_changed_ml_functions",
     "clear_changed_labeling_functions",
     "clear_changed_features_functions",
-    # Auto-reload (existing)
-    "auto_cacheable",
-    "setup_auto_reloading",
-    "jupyter_auto_setup",
-    "AUTO_RELOAD_AVAILABLE",
     # NEW: Robust cache keys
     "CacheKeyGenerator",
     "TimeSeriesCacheKey",
@@ -677,7 +596,6 @@ __all__ = [
     "get_comprehensive_cache_status",
     "optimize_cache_system",
     "setup_production_cache",
-    "setup_jupyter_cache",
 ]
 
 # =============================================================================

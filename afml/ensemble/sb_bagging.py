@@ -556,7 +556,11 @@ class SequentiallyBootstrappedBaggingClassifier(
 
     def _validate_estimator(self):
         """Check the estimator and set the estimator_ attribute."""
-        super()._validate_estimator(default=DecisionTreeClassifier())
+        super()._validate_estimator(
+            default=DecisionTreeClassifier(
+                criterion="entropy", class_weight="balanced", max_features="sqrt"
+            )
+        )
 
     def _fit(self, X, y, max_samples=None, sample_weight=None):
         """

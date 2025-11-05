@@ -162,8 +162,8 @@ def ml_cross_val_score(
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
-    sample_weight_train: Optional[pd.Series] = None,
-    sample_weight_score: Optional[pd.Series] = None,
+    sample_weight_train: Optional[Union[np.ndarray, pd.Series]] = None,
+    sample_weight_score: Optional[Union[np.ndarray, pd.Series]] = None,
     scoring: Union[str, Callable[[np.ndarray, np.ndarray], float]] = log_loss,
 ):
     # pylint: disable=invalid-name
@@ -196,10 +196,10 @@ def ml_cross_val_score(
         Target labels aligned with X (index used to align samples_info_sets when required).
     cv_gen : BaseCrossValidator
         Cross-validation generator instance with a split(X, y) method (e.g., PurgedKFold).
-    sample_weight_train : pd.Series, optional (default=None)
+    sample_weight_train : Array-like, optional (default=None)
         Per-sample weights used when calling classifier.fit on the train split. If None, all ones
         are used (no weighting).
-    sample_weight_score : pd.Series, optional (default=None)
+    sample_weight_score : Array-like, optional (default=None)
         Per-sample weights used when calling the scoring function on the test split. If None, all ones
         are used.
     scoring : str or callable, optional (default=log_loss)
@@ -250,8 +250,8 @@ def ml_cross_val_score(
         t1 = classifier.samples_info_sets.copy()
         common_idx = t1.index.intersection(y.index)
         X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
-        sample_weight_train = pd.Series(sample_weight_train).loc[common_idx]
-        sample_weight_score = pd.Series(sample_weight_score).loc[common_idx]
+        sample_weight_train = pd.Series(sample_weight_train, index=y.index).loc[common_idx]
+        sample_weight_score = pd.Series(sample_weight_score, index=y.index).loc[common_idx]
         if t1.empty:
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)
@@ -277,27 +277,21 @@ def ml_cross_val_score(
             y=y.iloc[train],
             sample_weight=sample_weight_train[train],
         )
+        params = dict(
+            y_true=y.iloc[test],
+            labels=classifier.classes_,
+            sample_weight=sample_weight_score[test],
+        )
         if scoring == (log_loss or probability_weighted_accuracy):
-            prob = fit.predict_proba(X.iloc[test, :])
-            score = scoring(
-                y.iloc[test],
-                prob,
-                sample_weight=sample_weight_score[test],
-                labels=classifier.classes_,
-            )
+            params["y_pred"] = fit.predict_proba(X.iloc[test, :])
+            score = scoring(**params)
             if scoring == log_loss:
                 score *= -1
         elif scoring == (f1_score or accuracy_score):
-            pred = fit.predict(X.iloc[test, :])
-            params = dict(
-                y_true=y.iloc[test],
-                y_pred=pred,
-                labels=classifier.classes_,
-                sample_weight=sample_weight_score[test],
-            )
+            params["y_pred"] = fit.predict(X.iloc[test, :])
             try:
                 score = scoring(**params)
-            except Exception:
+            except:
                 del params["labels"]
                 score = scoring(**params)
 
@@ -374,8 +368,8 @@ def analyze_cross_val_scores(
         t1 = classifier.samples_info_sets.copy()
         common_idx = t1.index.intersection(y.index)
         X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
-        sample_weight_train = pd.Series(sample_weight_train).loc[common_idx]
-        sample_weight_score = pd.Series(sample_weight_score).loc[common_idx]
+        sample_weight_train = pd.Series(sample_weight_train, index=y.index).loc[common_idx]
+        sample_weight_score = pd.Series(sample_weight_score, index=y.index).loc[common_idx]
         if t1.empty:
             raise KeyError(f"samples_info_sets not aligned with data")
         classifier.set_params(oob_score=False)

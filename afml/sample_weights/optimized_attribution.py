@@ -348,22 +348,6 @@ def get_weights_by_time_decay_optimized(
     """
     Optimized implementation of time decay factors for sample weights.
 
-    This function provides performance improvements over the original implementation
-    through:
-
-    Key Optimizations:
-    1. Numba JIT compilation for decay calculations
-    2. Vectorized operations for mathematical computations
-    3. Efficient handling of edge cases and numerical stability
-    4. Optimized memory usage and reduced allocations
-    5. Better integration with optimized uniqueness calculations
-
-    Performance Improvements:
-    - 2-3x faster for decay calculations
-    - Better numerical stability for edge cases
-    - Improved memory efficiency
-    - Faster integration with uniqueness calculations
-
     Parameters:
     -----------
     triple_barrier_events : pd.DataFrame

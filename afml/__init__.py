@@ -34,14 +34,13 @@ from .cache import (
     optimize_cache_system,
     robust_cacheable,
     selective_cache_clear,
-    setup_jupyter_cache,
     setup_production_cache,
     smart_cacheable,
     time_aware_cacheable,
 )
 
 # =============================================================================
-# 1) IMPORT CACHE SYSTEM - Updated with new features
+# IMPORT CACHE SYSTEM - Updated with new features
 # =============================================================================
 
 
@@ -84,27 +83,21 @@ except ImportError:
 from .numba_warmup import lazy_warmup, prewarm_numba_in_package, register_numba_dummy
 
 # =============================================================================
-# 2) INITIALIZE CACHE SYSTEM FIRST (before any heavy imports)
+# INITIALIZE CACHE SYSTEM FIRST (before any heavy imports)
 # =============================================================================
 
 # Initialize cache system immediately
 initialize_cache_system()
 
-# Register realistic dummy signatures for critical functions
 # Adjust these as needed after inspecting actual function signatures in your codebase.
 # register_numba_dummy(
 #     "_precompute_active_indices_nopython",
 #     args=(np.array([np.int64(0)]), np.array([np.int64(0)]), np.array([np.int64(0)])),
 # )
 
-# =============================================================================
-# 3) LIGHTWEIGHT CORE IMPORTS (always available)
-# =============================================================================
-
-from .core import AFMLApplication, pattern_jupyter_notebook
 
 # =============================================================================
-# 4) LAZY LOADING SETUP
+# LAZY LOADING SETUP
 # =============================================================================
 
 # Module mapping - only add modules that are actually heavy to import
@@ -151,7 +144,7 @@ except ImportError as e:
 _module_cache: Dict[str, ModuleType] = {}
 
 # =============================================================================
-# 5) LAZY LOADING FOR HEAVY MODULES ONLY
+# LAZY LOADING FOR HEAVY MODULES ONLY
 # =============================================================================
 
 
@@ -210,7 +203,7 @@ def _get_module_size(module) -> str:
 
 
 # =============================================================================
-# 6) SIMPLE MODULE MANAGEMENT (only what's actually useful)
+# SIMPLE MODULE MANAGEMENT (only what's actually useful)
 # =============================================================================
 
 
@@ -256,58 +249,7 @@ def preload_portfolio_modules() -> Dict[str, ModuleType]:
 
 
 # =============================================================================
-# 7) JUPYTER INTEGRATION - Enhanced
-# =============================================================================
-
-
-def setup_jupyter(
-    preload_ml: bool = False,
-    preload_portfolio: bool = False,
-    enable_mlflow: bool = False,
-    enable_monitoring: bool = True,
-):
-    """
-    Enhanced Jupyter setup with new cache features.
-
-    Args:
-        preload_ml: Preload ML modules
-        preload_portfolio: Preload portfolio modules
-        enable_mlflow: Enable MLflow experiment tracking
-        enable_monitoring: Enable cache monitoring
-
-    Returns:
-        Dict with cache components and helpers
-    """
-    logger.info("Setting up AFML for Jupyter notebook...")
-
-    # Use the new enhanced setup function
-    components = setup_jupyter_cache(
-        enable_mlflow=enable_mlflow,
-        enable_monitoring=enable_monitoring,
-    )
-
-    # Try to preload modules (optional)
-    if preload_ml:
-        try:
-            loaded_ml = preload_ml_modules()
-            logger.info("Preloaded ML modules: {}", list(loaded_ml.keys()))
-        except Exception as e:
-            logger.warning("ML module preload failed: {}", e)
-
-    if preload_portfolio:
-        try:
-            loaded_portfolio = preload_portfolio_modules()
-            logger.info("Preloaded portfolio modules: {}", list(loaded_portfolio.keys()))
-        except Exception as e:
-            logger.warning("Portfolio module preload failed: {}", e)
-
-    logger.info("✅ AFML Jupyter environment ready!")
-
-    return components
-
-
-# =============================================================================
-# 8) CACHE MONITORING UTILITIES - Enhanced
+# CACHE MONITORING UTILITIES - Enhanced
 # =============================================================================
 
 
@@ -369,7 +311,7 @@ def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days
 
 
 # =============================================================================
-# 9) __all__ AND METADATA
+# __all__ AND METADATA
 # =============================================================================
 
 __version__ = "1.0.0"
@@ -396,7 +338,6 @@ __all__ = [
     "get_comprehensive_cache_status",
     "optimize_cache_system",
     "setup_production_cache",
-    "setup_jupyter_cache",
     # Cache monitoring (if available)
     "print_cache_health",
     "get_cache_efficiency_report",
@@ -410,11 +351,6 @@ __all__ = [
     "cached_backtest",
     "get_backtest_cache",
     "BacktestCache",
-    # Core components
-    "AFMLApplication",
-    "pattern_jupyter_notebook",
-    # Jupyter setup
-    "setup_jupyter",
     # Module management
     "preload_heavy_modules",
     "preload_ml_modules",
@@ -461,7 +397,7 @@ __all__ = [
 ]
 
 # =============================================================================
-# 10) STARTUP
+# STARTUP
 # =============================================================================
 
 logger.info(
