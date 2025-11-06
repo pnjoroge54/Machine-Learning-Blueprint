@@ -321,13 +321,16 @@ def initialize_cache_system():
 # =============================================================================
 
 # Import robust cache key generation - NOW SAFE (memory and cache_stats exist)
-from .robust_cache_keys import (
-    CacheKeyGenerator,
-    TimeSeriesCacheKey,
-    create_robust_cacheable,
-    robust_cacheable,
-    time_aware_cacheable,
+from .data_access_tracker import (
+    DataAccessTracker,
+    get_data_tracker,
+    log_data_access,
+    print_contamination_report,
+    save_access_log,
 )
+
+# Keep existing robust_cacheable imports
+from .robust_cache_keys import robust_cacheable, time_aware_cacheable
 
 # Import selective cleaner functions after base components are defined
 from .selective_cleaner import (
@@ -375,6 +378,8 @@ from .cache_monitoring import (
     print_cache_health,
 )
 
+# Cross-validation caching
+from .cv_cache import clear_cv_cache, cv_cache_with_classifier_state, cv_cacheable
 
 # =============================================================================
 # 10) ENHANCED CONVENIENCE FUNCTIONS
@@ -565,26 +570,29 @@ __all__ = [
     "clear_changed_ml_functions",
     "clear_changed_labeling_functions",
     "clear_changed_features_functions",
-    # NEW: Robust cache keys
+    # Robust cache keys
     "CacheKeyGenerator",
-    "TimeSeriesCacheKey",
+    "DataAccessTracker",
+    "get_data_tracker",
+    "log_data_access",
+    "print_contamination_report",
+    "save_access_log",
     "robust_cacheable",
     "time_aware_cacheable",
-    "create_robust_cacheable",
-    # NEW: MLflow integration
+    # MLflow integration
     "MLflowCacheIntegration",
     "setup_mlflow_cache",
     "get_mlflow_cache",
     "mlflow_cached",
     "MLFLOW_AVAILABLE",
     "MLFLOW_INTEGRATION_AVAILABLE",
-    # NEW: Backtest caching
+    # Backtest caching
     "BacktestCache",
     "BacktestMetadata",
     "BacktestResult",
     "get_backtest_cache",
     "cached_backtest",
-    # NEW: Cache monitoring
+    # Cache monitoring
     "CacheMonitor",
     "FunctionCacheStats",
     "CacheHealthReport",
@@ -592,11 +600,16 @@ __all__ = [
     "print_cache_health",
     "get_cache_efficiency_report",
     "analyze_cache_patterns",
-    # NEW: Enhanced convenience functions
+    # Enhanced convenience functions
     "get_comprehensive_cache_status",
     "optimize_cache_system",
     "setup_production_cache",
+    # Cache cross-validation
+    "cv_cacheable",
+    "cv_cache_with_classifier_state",
+    "clear_cv_cache",
 ]
+
 
 # =============================================================================
 # STARTUP MESSAGE UPDATE
