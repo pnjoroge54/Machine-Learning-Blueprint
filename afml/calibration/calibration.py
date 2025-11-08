@@ -55,6 +55,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import beta
+from sklearn.base import clone
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
