@@ -29,7 +29,7 @@ def ml_get_train_times(t1: pd.Series, test_times: pd.Series) -> pd.Series:
     """
     Advances in Financial Machine Learning, Snippet 7.1, page 106.
 
-    Purging observations in the training set
+    Purging observations in the training set.
 
     This function find the training set indexes given the information on which each record is based
     and the range for the test set.
@@ -65,19 +65,19 @@ def ml_get_train_times(t1: pd.Series, test_times: pd.Series) -> pd.Series:
 
 class PurgedKFold(_BaseKFold):
     """
-    Extend KFold class to work with labels that span intervals
+    Extend KFold class to work with labels that span intervals.
 
-    The train is purged of observations overlapping test-label intervals
-    Test set is assumed contiguous (shuffle=False), w/o training samples in between
+    The train is purged of observations overlapping test-label intervals.
+    Test set is assumed contiguous (shuffle=False), w/o training samples in between.
 
-    :param n_splits: (int) The number of splits. Default to 3
+    :param n_splits: (int) The number of splits. Default to 3.
     :param t1: (pd.Series) The information range on which each record is constructed from
         *t1.index*: Time when the information extraction started.
         *t1.value*: Time when the information extraction ended.
-    :param pct_embargo: (float) Percent that determines the embargo size.
+    :param pct_embargo: (float) Percent that determines the embargo size. Default to 0.01,
     """
 
-    def __init__(self, n_splits=3, t1=None, pct_embargo=0.0):
+    def __init__(self, n_splits=3, t1=None, pct_embargo=0.01):
         if not isinstance(t1, pd.Series):
             raise ValueError("Label Through Dates must be a pd.Series")
 
