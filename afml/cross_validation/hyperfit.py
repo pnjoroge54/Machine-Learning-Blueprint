@@ -5,6 +5,7 @@ from sklearn.ensemble import BaggingClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 
+from ..cache import cv_cacheable
 from .cross_validation import PurgedKFold
 
 
@@ -14,9 +15,10 @@ class MyPipeline(Pipeline):
     def fit(self, X, y, sample_weight=None, **fit_params):
         if sample_weight is not None:
             fit_params[self.steps[-1][0] + "__sample_weight"] = sample_weight
-        return super(MyPipeline, self).fit(X, y, **fit_params)
+        return super().fit(X, y, **fit_params)
 
 
+@cv_cacheable
 def clf_hyper_fit(
     feat,
     labels,

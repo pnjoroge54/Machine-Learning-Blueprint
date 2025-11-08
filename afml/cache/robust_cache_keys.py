@@ -1,13 +1,10 @@
 """
 Robust cache key generation for financial ML data structures.
 Handles numpy arrays, pandas DataFrames, and time-series data properly.
-Integrates with DataAccessTracker for comprehensive data hygiene monitoring.
 """
 
 import hashlib
-import json
-from functools import wraps
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Tuple
 
 import numpy as np
 import pandas as pd
@@ -18,16 +15,83 @@ class CacheKeyGenerator:
     """Generate robust, collision-resistant cache keys for ML data structures."""
 
     @staticmethod
-    def hash_dataframe(df: pd.DataFrame) -> str:
+    def generate_key(func, args: tuple, kwargs: dict) -> str:
         """
-        Hash pandas DataFrame including structure and content.
+        Generate a robust cache key for a function call.
 
-        Uses efficient sampling for large DataFrames to balance
-        accuracy with performance.
+        Args:
+            func: The function being cached
+            args: Positional arguments
+            kwargs: Keyword arguments
+
+        Returns:
+            MD5 hash string representing the unique call signature
         """
-        if len(df) == 0:
-            return "empty_df"
+        key_parts = [
+            func.__module__,
+            func.__qualname__,
+        ]
 
+        # Process positional arguments
+        for i, arg in enumerate(args):
+            try:
+                key_part = CacheKeyGenerator._hash_argument(arg, f"arg_{i}")
+                key_parts.append(key_part)
+            except Exception as e:
+                logger.warning(f"Failed to hash argument {i} of type {type(arg)}: {e}")
+                # Fallback to string representation
+                key_parts.append(f"arg_{i}_{str(hash(str(arg)))}")
+
+        # Process keyword arguments (sorted for consistency)
+        for key, value in sorted(kwargs.items()):
+            try:
+                key_part = CacheKeyGenerator._hash_argument(value, key)
+                key_parts.append(f"{key}={key_part}")
+            except Exception as e:
+                logger.warning(f"Failed to hash kwarg '{key}' of type {type(value)}: {e}")
+                # Fallback
+                key_parts.append(f"{key}={str(hash(str(value)))}")
+
+        # Combine all parts and hash
+        combined = "_".join(key_parts)
+        return hashlib.md5(combined.encode()).hexdigest()
+
+    @staticmethod
+    def _hash_argument(arg: Any, name: str) -> str:
+        """Hash a single argument based on its type."""
+        if isinstance(arg, np.ndarray):
+            return CacheKeyGenerator._hash_numpy_array(arg, name)
+        elif isinstance(arg, pd.DataFrame):
+            return CacheKeyGenerator._hash_dataframe(arg, name)
+        elif isinstance(arg, pd.Series):
+            return CacheKeyGenerator._hash_series(arg, name)
+        elif isinstance(arg, (list, tuple)):
+            return CacheKeyGenerator._hash_sequence(arg, name)
+        elif isinstance(arg, dict):
+            return CacheKeyGenerator._hash_dict(arg, name)
+        elif isinstance(arg, (int, float, str, bool, type(None))):
+            return CacheKeyGenerator._hash_primitive(arg, name)
+        else:
+            # Fallback for unknown types
+            return CacheKeyGenerator._hash_generic(arg, name)
+
+    @staticmethod
+    def _hash_numpy_array(arr: np.ndarray, name: str) -> str:
+        """Hash numpy array including shape, dtype, and content."""
+        # For large arrays, sample for performance
+        if arr.size > 10000:
+            # Hash shape, dtype, and a sample
+            sample = arr.flat[:: max(1, arr.size // 1000)]  # Sample ~1000 points
+            content_hash = hashlib.md5(sample.tobytes()).hexdigest()[:8]
+        else:
+            # Hash full content for small arrays
+            content_hash = hashlib.md5(arr.tobytes()).hexdigest()[:8]
+
+        return f"{name}_arr_{arr.shape}_{arr.dtype}_{content_hash}"
+
+    @staticmethod
+    def _hash_dataframe(df: pd.DataFrame, name: str) -> str:
+        """Hash pandas DataFrame including index, columns, dtypes, and content."""
         parts = [
             f"shape_{df.shape}",
             f"cols_{hashlib.md5(str(tuple(df.columns)).encode()).hexdigest()[:8]}",
@@ -36,28 +100,27 @@ class CacheKeyGenerator:
 
         # Hash index
         if isinstance(df.index, pd.DatetimeIndex):
-            parts.append(f"idx_dt_{df.index[0]}_{df.index[-1]}_{len(df)}")
+            # For datetime index, hash start, end, and frequency
+            parts.append(f"idx_dt_{df.index[0]}_{df.index[-1]}_{len(df.index)}")
         else:
-            idx_hash = hashlib.md5(str((df.index[0], df.index[-1])).encode()).hexdigest()[:8]
+            idx_hash = hashlib.md5(str(tuple(df.index)).encode()).hexdigest()[:8]
             parts.append(f"idx_{idx_hash}")
 
-        # Hash content with sampling for large DataFrames
+        # Hash content (sample for large DataFrames)
         if df.size > 10000:
-            sample = df.iloc[:: max(1, len(df) // 100)]
-            content_hash = hashlib.md5(sample.values.tobytes()).hexdigest()[:8]
+            # Sample rows for hashing
+            sample_rows = df.iloc[:: max(1, len(df) // 100)]  # ~100 rows
+            content_hash = hashlib.md5(sample_rows.values.tobytes()).hexdigest()[:8]
         else:
             content_hash = hashlib.md5(df.values.tobytes()).hexdigest()[:8]
 
         parts.append(f"data_{content_hash}")
 
-        return "_".join(parts)
+        return f"{name}_df_{'_'.join(parts)}"
 
     @staticmethod
-    def hash_series(series: pd.Series) -> str:
-        """Hash pandas Series efficiently."""
-        if len(series) == 0:
-            return "empty_series"
-
+    def _hash_series(series: pd.Series, name: str) -> str:
+        """Hash pandas Series."""
         parts = [
             f"len_{len(series)}",
             f"dtype_{series.dtype}",
@@ -67,9 +130,10 @@ class CacheKeyGenerator:
         if isinstance(series.index, pd.DatetimeIndex):
             parts.append(f"idx_dt_{series.index[0]}_{series.index[-1]}")
         else:
-            parts.append(f"idx_{hash((series.index[0], series.index[-1]))}")
+            idx_hash = hashlib.md5(str(tuple(series.index)).encode()).hexdigest()[:8]
+            parts.append(f"idx_{idx_hash}")
 
-        # Hash values with sampling
+        # Hash values
         if len(series) > 1000:
             sample = series.iloc[:: max(1, len(series) // 100)]
             content_hash = hashlib.md5(sample.values.tobytes()).hexdigest()[:8]
@@ -78,257 +142,178 @@ class CacheKeyGenerator:
 
         parts.append(f"data_{content_hash}")
 
-        return "_".join(parts)
+        return f"{name}_series_{'_'.join(parts)}"
 
     @staticmethod
-    def hash_numpy_array(arr: np.ndarray) -> str:
-        """Hash numpy array including shape, dtype, and content."""
-        if arr.size == 0:
-            return "empty_array"
-
-        # For large arrays, sample for performance
-        if arr.size > 10000:
-            sample = arr.flat[:: max(1, arr.size // 1000)]
-            content_hash = hashlib.md5(sample.tobytes()).hexdigest()[:8]
-        else:
-            content_hash = hashlib.md5(arr.tobytes()).hexdigest()[:8]
-
-        return f"arr_{arr.shape}_{arr.dtype}_{content_hash}"
-
-    @staticmethod
-    def hash_argument(arg: Any) -> str:
-        """Hash a single argument based on its type."""
-        if isinstance(arg, np.ndarray):
-            return CacheKeyGenerator.hash_numpy_array(arg)
-        elif isinstance(arg, pd.DataFrame):
-            return CacheKeyGenerator.hash_dataframe(arg)
-        elif isinstance(arg, pd.Series):
-            return CacheKeyGenerator.hash_series(arg)
-        elif isinstance(arg, dict):
-            return CacheKeyGenerator.hash_dict(arg)
-        elif isinstance(arg, (list, tuple)):
-            return CacheKeyGenerator.hash_sequence(arg)
-        elif isinstance(arg, (int, float, str, bool, type(None))):
-            return f"{type(arg).__name__}_{hash(arg)}"
-        else:
-            # Fallback for unknown types
-            try:
-                return f"{type(arg).__name__}_{hash(repr(arg))}"
-            except Exception:
-                return f"{type(arg).__name__}_{id(arg)}"
-
-    @staticmethod
-    def hash_dict(d: dict) -> str:
-        """Hash dictionary recursively with sorted keys."""
-        if len(d) == 0:
-            return "empty_dict"
-
-        items = []
-        for key, value in sorted(d.items()):
-            val_hash = CacheKeyGenerator.hash_argument(value)
-            items.append(f"{key}={val_hash}")
-
-        combined = "_".join(items)
-        return hashlib.md5(combined.encode()).hexdigest()[:8]
-
-    @staticmethod
-    def hash_sequence(seq: Tuple[Any, ...] | list) -> str:
+    def _hash_sequence(seq: Tuple[Any, ...] | list, name: str) -> str:
         """Hash list or tuple recursively."""
         if len(seq) == 0:
-            return "empty_seq"
+            return f"{name}_empty_seq"
 
         # Hash each element
-        element_hashes = [CacheKeyGenerator.hash_argument(item) for item in seq]
+        element_hashes = []
+        for i, item in enumerate(seq):
+            elem_hash = CacheKeyGenerator._hash_argument(item, f"{name}_{i}")
+            element_hashes.append(elem_hash)
 
         combined = "_".join(element_hashes)
         return hashlib.md5(combined.encode()).hexdigest()[:8]
 
+    @staticmethod
+    def _hash_dict(d: dict, name: str) -> str:
+        """Hash dictionary recursively."""
+        if len(d) == 0:
+            return f"{name}_empty_dict"
 
-def robust_cacheable(
-    track_data_access: bool = False,
-    dataset_name: Optional[str] = None,
-    purpose: Optional[str] = None,
-):
+        # Sort keys for consistency
+        items_hash = []
+        for key, value in sorted(d.items()):
+            val_hash = CacheKeyGenerator._hash_argument(value, f"{name}_{key}")
+            items_hash.append(f"{key}={val_hash}")
+
+        combined = "_".join(items_hash)
+        return hashlib.md5(combined.encode()).hexdigest()[:8]
+
+    @staticmethod
+    def _hash_primitive(value: Any, name: str) -> str:
+        """Hash primitive types."""
+        return f"{name}_{type(value).__name__}_{hash(value)}"
+
+    @staticmethod
+    def _hash_generic(obj: Any, name: str) -> str:
+        """Fallback hashing for unknown types."""
+        try:
+            # Try to use object's __repr__
+            return f"{name}_{type(obj).__name__}_{hash(repr(obj))}"
+        except Exception:
+            # Last resort: use id
+            return f"{name}_{type(obj).__name__}_{id(obj)}"
+
+
+class TimeSeriesCacheKey(CacheKeyGenerator):
     """
-    Enhanced cacheable decorator with robust key generation and optional data tracking.
+    Extended cache key generator with time-series awareness.
+    Useful for financial data where lookback periods matter.
+    """
+
+    @staticmethod
+    def generate_key_with_time_range(
+        func, args: tuple, kwargs: dict, time_range: Tuple[pd.Timestamp, pd.Timestamp] = None
+    ) -> str:
+        """
+        Generate cache key that includes time range information.
+
+        Args:
+            func: Function being cached
+            args: Positional arguments
+            kwargs: Keyword arguments
+            time_range: Optional (start, end) timestamp tuple
+
+        Returns:
+            Cache key string
+        """
+        base_key = CacheKeyGenerator.generate_key(func, args, kwargs)
+
+        if time_range is None:
+            # Try to extract time range from data
+            time_range = TimeSeriesCacheKey._extract_time_range(args, kwargs)
+
+        if time_range:
+            start, end = time_range
+            time_hash = f"time_{start}_{end}"
+            return f"{base_key}_{time_hash}"
+
+        return base_key
+
+    @staticmethod
+    def _extract_time_range(args: tuple, kwargs: dict) -> Tuple[pd.Timestamp, pd.Timestamp] | None:
+        """
+        Attempt to extract time range from function arguments.
+        Looks for DataFrames with DatetimeIndex or explicit start/end parameters.
+        """
+        # Check kwargs for explicit time parameters
+        if "start_date" in kwargs and "end_date" in kwargs:
+            return (pd.Timestamp(kwargs["start_date"]), pd.Timestamp(kwargs["end_date"]))
+
+        # Check for DataFrames with DatetimeIndex in args
+        for arg in args:
+            if isinstance(arg, pd.DataFrame) and isinstance(arg.index, pd.DatetimeIndex):
+                if len(arg.index) > 0:
+                    return (arg.index[0], arg.index[-1])
+
+            elif isinstance(arg, pd.Series) and isinstance(arg.index, pd.DatetimeIndex):
+                if len(arg.index) > 0:
+                    return (arg.index[0], arg.index[-1])
+
+        return None
+
+
+# =============================================================================
+# Integration with existing cacheable decorator
+# =============================================================================
+
+
+def create_robust_cacheable(use_time_awareness: bool = False):
+    """
+    Factory function to create cacheable decorator with robust key generation.
 
     Args:
-        track_data_access: If True, log DataFrame accesses to DataAccessTracker
-        dataset_name: Name for the dataset (required if track_data_access=True)
-        purpose: Purpose of access: 'train', 'test', 'validate', 'optimize', 'analyze'
+        use_time_awareness: If True, include time-series range in cache keys
 
-    Usage:
-        @robust_cacheable()
-        def compute_features(df, params):
-            return features
-
-        @robust_cacheable(track_data_access=True, dataset_name="test_2024", purpose="test")
-        def load_test_data():
-            return data
+    Returns:
+        Decorator function
     """
+    from functools import wraps
 
-    def decorator(func: Callable) -> Callable:
-        # Import at runtime to avoid circular imports
-        from . import cache_stats, memory
+    from . import cache_stats, memory
 
+    def cacheable(func):
+        """Enhanced cacheable decorator with robust key generation."""
         func_name = f"{func.__module__}.{func.__qualname__}"
         cached_func = memory.cache(func)
+
+        # Track seen signatures for hit detection
+        seen_signatures = set()
 
         @wraps(func)
         def wrapper(*args, **kwargs):
             # Generate robust cache key
             try:
-                key_parts = [func_name]
+                if use_time_awareness:
+                    cache_key = TimeSeriesCacheKey.generate_key_with_time_range(func, args, kwargs)
+                else:
+                    cache_key = CacheKeyGenerator.generate_key(func, args, kwargs)
 
-                # Hash positional arguments
-                for i, arg in enumerate(args):
-                    try:
-                        key_parts.append(CacheKeyGenerator.hash_argument(arg))
-                    except Exception as e:
-                        logger.debug(f"Failed to hash arg {i}: {e}")
-                        key_parts.append(f"arg_{i}_{id(arg)}")
-
-                # Hash keyword arguments (sorted)
-                for key, value in sorted(kwargs.items()):
-                    try:
-                        val_hash = CacheKeyGenerator.hash_argument(value)
-                        key_parts.append(f"{key}={val_hash}")
-                    except Exception as e:
-                        logger.debug(f"Failed to hash kwarg {key}: {e}")
-                        key_parts.append(f"{key}={id(value)}")
-
-                cache_key = hashlib.md5("_".join(key_parts).encode()).hexdigest()
+                # Track hit/miss
+                if cache_key in seen_signatures:
+                    cache_stats.record_hit(func_name)
+                else:
+                    cache_stats.record_miss(func_name)
+                    seen_signatures.add(cache_key)
 
             except Exception as e:
                 logger.warning(f"Cache key generation failed for {func_name}: {e}")
                 cache_stats.record_miss(func_name)
-                return func(*args, **kwargs)
 
-            # Track data access if requested
-            if track_data_access:
-                _track_dataframe_access(args, kwargs, dataset_name, purpose)
-
-            # Check if this is a cache hit
-            # Note: We can't directly check joblib's cache, so we track via call patterns
+            # Try cached function with error handling
             try:
-                result = cached_func(*args, **kwargs)
-                cache_stats.record_hit(func_name)
-                return result
+                return cached_func(*args, **kwargs)
             except (EOFError, Exception) as e:
                 logger.warning(f"Cache error for {func_name}: {e} - recomputing")
-                cache_stats.record_miss(func_name)
                 return func(*args, **kwargs)
 
         wrapper._afml_cacheable = True
         return wrapper
 
-    return decorator
+    return cacheable
 
 
-def time_aware_cacheable(dataset_name: Optional[str] = None, purpose: Optional[str] = None):
-    """
-    Time-series aware cacheable decorator.
+# =============================================================================
+# Convenience exports
+# =============================================================================
 
-    Automatically logs DataFrame accesses to DataAccessTracker and
-    includes temporal range in cache key.
+# Standard decorator
+robust_cacheable = create_robust_cacheable(use_time_awareness=False)
 
-    Usage:
-        @time_aware_cacheable(dataset_name="train_2020_2023", purpose="train")
-        def load_market_data(symbol, start, end):
-            return data
-    """
-
-    def decorator(func: Callable) -> Callable:
-        # Import at runtime to avoid circular imports
-        from . import cache_stats, memory
-        from .data_access_tracker import get_data_tracker
-
-        func_name = f"{func.__module__}.{func.__qualname__}"
-        cached_func = memory.cache(func)
-
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            # Execute function (possibly from cache)
-            try:
-                result = cached_func(*args, **kwargs)
-                cache_stats.record_hit(func_name)
-            except (EOFError, Exception) as e:
-                logger.warning(f"Cache error for {func_name}: {e} - recomputing")
-                cache_stats.record_miss(func_name)
-                result = func(*args, **kwargs)
-
-            # Track data access AFTER execution (so we have the result)
-            if isinstance(result, pd.DataFrame) and isinstance(result.index, pd.DatetimeIndex):
-                if len(result) > 0:
-                    tracker = get_data_tracker()
-
-                    # Use provided dataset_name or try to infer from kwargs
-                    ds_name = dataset_name or kwargs.get("name", "unnamed_dataset")
-                    ds_purpose = purpose or kwargs.get("purpose", "unknown")
-
-                    tracker.log_access(
-                        dataset_name=ds_name,
-                        start_date=result.index[0],
-                        end_date=result.index[-1],
-                        purpose=ds_purpose,
-                        data_shape=result.shape,
-                    )
-
-                    logger.debug(
-                        f"Tracked access: {ds_name} "
-                        f"[{result.index[0]} to {result.index[-1]}] "
-                        f"for {ds_purpose}"
-                    )
-
-            return result
-
-        wrapper._afml_cacheable = True
-        return wrapper
-
-    return decorator
-
-
-def _track_dataframe_access(
-    args: tuple, kwargs: dict, dataset_name: Optional[str], purpose: Optional[str]
-):
-    """Helper to track DataFrame accesses in arguments."""
-    from .data_access_tracker import get_data_tracker
-
-    tracker = get_data_tracker()
-
-    # Check args for DataFrames
-    for i, arg in enumerate(args):
-        if isinstance(arg, pd.DataFrame) and isinstance(arg.index, pd.DatetimeIndex):
-            if len(arg) > 0:
-                ds_name = dataset_name or f"arg_{i}_dataframe"
-                ds_purpose = purpose or "unknown"
-
-                tracker.log_access(
-                    dataset_name=ds_name,
-                    start_date=arg.index[0],
-                    end_date=arg.index[-1],
-                    purpose=ds_purpose,
-                    data_shape=arg.shape,
-                )
-
-    # Check kwargs for DataFrames
-    for key, value in kwargs.items():
-        if isinstance(value, pd.DataFrame) and isinstance(value.index, pd.DatetimeIndex):
-            if len(value) > 0:
-                ds_name = dataset_name or f"{key}_dataframe"
-                ds_purpose = purpose or "unknown"
-
-                tracker.log_access(
-                    dataset_name=ds_name,
-                    start_date=value.index[0],
-                    end_date=value.index[-1],
-                    purpose=ds_purpose,
-                    data_shape=value.shape,
-                )
-
-
-__all__ = [
-    "CacheKeyGenerator",
-    "robust_cacheable",
-    "time_aware_cacheable",
-]
+# Time-series aware decorator
+time_aware_cacheable = create_robust_cacheable(use_time_awareness=True)

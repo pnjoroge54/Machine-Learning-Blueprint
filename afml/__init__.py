@@ -14,8 +14,6 @@ from loguru import logger
 from .cache import (
     CACHE_DIRS,
     CacheAnalyzer,
-    CacheKeyGenerator,
-    TimeSeriesCacheKey,
     cache_maintenance,
     cache_stats,
     cacheable,
@@ -134,7 +132,7 @@ try:
 
     # Handle nested modules
     from .filters import filters
-    from .strategies import strategies
+    from .strategies import signals
 
     logger.debug("Imported lightweight modules directly")
 except ImportError as e:
@@ -177,9 +175,9 @@ def __getattr__(name: str) -> ModuleType:
             raise AttributeError(f"Module 'afml' has no attribute '{name}'") from e
     if name == "strategies":
         try:
-            from .strategies import strategies
+            from .strategies import signals
 
-            return strategies
+            return signals
         except ImportError as e:
             raise AttributeError(f"Module 'afml' has no attribute '{name}'") from e
 
@@ -332,8 +330,6 @@ __all__ = [
     # NEW: Robust cache keys
     "robust_cacheable",
     "time_aware_cacheable",
-    "CacheKeyGenerator",
-    "TimeSeriesCacheKey",
     # NEW: Enhanced cache functions
     "get_comprehensive_cache_status",
     "optimize_cache_system",
@@ -380,7 +376,7 @@ __all__ = [
     "sample_weights",
     "sampling",
     "bet_sizing",
-    "strategies",
+    "signals",
     "filters",
     "mt5",
     # Heavy modules (lazy loaded)

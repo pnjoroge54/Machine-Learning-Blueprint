@@ -19,8 +19,9 @@ from sklearn.metrics import (
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection._split import _BaseKFold
 
+from ..cache.cv_cache import cv_cacheable
 from ..cross_validation.scoring import probability_weighted_accuracy
-from ..ensemble import SequentiallyBootstrappedBaggingClassifier
+from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 
 
 def ml_get_train_times(t1: pd.Series, test_times: pd.Series) -> pd.Series:
@@ -157,6 +158,7 @@ class PurgedSplit:
 
 
 # noinspection PyPep8Naming
+@cv_cacheable
 def ml_cross_val_score(
     classifier: ClassifierMixin,
     X: pd.DataFrame,
@@ -248,13 +250,6 @@ def ml_cross_val_score(
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
     if seq_bootstrap:
         t1 = classifier.samples_info_sets.copy()
-        common_idx = t1.index.intersection(y.index)
-        X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
-        sample_weight_train = pd.Series(sample_weight_train, index=y.index).loc[common_idx]
-        sample_weight_score = pd.Series(sample_weight_score, index=y.index).loc[common_idx]
-        if t1.empty:
-            raise KeyError(f"samples_info_sets not aligned with data")
-        classifier.set_params(oob_score=False)
 
     if isinstance(scoring, str):
         scoring_map = {
@@ -270,7 +265,7 @@ def ml_cross_val_score(
     for train, test in cv_gen.split(X=X, y=y):
         if seq_bootstrap:
             classifier = clone(classifier).set_params(
-                samples_info_sets=t1.iloc[train]
+                samples_info_sets=t1.iloc[train], oob_score=False
             )  # Create new instance
         fit = classifier.fit(
             X=X.iloc[train, :],
@@ -300,6 +295,7 @@ def ml_cross_val_score(
     return np.array(ret_scores)
 
 
+@cv_cacheable
 def analyze_cross_val_scores(
     classifier: ClassifierMixin,
     X: pd.DataFrame,
@@ -366,13 +362,6 @@ def analyze_cross_val_scores(
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
     if seq_bootstrap:
         t1 = classifier.samples_info_sets.copy()
-        common_idx = t1.index.intersection(y.index)
-        X, y, t1 = X.loc[common_idx], y.loc[common_idx], t1.loc[common_idx]
-        sample_weight_train = pd.Series(sample_weight_train, index=y.index).loc[common_idx]
-        sample_weight_score = pd.Series(sample_weight_score, index=y.index).loc[common_idx]
-        if t1.empty:
-            raise KeyError(f"samples_info_sets not aligned with data")
-        classifier.set_params(oob_score=False)
 
     cms = []  # To store confusion matrices
 
@@ -380,7 +369,7 @@ def analyze_cross_val_scores(
     for i, (train, test) in enumerate(cv_gen.split(X=X, y=y)):
         if seq_bootstrap:
             classifier = clone(classifier).set_params(
-                samples_info_sets=t1.iloc[train]
+                samples_info_sets=t1.iloc[train], oob_score=False
             )  # Create new instance
         fit = classifier.fit(
             X=X.iloc[train, :],
@@ -388,7 +377,7 @@ def analyze_cross_val_scores(
             sample_weight=sample_weight_train[train],
         )
         prob = fit.predict_proba(X.iloc[test, :])
-        pred = fit.predict(X.iloc[test, :])
+        pred = (prob[:, 1] > 0.5).astype(int)
         params = dict(
             y_true=y.iloc[test],
             y_pred=pred,
@@ -432,6 +421,135 @@ def analyze_cross_val_scores(
             confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
         else:
             # For multi-class, you might want different handling
+            confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
+
+    return ret_scores, scores_df, confusion_matrix_breakdown
+
+
+@cv_cacheable
+def analyze_cross_val_scores_calibrated(
+    classifier: ClassifierMixin,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv_gen: BaseCrossValidator,
+    sample_weight_train: Optional[pd.Series] = None,
+    sample_weight_score: Optional[pd.Series] = None,
+    calibrate: bool = False,  # NEW PARAMETER
+):
+    """
+    Cross-validation with optional per-fold calibration.
+
+    When calibrate=True, each fold is calibrated using a held-out
+    calibration set (further split from training data).
+    """
+    scoring_methods = [
+        accuracy_score,
+        probability_weighted_accuracy,
+        log_loss,
+        precision_score,
+        recall_score,
+        f1_score,
+    ]
+
+    ret_scores = {
+        scoring.__name__.replace("_score", "")
+        .replace("probability_weighted_accuracy", "pwa")
+        .replace("log_loss", "neg_log_loss"): np.zeros(cv_gen.n_splits)
+        for scoring in scoring_methods
+    }
+
+    if sample_weight_train is None:
+        sample_weight_train = np.ones((X.shape[0],))
+    if sample_weight_score is None:
+        sample_weight_score = np.ones((X.shape[0],))
+
+    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
+    if seq_bootstrap:
+        t1 = classifier.samples_info_sets.copy()
+
+    cms = []
+
+    for i, (train, test) in enumerate(cv_gen.split(X=X, y=y)):
+        # Split train into fit + calibration
+        if calibrate:
+            from sklearn.model_selection import train_test_split
+
+            train_fit, train_cal = train_test_split(
+                train, test_size=0.2, random_state=42, stratify=y.iloc[train]
+            )
+        else:
+            train_fit = train
+
+        # Fit model
+        if seq_bootstrap:
+            classifier = clone(classifier).set_params(
+                samples_info_sets=t1.iloc[train_fit], oob_score=False
+            )
+
+        fit = classifier.fit(
+            X=X.iloc[train_fit, :],
+            y=y.iloc[train_fit],
+            sample_weight=sample_weight_train[train_fit],
+        )
+
+        # Calibrate if requested
+        if calibrate:
+            from sklearn.isotonic import IsotonicRegression
+
+            cal_proba = fit.predict_proba(X.iloc[train_cal, :])[:, 1]
+            calibrator = IsotonicRegression(out_of_bounds="clip")
+            calibrator.fit(cal_proba, y.iloc[train_cal])
+
+            # Get calibrated predictions on test set
+            prob = fit.predict_proba(X.iloc[test, :])
+            prob[:, 1] = calibrator.predict(prob[:, 1])
+            prob[:, 0] = 1 - prob[:, 1]
+        else:
+            prob = fit.predict_proba(X.iloc[test, :])
+
+        pred = (prob[:, 1] > 0.5).astype(int)
+
+        # Compute metrics
+        params = dict(
+            y_true=y.iloc[test],
+            y_pred=pred,
+            labels=classifier.classes_,
+            sample_weight=sample_weight_score[test],
+        )
+
+        for method, scoring in zip(ret_scores.keys(), scoring_methods):
+            if scoring in (probability_weighted_accuracy, log_loss):
+                params["y_pred"] = prob
+                score = scoring(**params)
+                if method == "neg_log_loss":
+                    score *= -1
+            else:
+                params["y_pred"] = pred
+                try:
+                    score = scoring(**params)
+                except:
+                    del params["labels"]
+                    score = scoring(**params)
+                    params["labels"] = classifier.classes_
+
+            ret_scores[method][i] = score
+
+        cms.append(confusion_matrix(**params).round(2))
+
+    scores_df = pd.DataFrame.from_dict(
+        {
+            scoring: {"mean": scores.mean(), "std": scores.std()}
+            for scoring, scores in ret_scores.items()
+        },
+        orient="index",
+    )
+
+    confusion_matrix_breakdown = []
+    for i, cm in enumerate(cms, 1):
+        if cm.shape == (2, 2):
+            tn, fp, fn, tp = cm.ravel()
+            confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
+        else:
             confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
 
     return ret_scores, scores_df, confusion_matrix_breakdown

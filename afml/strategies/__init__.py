@@ -16,4 +16,4 @@ from .ma_whipsaw_ratio import (
     calculate_ma_whipsaw_ratio,
 )
 from .signal_processing import get_entries
-from .strategies import BaseStrategy, BollingerStrategy, MACrossoverStrategy
+from .signals import BaseStrategy, BollingerStrategy, MACrossoverStrategy

@@ -4,7 +4,7 @@ import pandas as pd
 from loguru import logger
 
 from ..filters.filters import cusum_filter
-from .strategies import BaseStrategy
+from .signals import BaseStrategy
 
 
 def get_entries(

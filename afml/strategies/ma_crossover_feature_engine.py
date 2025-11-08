@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
+from ..cache import robust_cacheable
 from ..features.fractals import (
     calculate_enhanced_fractals,
     calculate_fractal_trend_features,
@@ -26,6 +27,7 @@ class ForexFeatureEngine:
         self.base_currency = pair_name[:3]
         self.quote_currency = pair_name[3:]
 
+    @robust_cacheable
     def calculate_all_features(
         self,
         price_data: pd.DataFrame,

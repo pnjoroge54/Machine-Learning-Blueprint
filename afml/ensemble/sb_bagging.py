@@ -89,8 +89,7 @@ def _generate_bagging_indices(
             random_state_obj, bootstrap_features, n_features, n_feat
         )
     else:
-        # When not bootstrapping features, return None (will be handled downstream)
-        feature_indices = None
+        feature_indices = np.arange(n_features)
 
     return sample_indices, feature_indices
 
@@ -132,12 +131,7 @@ def _parallel_build_estimators(
         else:
             curr_sample_weight = None
 
-        # Store None for features if no bootstrapping (memory optimization)
-        if bootstrap_features:
-            estimators_features.append(feature_indices)
-        else:
-            estimators_features.append(None)  # Don't store redundant feature arrays
-
+        estimators_features.append(feature_indices)
         estimators_samples.append(sample_indices)
 
         # Select data
@@ -556,11 +550,7 @@ class SequentiallyBootstrappedBaggingClassifier(
 
     def _validate_estimator(self):
         """Check the estimator and set the estimator_ attribute."""
-        super()._validate_estimator(
-            default=DecisionTreeClassifier(
-                criterion="entropy", class_weight="balanced", max_features="sqrt"
-            )
-        )
+        super()._validate_estimator(default=DecisionTreeClassifier())
 
     def _fit(self, X, y, max_samples=None, sample_weight=None):
         """
@@ -633,7 +623,7 @@ class SequentiallyBootstrappedBaggingRegressor(
 
     :param samples_info_sets: (pd.Series), The information range on which each record is constructed from
         *samples_info_sets.index*: Time when the information extraction started.
-        *samples_info_sets.value*: Time when the information extraction ended.
+        *samples_info_sets.value*: Time when the information extractfeion ended.
 
     :param price_bars_index: (pd.DatetimeIndex)
         Index of price bars used in samples_info_sets generation

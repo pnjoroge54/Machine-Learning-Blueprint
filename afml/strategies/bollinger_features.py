@@ -11,7 +11,7 @@ from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
 from ..util.volatility import get_garman_klass_vol, get_period_vol
 from .signal_processing import get_entries
-from .strategies import BollingerStrategy
+from .signals import BollingerStrategy
 
 
 @robust_cacheable
@@ -24,17 +24,19 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 1. Returns Features ---
     # Garman Volatility
-    features["vol"] = get_garman_klass_vol(df.open, df.high, df.low, df.close, window=bb_period)
+    features["vol"] = get_garman_klass_vol(
+        df["open"], df["high"], df["low"], df["close"], window=bb_period
+    )
 
     # Hourly EWM(num_hours) Volatility
     for num_hours in (1, 4, 24):
         features[f"H{num_hours}_vol"] = get_period_vol(
-            df.close, lookback=bb_period, hours=num_hours
+            df["close"], lookback=bb_period, hours=num_hours
         )
     features.columns = features.columns.str.replace("H24", "D1")
 
     # Lagged returns normalized by volatility
-    lagged_ret = get_lagged_returns(df.close, lags=[1, 5, 10], nperiods=3)
+    lagged_ret = get_lagged_returns(df["close"], lags=[1, 5, 10], nperiods=3)
     features = features.join(lagged_ret.div(features["vol"], axis=0))  # Normalize returns
 
     # Distribution
@@ -70,9 +72,9 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 3. Moving Average Features ---
     windows = (10, 20, 50, 100, 200)
-    ma_diffs = calculate_ma_differences(df.close, windows, drop=True)
+    ma_diffs = calculate_ma_differences(df["close"], windows, drop=False)
     ma_diffs = ma_diffs.div(atr, axis=0)  # Normalize by ATR
-    ma_crossovers = get_ma_crossovers(df.close, windows, drop=True)
+    ma_crossovers = get_ma_crossovers(df["close"], windows, drop=False)
     features = features.join([ma_diffs, ma_crossovers])
 
     # --- 4. Add side prediction ---
