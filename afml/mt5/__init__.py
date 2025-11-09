@@ -1,5 +1,5 @@
+from .clean_data import _save_cleaned_with_structure, clean_tick_data
 from .load_data import (
-    clean_tick_data,
     get_ticks,
     load_tick_data,
     login_mt5,
