@@ -27,7 +27,6 @@ import json
 import os
 import tkinter as tk
 from pathlib import Path
-from typing import Optional
 
 import MetaTrader5 as mt5
 import numpy as np
@@ -36,10 +35,9 @@ from dask import dataframe as dd
 from dotenv import load_dotenv
 from loguru import logger
 
-from afml.data_structures.bars import _make_bar_type_grouper, make_bars
-from notebooks import training
-
 from ..cache import get_data_tracker, time_aware_cacheable
+from ..data_structures.bars import _make_bar_type_grouper, make_bars
+from ..mt5.clean_data import _save_cleaned_with_structure, clean_tick_data
 from ..util.misc import date_conversion, log_df_info
 
 # --- Credential and Login Management ---
