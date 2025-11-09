@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..cache import smart_cacheable
+from ..cache import time_aware_cacheable
 from ..util.misc import (
     flatten_column_names,
     log_df_info,
@@ -11,7 +11,7 @@ from ..util.misc import (
 )
 
 
-@smart_cacheable
+@time_aware_cacheable
 def calculate_ticks_per_period(
     df: pd.DataFrame,
     timeframe: str = "M1",
@@ -51,6 +51,7 @@ def calculate_ticks_per_period(
     return rounded_ticks
 
 
+@time_aware_cacheable
 def _make_bar_type_grouper(
     df: pd.DataFrame, bar_type: str = "tick", bar_size: int = 100, timeframe: str = "M1"
 ) -> tuple[pd.core.groupby.generic.DataFrameGroupBy, int]:
@@ -116,7 +117,7 @@ def _make_bar_type_grouper(
     return df.groupby(bar_id), bar_size
 
 
-@smart_cacheable
+@time_aware_cacheable
 def make_bars(
     tick_df: pd.DataFrame,
     bar_type: str = "tick",
@@ -157,9 +158,9 @@ def make_bars(
     )
 
     if price != "bid_ask":
-        ohlc_df = bar_group[price].ohlc().astype("float64")
+        ohlc_df = bar_group[price].ohlc()
     else:
-        ohlc_df = bar_group.agg({k: "ohlc" for k in ("bid", "ask")}).astype("float64")
+        ohlc_df = bar_group.agg({k: "ohlc" for k in ("bid", "ask")})
         ohlc_df.columns = flatten_column_names(ohlc_df)
         # Make OHLC using mid-price
         for col in ["open", "high", "low", "close"]:
@@ -203,8 +204,8 @@ def make_bars(
     ohlc_df = optimize_dtypes(ohlc_df)  # Save memory
 
     if verbose:
-        tm_info = f"{bar_type}-{bar_size_:,}" if (bar_type != "time") else f"{timeframe}"
-        logger.info(f"{tm_info} bars contain {ohlc_df.shape[0]:,} rows.")
+        bar_info = f"{bar_type}-{bar_size_:,}" if (bar_type != "time") else f"{timeframe}"
+        logger.info(f"{bar_info} bars contain {ohlc_df.shape[0]:,} rows.")
         logger.info(f"Tick data contains {tick_df.shape[0]:,} rows.")
         log_df_info(ohlc_df)
 

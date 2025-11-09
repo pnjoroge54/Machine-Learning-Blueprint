@@ -127,7 +127,6 @@ def _find_barrier_hits(close_val, event_locs, t1_locs, trgt, side, pt_sl_arr):
 
 
 # Snippet 3.3 -> 3.6 page 50, Getting the Time of the First Touch, with Meta Labels
-@robust_cacheable
 def get_events(
     close: pd.Series,
     t_events: pd.DatetimeIndex,
@@ -199,7 +198,6 @@ def get_events(
 
 
 # Snippet 3.4 page 49, Adding a Vertical Barrier
-@robust_cacheable
 def add_vertical_barrier(
     t_events: pd.DatetimeIndex, close: pd.Series, num_bars: int = 0, **time_delta_kwargs
 ):
@@ -308,7 +306,6 @@ def barrier_touched(ret, target, pt_sl):
 
 
 # Snippet 3.4 -> 3.7, page 51, Labeling for Side & Size with Meta Labels
-@robust_cacheable
 def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
     """
     Advances in Financial Machine Learning, Snippet 3.7, page 51.
@@ -381,7 +378,6 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
 
 
 # Snippet 3.8 page 54
-@robust_cacheable
 def drop_labels(triple_barrier_events, min_pct=0.05):
     """
     Advances in Financial Machine Learning, Snippet 3.8 page 54.

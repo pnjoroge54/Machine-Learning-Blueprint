@@ -36,6 +36,10 @@ from dask import dataframe as dd
 from dotenv import load_dotenv
 from loguru import logger
 
+from afml.data_structures.bars import _make_bar_type_grouper, make_bars
+from notebooks import training
+
+from ..cache import get_data_tracker, time_aware_cacheable
 from ..util.misc import date_conversion, log_df_info
 
 # --- Credential and Login Management ---
@@ -345,26 +349,6 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None,
     if isinstance(symbols, str):
         symbols = [symbols]
 
-    # --- Check for existing files once ---
-    overwrite_response = "skip"
-    dates_to_check = pd.date_range(start=start_dt, end=end_dt, freq="MS")
-    for symbol in symbols:
-        for d in dates_to_check:
-            file_path = data_path / symbol / str(d.year) / f"month-{d.month:02d}.parquet"
-            if file_path.exists():
-                overwrite_response = TimedMessageBox(
-                    title="Overwrite Existing Files?",
-                    text="Some data files already exist in the destination. Do you want to overwrite them?",
-                ).show()
-                break
-        if overwrite_response != "skip":
-            break
-
-    if overwrite_response == "yes":
-        logger.info("User chose to OVERWRITE existing files.")
-    elif overwrite_response in ("no", "timeout"):
-        logger.info("User chose to SKIP existing files. Operation will only fill in missing data.")
-
     # --- Main Download Loop ---
     missing_data = {}
     dates_from = pd.date_range(start=start_dt, end=end_dt, freq="MS", tz="UTC")
@@ -385,9 +369,12 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None,
             if j % 10 == 0:
                 log_msg_prefix = f"{symbol} {log_msg_prefix}"
 
-            if file.exists() and overwrite_response in ("no", "timeout"):
-                logger.info(f"{log_msg_prefix} Exists, skipping.")
-                continue
+            if file.exists():
+                df = pd.read_parquet(file)
+                if not df.empty:
+                    start = df.index[-1].date()
+                    start, end = date_conversion(start, end)
+                    logger.info(f"{log_msg_prefix} Exists, appending from {start} to {end}")
 
             df = get_ticks(symbol, start, end, verbose=False)
             if clean:
@@ -406,7 +393,7 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None,
                     engine="pyarrow",
                     compression="zstd",
                 )
-                logger.success(f"{log_msg_prefix} Saved {len(df):,} rows.")
+                logger.success(f"{log_msg_prefix} Saved {len(df):,} rows")
 
         # Clean and save data
         if clean and not df.empty:
@@ -423,129 +410,15 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None,
     logger.success(f"All operations complete. Files saved to {data_path}")
 
 
-# --- Clean Raw Data and Save ---
-
-
-def clean_tick_data(
-    df: pd.DataFrame, timezone: str = "UTC", min_spread: float = 1e-5
-) -> Optional[pd.DataFrame]:
-    """
-    Clean and validate Forex tick data with comprehensive quality checks.
-
-    Args:
-        df: DataFrame containing tick data with bid/ask prices and timestamp index
-        timezone: Timezone to localize/convert timestamps to (default: UTC)
-        min_spread: Minimum valid spread (bid-ask difference) in price units
-
-    Returns:
-        Cleaned DataFrame or None if empty after cleaning
-    """
-    if df.empty:
-        return None
-
-    # 1. Ensure proper datetime index
-    if not isinstance(df.index, pd.DatetimeIndex):
-        try:
-            df.index = pd.to_datetime(df.index)
-            df = df[~df.index.isnull()]  # Remove NaT timestamps
-        except Exception as e:
-            raise ValueError(f"Failed to parse index: {e}")
-
-    # 2. Timezone handling
-    if df.index.tz is None:
-        df = df.tz_localize(timezone)
-    else:
-        df = df.tz_convert(timezone)
-
-    # 3. Price validity checks (FIXED: removed incorrect parentheses)
-    price_filter = (
-        (df["bid"] > 0)
-        & (df["ask"] > 0)
-        & (df["ask"] > df["bid"])  # Spread must be positive
-        & ((df["ask"] - df["bid"]) >= min_spread)  # Minimum spread filter
-    )
-    df = df[price_filter]
-
-    if df.isna().any().sum() > 0:
-        print(f"Dropped NA values: \n{df.isna().sum()}")
-        df.dropna(inplace=True)
-
-    # 4. Microsecond handling (preserve even if 0)
-    if not df.index.microsecond.any():
-        print("Warning: No timestamps with microsecond precision found")
-
-    # 5. Advanced duplicate handling
-    duplicate_mask = df.index.duplicated(keep="last")
-    dup_count = duplicate_mask.sum()
-    if dup_count > 0:
-        print(f"Removed {dup_count:,} duplicate timestamps")
-        df = df[~duplicate_mask]
-
-    # 6. Chronological order with efficient sorting
-    if not df.index.is_monotonic_increasing:
-        df.sort_index(inplace=True)
-
-    # 7. Final validation
-    if df.empty:
-        print("Warning: DataFrame empty after cleaning")
-        return None
-
-    return df
-
-
-def _save_cleaned_with_structure(df_cleaned: pd.DataFrame, cleaned_data_path: Path, symbol: str):
-    """
-    Save cleaned data preserving the original directory structure
-
-    Args:
-        df_cleaned: Cleaned DataFrame with datetime index
-        cleaned_data_path: Root path for cleaned data
-        symbol: Symbol name for directory structure
-    """
-    # Ensure the index is datetime and in UTC
-    if not isinstance(df_cleaned.index, pd.DatetimeIndex):
-        df_cleaned.index = pd.to_datetime(df_cleaned.index, utc=True)
-    elif df_cleaned.index.tz is None:
-        df_cleaned.index = df_cleaned.index.tz_localize("UTC")
-    else:
-        df_cleaned.index = df_cleaned.index.tz_convert("UTC")
-
-    # Extract year and month from the index
-    df_temp = df_cleaned.copy()
-    df_temp["year"] = df_temp.index.year
-    df_temp["month"] = df_temp.index.month
-
-    # Group by year and month to replicate original structure
-    for (year, month), group_df in df_temp.groupby(["year", "month"]):
-        if group_df.empty:
-            continue
-
-        # Recreate identical directory structure: path/symbol/year/month.parquet
-        output_dir = cleaned_data_path / symbol / str(year)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        output_file = output_dir / f"month-{month:02d}.parquet"
-
-        # Remove helper columns and ensure proper index
-        final_df = group_df.drop(["year", "month"], axis=1)
-
-        # Save with same compression settings as original data
-        final_df.to_parquet(output_file, engine="pyarrow", compression="zstd", index=True)
-
-        logger.debug(
-            f"Saved {len(final_df):,} rows to {output_file.relative_to(cleaned_data_path)}"
-        )
-
-
 # --- Loading Data from Files ---
 
 
 def load_tick_data(
-    path,
     symbol,
     start_date,
     end_date,
     account_name,
+    path=None,
     columns=None,
     compress=True,
     verbose=True,
@@ -567,16 +440,17 @@ def load_tick_data(
         pd.DataFrame: A DataFrame with the requested tick data, or an empty DataFrame
                       if the account verification fails, dates are invalid, or an error occurs.
     """
-    root_path = Path(path)
+    root_path = path or Path().home() / "tick_data_parquet" / "clean"
+    fname = root_path / symbol
+
     if not verify_or_create_account_info(root_path, account_name):
         return pd.DataFrame()
 
     date_range = date_conversion(start_date, end_date)
-    if not date_range:
+    if date_range:
+        start_dt, end_dt = date_range
+    else:
         return pd.DataFrame()
-    start_dt, end_dt = date_range
-
-    fname = root_path / symbol
 
     try:
         filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
@@ -625,6 +499,77 @@ def load_tick_data(
     except Exception as e:
         logger.error(f"Failed to load data for {symbol}. Error: {e}")
         return pd.DataFrame()
+
+
+@time_aware_cacheable
+def load_training_data(
+    symbol,
+    start_date,
+    end_date,
+    bar_type,
+    timeframe,
+    price,
+    bar_size,
+    account_name,
+    path=None,
+):
+    """
+    Loads tick data from a partitioned Parquet structure after verifying account.
+
+    Args:
+        symbol (str): The financial instrument symbol to load.
+        start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
+        end_date (Union[str, dt, pd.Timestamp]): The end date of the desired data range.
+        bar_type (str): Bar type ('tick', 'time', 'volume', 'dollar').
+        timeframe (str): Timeframe for calculation.
+        price (str): Price field strategy ('bid', 'ask', 'mid_price', 'bid_ask').
+        bar_size (int): For non-time bars; if 0, dynamic calculation is used.
+        drop_zero_volume (bool): If True, drops bars with zero tick volume.
+        account_name (str): The account name to verify against the data directory.
+        path (Union[str, Path]): The root folder where the data is stored.
+
+    Returns:
+        pd.DataFrame: Constructs OHLC bars from tick data, or an empty DataFrame
+                      if the account verification fails, dates are invalid, or an error occurs.
+    """
+    try:
+        start_dt, end_dt = date_conversion(start_date, end_date)
+        start_dt, end_dt = start_dt.strftime("%y%m%d"), end_dt.strftime("%y%m%d")
+    except:
+        return pd.DataFrame()
+
+    columns = ["bid", "ask"]
+    if bar_type in ("volume", "dollar"):
+        columns += ["volume"]
+
+    df = load_tick_data(
+        symbol,
+        start_date,
+        end_date,
+        account_name,
+        path,
+        columns=columns,
+        compress=True,
+        verbose=False,
+    )
+    _, bar_size = _make_bar_type_grouper(df, bar_type, bar_size, timeframe)
+    df = make_bars(df, bar_type, timeframe, price, bar_size, drop_zero_volume=True, verbose=True)
+
+    # Track data access
+    bar_info = f"{bar_type}-{bar_size:,}" if (bar_type != "time") else f"{timeframe}"
+    ds_name = f"{symbol}_{bar_info}_{start_dt}_{end_dt}"
+    purpose = "training"
+
+    tracker = get_data_tracker()
+    tracker.log_access(
+        dataset_name=ds_name,
+        start_date=df.index[0],
+        end_date=df.index[-1],
+        purpose=purpose,
+        data_shape=df.shape,
+    )
+
+    logger.debug(f"Tracked access: {ds_name} [{df.index[0]} to {df.index[-1]}] for {purpose}")
 
 
 # --- Main Execution Block ---
