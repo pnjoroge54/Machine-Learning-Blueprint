@@ -209,9 +209,9 @@ class CacheKeyGenerator:
                 return CacheKeyGenerator._hash_generic(estimator, name)
 
             # Use the enhanced estimator hashing from cv_cache
-            from .cv_cache import _hash_estimator
+            from .cv_cache import _hash_classifier
 
-            estimator_hash = _hash_estimator(estimator)
+            estimator_hash = _hash_classifier(estimator)
             return f"{name}_estimator_{estimator_hash}"
 
         except ImportError:

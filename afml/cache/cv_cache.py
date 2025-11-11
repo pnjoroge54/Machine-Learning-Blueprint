@@ -1,4 +1,7 @@
-"""Specialized caching for cross-validation functions."""
+"""
+Specialized caching for cross-validation functions.
+Handles sklearn classifiers, CV generators, and complex ML workflows.
+"""
 
 import hashlib
 import inspect
@@ -12,54 +15,37 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from sklearn.base import BaseEstimator
-from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 
 
-def _hash_estimator(estimator: BaseEstimator) -> str:
+def _hash_classifier(clf: BaseEstimator) -> str:
     """
-    Enhanced estimator hashing that handles nested estimators.
+    Generate stable hash for sklearn classifier.
+    Uses class name + parameters (not the trained state).
     """
     try:
-        estimator_type = type(estimator).__name__
-        params = estimator.get_params(deep=True)
+        # Get classifier type and parameters
+        clf_type = type(clf).__name__
+        params = clf.get_params(deep=True)
 
+        # Filter out non-serializable params (like objects, functions)
         serializable_params = {}
         for k, v in params.items():
             try:
-                # Handle nested estimators (like BaggingClassifier.base_estimator)
-                if hasattr(v, "get_params") and callable(v.get_params):
-                    nested_hash = _hash_estimator(v)
-                    serializable_params[k] = f"nested_{nested_hash}"
-                # Handle sklearn ensembles specifically
-                elif isinstance(v, (BaggingClassifier, BaggingRegressor)):
-                    nested_hash = _hash_estimator(v)
-                    serializable_params[k] = f"ensemble_{nested_hash}"
-                elif hasattr(v, "__name__"):
-                    serializable_params[k] = f"func_{v.__name__}"
-                elif callable(v):
-                    serializable_params[k] = f"callable_{type(v).__name__}"
-                elif isinstance(v, (np.ndarray, pd.DataFrame, pd.Series)):
-                    # Hash data structures efficiently
-                    if hasattr(v, "shape"):
-                        serializable_params[k] = (
-                            f"data_{v.shape}_{hashlib.md5(v.tobytes()).hexdigest()[:8]}"
-                        )
-                    else:
-                        serializable_params[k] = f"data_{len(v)}"
-                else:
-                    # Test JSON serialization
-                    json.dumps(v)
-                    serializable_params[k] = v
+                # Test if JSON serializable
+                json.dumps(v)
+                serializable_params[k] = v
             except (TypeError, ValueError):
+                # Use type name for non-serializable params
                 serializable_params[k] = f"<{type(v).__name__}>"
 
+        # Create stable hash
         param_str = json.dumps(serializable_params, sort_keys=True)
-        combined = f"{estimator_type}_{param_str}"
+        combined = f"{clf_type}_{param_str}"
         return hashlib.md5(combined.encode()).hexdigest()[:12]
 
     except Exception as e:
-        logger.debug(f"Failed to hash estimator {type(estimator).__name__}: {e}")
-        return f"est_{type(estimator).__name__}_{id(estimator)}"
+        logger.debug(f"Failed to hash classifier: {e}")
+        return f"clf_{type(clf).__name__}_{id(clf)}"
 
 
 def _hash_cv_generator(cv_gen) -> str:
@@ -140,7 +126,7 @@ def _hash_series_fast(series: pd.Series) -> str:
 def _generate_cv_cache_key(func: Callable, args: tuple, kwargs: dict) -> str:
     """
     Generate specialized cache key for CV functions.
-    Enhanced to handle complex sklearn estimators.
+    Handles classifiers, CV generators, DataFrames, and sample weights.
     """
     key_parts = [func.__module__, func.__qualname__]
 
@@ -155,13 +141,13 @@ def _generate_cv_cache_key(func: Callable, args: tuple, kwargs: dict) -> str:
             if param_value is None:
                 key_parts.append(f"{param_name}_None")
 
-            elif hasattr(param_value, "get_params") and callable(param_value.get_params):
-                # Sklearn classifier/estimator (including nested ones)
-                clf_hash = _hash_estimator(param_value)
-                key_parts.append(f"{param_name}_est_{clf_hash}")
+            elif isinstance(param_value, BaseEstimator):
+                # Sklearn classifier/estimator
+                clf_hash = _hash_classifier(param_value)
+                key_parts.append(f"{param_name}_clf_{clf_hash}")
 
             elif hasattr(param_value, "split") and hasattr(param_value, "n_splits"):
-                # CV generator
+                # CV generator (has split method and n_splits)
                 cv_hash = _hash_cv_generator(param_value)
                 key_parts.append(f"{param_name}_cv_{cv_hash}")
 
@@ -274,7 +260,7 @@ def _cv_cacheable_legacy(func):
 
         try:
             with open(cache_file, "wb") as f:
-                pickle.load(result, f)
+                pickle.dump(result, f)
         except Exception as e:
             logger.warning(f"Failed to cache CV result: {e}")
 
