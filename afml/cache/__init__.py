@@ -31,6 +31,7 @@ def _setup_cache_directories() -> Dict[str, Path]:
         "base": base_dir,
         "joblib": base_dir / "joblib_cache",
         "numba": base_dir / "numba_cache",
+        "backtest": base_dir / "backtest_cache",  # Added backtest cache directory
     }
 
     # Create directories
@@ -141,72 +142,9 @@ cache_stats = CacheStats()
 
 memory = Memory(location=str(CACHE_DIRS["joblib"]), verbose=0)
 
-# =============================================================================
-# 5) SIMPLE @cacheable DECORATOR
-# =============================================================================
-
-
-def cacheable(func):
-    """
-    Enhanced cacheable decorator with corruption handling.
-    Use this for expensive computational functions.
-    """
-    func_name = f"{func.__module__}.{func.__qualname__}"
-    cached_func = memory.cache(func)
-
-    # Track argument signatures we've seen (approximate hit detection)
-    seen_signatures = set()
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Create simple signature for hit detection
-        try:
-            sig = str(hash((str(args), str(sorted(kwargs.items())))))
-        except TypeError:
-            # If args aren't hashable, treat as miss
-            sig = None
-
-        if sig and sig in seen_signatures:
-            cache_stats.record_hit(func_name)
-        else:
-            cache_stats.record_miss(func_name)
-            if sig:
-                seen_signatures.add(sig)
-
-        # Try cached function with error handling
-        try:
-            return cached_func(*args, **kwargs)
-        except (EOFError, pickle.PickleError, OSError) as e:
-            # Cache corruption detected
-            logger.warning("Cache corruption for {}: {} - recomputing", func_name, type(e).__name__)
-
-            # Clear the corrupted cache entry
-            try:
-                cache_key = cached_func._get_cache_id(*args, **kwargs)
-                cache_dir = Path(cached_func.store_backend.location)
-
-                # Remove files matching this cache key
-                for cache_file in cache_dir.rglob("*"):
-                    if cache_file.is_file() and str(cache_key) in str(cache_file):
-                        cache_file.unlink()
-                        logger.debug("Removed corrupted file: {}", cache_file.name)
-
-            except Exception:
-                pass  # If clearing fails, just continue
-
-            # Execute function directly
-            return func(*args, **kwargs)
-        except Exception as e:
-            # Other unexpected errors
-            logger.error("Unexpected cache error for {}: {}", func_name, e)
-            return func(*args, **kwargs)
-
-    wrapper._afml_cacheable = True
-    return wrapper
-
 
 # =============================================================================
-# 6) UTILITY FUNCTIONS
+# 5) UTILITY FUNCTIONS
 # =============================================================================
 
 
@@ -248,7 +186,7 @@ def get_cache_summary() -> Dict[str, Union[float, int]]:
 
 
 # =============================================================================
-# 7) CACHE ANALYSIS CONTEXT MANAGER
+# 6) CACHE ANALYSIS CONTEXT MANAGER
 # =============================================================================
 
 
@@ -295,7 +233,7 @@ class CacheAnalyzer:
 
 
 # =============================================================================
-# 8) INITIALIZATION FUNCTION
+# 7) INITIALIZATION FUNCTION
 # =============================================================================
 
 
@@ -317,7 +255,7 @@ def initialize_cache_system():
 
 
 # =============================================================================
-# 9) NOW SAFE TO IMPORT OTHER MODULES
+# 8) NOW SAFE TO IMPORT OTHER MODULES
 # =============================================================================
 
 # Import robust cache key generation - NOW SAFE (memory and cache_stats exist)
@@ -330,7 +268,12 @@ from .data_access_tracker import (
 )
 
 # Keep existing robust_cacheable imports
-from .robust_cache_keys import robust_cacheable, time_aware_cacheable
+from .robust_cache_keys import (
+    CacheKeyGenerator,
+    cacheable,
+    robust_cacheable,
+    time_aware_cacheable,
+)
 
 # Import selective cleaner functions after base components are defined
 from .selective_cleaner import (
@@ -382,7 +325,7 @@ from .cache_monitoring import (
 from .cv_cache import clear_cv_cache, cv_cache_with_classifier_state, cv_cacheable
 
 # =============================================================================
-# 10) ENHANCED CONVENIENCE FUNCTIONS
+# 9) ENHANCED CONVENIENCE FUNCTIONS
 # =============================================================================
 
 
@@ -546,7 +489,68 @@ def setup_production_cache(
 
 
 # =============================================================================
-# 12) EXPORTS
+# 10) ADDITIONAL UTILITY FUNCTIONS
+# =============================================================================
+
+
+def get_cache_size_info() -> Dict[str, Union[int, float]]:
+    """
+    Get detailed information about cache sizes.
+
+    Returns:
+        Dict with cache size information in bytes and MB
+    """
+    size_info = {}
+
+    for cache_name, cache_dir in CACHE_DIRS.items():
+        if cache_dir.exists():
+            total_size = 0
+            file_count = 0
+
+            for file_path in cache_dir.rglob("*"):
+                if file_path.is_file():
+                    total_size += file_path.stat().st_size
+                    file_count += 1
+
+            size_info[cache_name] = {
+                "size_bytes": total_size,
+                "size_mb": total_size / (1024 * 1024),
+                "file_count": file_count,
+            }
+
+    return size_info
+
+
+def clear_cache_by_pattern(pattern: str, cache_type: str = "joblib"):
+    """
+    Clear cache entries matching a pattern.
+
+    Args:
+        pattern: String pattern to match in cache filenames
+        cache_type: Type of cache to clear ('joblib', 'numba', 'backtest')
+    """
+    if cache_type not in CACHE_DIRS:
+        raise ValueError(f"Invalid cache type: {cache_type}. Available: {list(CACHE_DIRS.keys())}")
+
+    cache_dir = CACHE_DIRS[cache_type]
+    removed_count = 0
+
+    for cache_file in cache_dir.rglob("*"):
+        if cache_file.is_file() and pattern in cache_file.name:
+            try:
+                cache_file.unlink()
+                removed_count += 1
+                logger.debug(f"Removed cache file: {cache_file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to remove {cache_file}: {e}")
+
+    logger.info(
+        f"Removed {removed_count} cache files matching pattern '{pattern}' from {cache_type} cache"
+    )
+
+
+# =============================================================================
+# 11) EXPORTS
 # =============================================================================
 
 __all__ = [
@@ -571,7 +575,7 @@ __all__ = [
     "clear_changed_labeling_functions",
     "clear_changed_features_functions",
     # Robust cache keys
-    "CacheKeyGenerator",
+    "CacheKeyGenerator",  # Now properly exported
     "DataAccessTracker",
     "get_data_tracker",
     "log_data_access",
@@ -608,6 +612,9 @@ __all__ = [
     "cv_cacheable",
     "cv_cache_with_classifier_state",
     "clear_cv_cache",
+    # Additional utility functions
+    "get_cache_size_info",
+    "clear_cache_by_pattern",
 ]
 
 
@@ -621,3 +628,9 @@ logger.debug("  - Robust cache keys for NumPy/Pandas")
 logger.debug("  - MLflow integration: {}", "✓" if MLFLOW_INTEGRATION_AVAILABLE else "✗")
 logger.debug("  - Backtest caching: ✓")
 logger.debug("  - Cache monitoring: ✓")
+logger.debug("  - Cache size analysis: ✓")
+logger.debug("  - Robust cache keys for NumPy/Pandas")
+logger.debug("  - MLflow integration: {}", "✓" if MLFLOW_INTEGRATION_AVAILABLE else "✗")
+logger.debug("  - Backtest caching: ✓")
+logger.debug("  - Cache monitoring: ✓")
+logger.debug("  - Cache size analysis: ✓")

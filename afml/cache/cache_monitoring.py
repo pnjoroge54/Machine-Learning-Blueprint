@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -49,11 +49,20 @@ class CacheMonitor:
 
     def __init__(self):
         """Initialize cache monitor."""
-        # Import at runtime to avoid circular imports
-        from . import CACHE_DIRS, cache_stats, memory
+        try:
+            from . import cache_stats, memory
 
-        self.cache_stats = cache_stats
-        self.memory = memory
+            self.cache_stats = cache_stats
+            self.memory = memory
+        except ImportError as e:
+            logger.warning(f"Failed to import cache dependencies: {e}")
+            # Create fallback attributes
+            self.cache_stats = None
+            self.memory = None
+
+        # Import at runtime to avoid circular imports
+        from . import CACHE_DIRS
+
         self.cache_dirs = CACHE_DIRS
 
         # Track computation times
@@ -421,20 +430,43 @@ class CacheMonitor:
 
     def _get_function_cache_size(self, function_name: str) -> Optional[float]:
         """Get disk size of cache for a function in MB."""
-        cache_dir = Path(self.memory.location)
+        try:
+            cache_dir = Path(self.memory.location)
+            logger.debug(f"Looking for cache in: {cache_dir}")
 
-        if not cache_dir.exists():
+            if not cache_dir.exists():
+                logger.debug(f"Cache directory does not exist: {cache_dir}")
+                return None
+
+            # Find cache files for this function
+            total_size = 0
+            found_files = []
+
+            # Joblib uses a different directory structure based on function fingerprint
+            for cache_file in cache_dir.rglob("*.pkl"):  # Look for pickle files
+                if cache_file.is_file():
+                    # Check if this might belong to our function
+                    # Joblib stores functions in module/function_name subdirectories
+                    if function_name.replace(".", "/") in str(cache_file):
+                        file_size = cache_file.stat().st_size
+                        total_size += file_size
+                        found_files.append((cache_file, file_size))
+
+            if found_files:
+                logger.debug(f"Found {len(found_files)} cache files for {function_name}")
+                for file_path, size in found_files:
+                    logger.debug(f"  {file_path.name}: {size / 1024:.2f} KB")
+
+                size_mb = total_size / (1024 * 1024)
+                logger.debug(f"Total cache size for {function_name}: {size_mb:.2f} MB")
+                return size_mb
+            else:
+                logger.debug(f"No cache files found for {function_name}")
+                return 0.0  # Return 0 instead of None for no cache files
+
+        except Exception as e:
+            logger.warning(f"Error calculating cache size for {function_name}: {e}")
             return None
-
-        # Find cache files for this function
-        total_size = 0
-        func_pattern = function_name.replace(".", "/")
-
-        for cache_file in cache_dir.rglob("*"):
-            if cache_file.is_file() and func_pattern in str(cache_file):
-                total_size += cache_file.stat().st_size
-
-        return total_size / (1024 * 1024) if total_size > 0 else None
 
     def _generate_recommendations(
         self,

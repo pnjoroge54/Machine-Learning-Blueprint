@@ -4,7 +4,9 @@ Handles numpy arrays, pandas DataFrames, and time-series data properly.
 """
 
 import hashlib
-from typing import Any, Tuple
+import pickle
+from pathlib import Path
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -253,31 +255,30 @@ class TimeSeriesCacheKey(CacheKeyGenerator):
 # =============================================================================
 
 
-def create_robust_cacheable(use_time_awareness: bool = False):
+def create_robust_cacheable(
+    track_data_access: bool = False,
+    dataset_name: Optional[str] = None,
+    purpose: Optional[str] = None,
+    use_time_awareness: bool = False,
+):
     """
-    Factory function to create cacheable decorator with robust key generation.
-
-    Args:
-        use_time_awareness: If True, include time-series range in cache keys
-
-    Returns:
-        Decorator function
+    Factory function to create robust cacheable decorators with data tracking.
     """
+    import time
     from functools import wraps
 
     from . import cache_stats, memory
+    from .cache_monitoring import get_cache_monitor  # Add this import
 
-    def cacheable(func):
-        """Enhanced cacheable decorator with robust key generation."""
+    def decorator(func):
         func_name = f"{func.__module__}.{func.__qualname__}"
         cached_func = memory.cache(func)
-
-        # Track seen signatures for hit detection
         seen_signatures = set()
+        monitor = get_cache_monitor()  # Get monitor instance
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Generate robust cache key
+            # Generate cache key
             try:
                 if use_time_awareness:
                     cache_key = TimeSeriesCacheKey.generate_key_with_time_range(func, args, kwargs)
@@ -287,33 +288,138 @@ def create_robust_cacheable(use_time_awareness: bool = False):
                 # Track hit/miss
                 if cache_key in seen_signatures:
                     cache_stats.record_hit(func_name)
+                    is_hit = True
                 else:
                     cache_stats.record_miss(func_name)
                     seen_signatures.add(cache_key)
+                    is_hit = False
 
             except Exception as e:
                 logger.warning(f"Cache key generation failed for {func_name}: {e}")
                 cache_stats.record_miss(func_name)
+                cache_key = None
+                is_hit = False
 
-            # Try cached function with error handling
+            # Track data access if requested
+            if track_data_access:
+                try:
+                    from .data_access_tracker import get_data_tracker
+
+                    _track_dataframe_access(get_data_tracker(), args, kwargs, dataset_name, purpose)
+                except Exception as e:
+                    logger.warning(f"Data tracking failed for {func_name}: {e}")
+
+            # Track access time (ALWAYS track this)
+            monitor.track_access(func_name)
+
+            # Execute function with timing for misses
+            start_time = time.time()
             try:
-                return cached_func(*args, **kwargs)
-            except (EOFError, Exception) as e:
-                logger.warning(f"Cache error for {func_name}: {e} - recomputing")
+                result = cached_func(*args, **kwargs)
+
+                # Track computation time for misses
+                if not is_hit:
+                    computation_time = time.time() - start_time
+                    monitor.track_computation_time(func_name, computation_time)
+
+                return result
+
+            except (EOFError, pickle.PickleError, OSError) as e:
+                # Handle cache corruption...
+                # Also track computation time for cache misses that require recomputation
+                computation_time = time.time() - start_time
+                if not is_hit:  # Only track if it was originally a miss
+                    monitor.track_computation_time(func_name, computation_time)
+
+                logger.warning(
+                    f"Cache corruption for {func_name}: {type(e).__name__} - recomputing"
+                )
+
+                # Clear the corrupted cache entry if we have a cache key
+                if cache_key is not None:
+                    try:
+                        # Try to get the actual cache key used by joblib
+                        joblib_cache_key = cached_func._get_cache_id(*args, **kwargs)
+                        cache_dir = Path(cached_func.store_backend.location)
+
+                        # Remove files matching this cache key
+                        for cache_file in cache_dir.rglob("*"):
+                            if cache_file.is_file() and str(joblib_cache_key) in str(cache_file):
+                                cache_file.unlink()
+                                logger.debug(f"Removed corrupted file: {cache_file.name}")
+
+                    except Exception as clear_exc:
+                        logger.warning(
+                            f"Failed to clear corrupted cache for {func_name}: {clear_exc}"
+                        )
+
+                # Execute function directly
+                return func(*args, **kwargs)
+            except Exception as e:
+                # Other unexpected errors
+                logger.error(f"Unexpected cache error for {func_name}: {e}")
                 return func(*args, **kwargs)
 
         wrapper._afml_cacheable = True
         return wrapper
 
-    return cacheable
+    return decorator
+
+
+def _track_dataframe_access(tracker, args, kwargs, dataset_name, purpose):
+    """Track DataFrame accesses for data hygiene monitoring."""
+    # Check all arguments for DataFrames with DatetimeIndex
+    for i, arg in enumerate(args):
+        if _is_trackable_dataframe(arg):
+            _log_dataframe_access(tracker, arg, dataset_name or f"arg_{i}", purpose)
+
+    for key, value in kwargs.items():
+        if _is_trackable_dataframe(value):
+            _log_dataframe_access(tracker, value, dataset_name or key, purpose)
+
+
+def _is_trackable_dataframe(obj):
+    """Check if object is a DataFrame with temporal index."""
+    return (
+        isinstance(obj, pd.DataFrame) and isinstance(obj.index, pd.DatetimeIndex) and len(obj) > 0
+    )
+
+
+def _log_dataframe_access(tracker, df, name, purpose):
+    """Log DataFrame access to tracker."""
+    tracker.log_access(
+        dataset_name=name,
+        start_date=df.index[0],
+        end_date=df.index[-1],
+        purpose=purpose or "unknown",
+        data_shape=df.shape,
+    )
 
 
 # =============================================================================
-# Convenience exports
+# Final convenience exports
 # =============================================================================
 
-# Standard decorator
+# Standard decorators (backward compatible)
 robust_cacheable = create_robust_cacheable(use_time_awareness=False)
-
-# Time-series aware decorator
 time_aware_cacheable = create_robust_cacheable(use_time_awareness=True)
+cacheable = robust_cacheable
+
+# Data tracking decorators (new functionality)
+data_tracking_cacheable = lambda dataset_name, purpose: create_robust_cacheable(
+    track_data_access=True, dataset_name=dataset_name, purpose=purpose, use_time_awareness=False
+)
+
+time_aware_data_tracking_cacheable = lambda dataset_name, purpose: create_robust_cacheable(
+    track_data_access=True, dataset_name=dataset_name, purpose=purpose, use_time_awareness=True
+)
+
+__all__ = [
+    "CacheKeyGenerator",
+    "TimeSeriesCacheKey",
+    "robust_cacheable",  # Backward compatible
+    "time_aware_cacheable",  # Backward compatible
+    "data_tracking_cacheable",  # NEW
+    "time_aware_data_tracking_cacheable",  # NEW
+    "cacheable",  # For new code
+]

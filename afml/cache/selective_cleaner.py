@@ -323,7 +323,7 @@ def smart_cacheable(func):
     and invalidates its cache accordingly.
     """
     # Import at runtime to avoid circular import
-    from . import cacheable
+    from .robust_cache_keys import cacheable
 
     # Apply the original cacheable decorator
     cached_func = cacheable(func)
