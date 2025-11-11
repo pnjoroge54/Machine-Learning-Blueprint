@@ -1,5 +1,3 @@
-# afml/cache/selective_cleaner.py - Targeted cache invalidation
-
 """
 Selective cache cleaning system that only invalidates functions that have changed.
 Uses source code hashing and modification times to detect changes.
@@ -9,7 +7,6 @@ import hashlib
 import inspect
 import json
 import os
-import pickle
 from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union

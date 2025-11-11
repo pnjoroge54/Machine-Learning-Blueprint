@@ -10,7 +10,7 @@ import pandas as pd
 from loguru import logger
 from numba import njit, prange
 
-from ..cache import robust_cacheable
+from ..cache.robust_cache_keys import robust_cacheable
 from ..sample_weights.optimized_attribution import get_weights_by_return_optimized
 from ..sampling.optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,

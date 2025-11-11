@@ -13,7 +13,7 @@ from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 from sklearn.ensemble._bagging import BaseBagging
 from sklearn.ensemble._base import _partition_estimators
-from sklearn.metrics import accuracy_score, r2_score
+from sklearn.metrics import accuracy_score, log_loss, r2_score
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.utils import (
     check_array,
@@ -24,6 +24,7 @@ from sklearn.utils import (
 from sklearn.utils.random import sample_without_replacement
 from sklearn.utils.validation import has_fit_parameter
 
+from ..cross_validation.scoring import probability_weighted_accuracy
 from ..sampling.bootstrapping import get_active_indices, seq_bootstrap
 from ..util.misc import indices_to_mask
 
@@ -550,7 +551,11 @@ class SequentiallyBootstrappedBaggingClassifier(
 
     def _validate_estimator(self):
         """Check the estimator and set the estimator_ attribute."""
-        super()._validate_estimator(default=DecisionTreeClassifier())
+        super()._validate_estimator(
+            default=DecisionTreeClassifier(
+                criterion="entropy", max_features="sqrt", class_weight="balanced"
+            )
+        )
 
     def _fit(self, X, y, max_samples=None, sample_weight=None):
         """
@@ -706,7 +711,7 @@ class SequentiallyBootstrappedBaggingRegressor(
 
     def _validate_estimator(self):
         """Check the estimator and set the estimator_ attribute."""
-        super()._validate_estimator(default=DecisionTreeRegressor())
+        super()._validate_estimator(default=DecisionTreeRegressor(max_features=1 / 3))
 
     def _set_oob_score(self, X, y):
         """Compute out-of-bag score"""
@@ -738,89 +743,3 @@ class SequentiallyBootstrappedBaggingRegressor(
 
         self.oob_prediction_ = predictions
         self.oob_score_ = r2_score(y[mask], predictions[mask])
-
-
-def compute_custom_oob_metrics(clf, X, y, sample_weight=None):
-    """
-    Compute custom OOB metrics (F1, AUC, precision/recall) for a fitted ensemble.
-
-    Args:
-        clf: Fitted SequentiallyBootstrappedBaggingClassifier
-        X: Feature matrix used in training
-        y: True labels
-        sample_weight: Optional sample weights
-
-    Returns:
-        dict: Custom OOB metric values
-    """
-    from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
-
-    if hasattr(X, "values"):
-        X = X.values
-    if hasattr(y, "values"):
-        y = y.values
-
-    n_samples = y.shape[0]
-    n_classes = clf.n_classes_
-
-    # Accumulate OOB predictions
-    oob_proba = np.zeros((n_samples, n_classes))
-    oob_count = np.zeros(n_samples)
-
-    for estimator, samples, features in zip(
-        clf.estimators_, clf.estimators_samples_, clf.estimators_features_
-    ):
-        mask = ~indices_to_mask(samples, n_samples)
-        if np.any(mask):
-            X_oob = X[mask]
-
-            # Handle None features (use all features)
-            if features is not None:
-                X_oob = X_oob[:, features]
-
-            oob_proba[mask] += estimator.predict_proba(X_oob)
-            oob_count[mask] += 1
-
-    # Average and get predictions
-    oob_mask = oob_count > 0
-    oob_proba[oob_mask] /= oob_count[oob_mask, np.newaxis]
-    oob_pred = np.argmax(oob_proba, axis=1)
-
-    # Compute metrics on samples with OOB predictions
-    y_oob = y[oob_mask]
-    pred_oob = oob_pred[oob_mask]
-    proba_oob = oob_proba[oob_mask]
-
-    metrics = {
-        "f1": f1_score(y_oob, pred_oob, average="weighted"),
-        "precision": precision_score(y_oob, pred_oob, average="weighted"),
-        "recall": recall_score(y_oob, pred_oob, average="weighted"),
-        "coverage": oob_mask.sum() / n_samples,  # Fraction with OOB predictions
-    }
-
-    # Add AUC for binary classification
-    if n_classes == 2:
-        metrics["auc"] = roc_auc_score(y_oob, proba_oob[:, 1])
-
-    return metrics
-
-
-# Check ensemble memory footprint
-def estimate_ensemble_size(clf):
-    """Estimate memory usage of fitted ensemble."""
-    total_bytes = 0
-
-    # Estimators
-    for est in clf.estimators_:
-        total_bytes += sys.getsizeof(est)
-
-    # Sample indices
-    for samples in clf.estimators_samples_:
-        total_bytes += sys.getsizeof(samples)
-
-    # Feature indices
-    if clf.estimators_features_ is not None:
-        for features in clf.estimators_features_:
-            total_bytes += sys.getsizeof(features)
-
-    return total_bytes / (1024**2)  # Convert to MB

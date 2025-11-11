@@ -28,7 +28,6 @@ import os
 import tkinter as tk
 from pathlib import Path
 
-import MetaTrader5 as mt5
 import numpy as np
 import pandas as pd
 from dask import dataframe as dd
@@ -82,6 +81,8 @@ def login_mt5(account, timeout=60000, verbose=True):
     Returns:
         str: The account name if login is successful, otherwise None.
     """
+    import MetaTrader5 as mt5
+
     logger.info(f"Attempting to log in to MT5 with account: {account}")
     login, password, server = get_credentials_from_env(account)
 
@@ -103,61 +104,6 @@ def login_mt5(account, timeout=60000, verbose=True):
             logger.warning("Could not retrieve terminal info.")
 
     return account
-
-
-# --- Timed GUI MessageBox ---
-
-
-class TimedMessageBox:
-    """
-    A non-blocking, timed GUI message box for user prompts.
-    """
-
-    def __init__(self, title, text, timeout_ms=5000):
-        self.root = None
-        self.result = "timeout"
-        self.title = title
-        self.text = text
-        self.timeout_ms = timeout_ms
-
-    def _create_window(self):
-        self.root = tk.Tk()
-        self.root.withdraw()
-
-        msg_box = tk.Toplevel(self.root)
-        msg_box.title(self.title)
-        msg_box.attributes("-topmost", True)
-
-        win_width, win_height = 350, 130
-        screen_width, screen_height = (
-            msg_box.winfo_screenwidth(),
-            msg_box.winfo_screenheight(),
-        )
-        x = (screen_width // 2) - (win_width // 2)
-        y = (screen_height // 2) - (win_height // 2)
-        msg_box.geometry(f"{win_width}x{win_height}+{x}+{y}")
-
-        tk.Label(msg_box, text=self.text, wraplength=320, justify="center").pack(pady=15)
-        btn_frame = tk.Frame(msg_box)
-        btn_frame.pack(pady=5)
-
-        btn_yes = tk.Button(btn_frame, text="Yes", width=12, command=lambda: self._on_click("yes"))
-        btn_no = tk.Button(btn_frame, text="No", width=12, command=lambda: self._on_click("no"))
-        btn_yes.pack(side=tk.LEFT, padx=12)
-        btn_no.pack(side=tk.LEFT, padx=12)
-
-        self.root.after(self.timeout_ms, lambda: self._on_click("timeout"))
-        self.root.mainloop()
-
-    def _on_click(self, choice):
-        self.result = choice
-        if self.root:
-            self.root.quit()
-            self.root.destroy()
-
-    def show(self):
-        self._create_window()
-        return self.result
 
 
 # --- Data Validation and Verification ---
@@ -230,6 +176,8 @@ def get_ticks(symbol, start_date, end_date, datetime_index=True, verbose=True):
         pd.DataFrame: A DataFrame containing the tick data, or an empty DataFrame if
                       no data is found or an error occurs.
     """
+    import MetaTrader5 as mt5
+
     if not mt5.terminal_info():  # Check if connection is still active
         logger.error("MT5 connection lost. Cannot download data.")
         return pd.DataFrame()
@@ -284,6 +232,8 @@ def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbo
     Returns:
         pd.DataFrame: A DataFrame containing OHLCV data, or empty if no data/error.
     """
+    import MetaTrader5 as mt5
+
     if not mt5.terminal_info():
         logger.error("MT5 connection lost. Cannot download data.")
         return pd.DataFrame()
@@ -625,6 +575,8 @@ if __name__ == "__main__":
 
     # --- 4. Run Downloader ---
     if logged_in_account:
+        import MetaTrader5 as mt5
+
         save_data_to_parquet(
             path=CONFIG["save_path"],
             symbols=CONFIG["symbols_to_download"],
