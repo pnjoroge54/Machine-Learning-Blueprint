@@ -61,6 +61,14 @@ class CacheKeyGenerator:
     @staticmethod
     def _hash_argument(arg: Any, name: str) -> str:
         """Hash a single argument based on its type."""
+        try:
+            from sklearn.base import BaseEstimator
+
+            if isinstance(arg, BaseEstimator):
+                return CacheKeyGenerator._hash_sklearn_estimator(arg, name)
+        except ImportError:
+            pass  # sklearn not available, continue with other types
+
         if isinstance(arg, np.ndarray):
             return CacheKeyGenerator._hash_numpy_array(arg, name)
         elif isinstance(arg, pd.DataFrame):
@@ -190,6 +198,25 @@ class CacheKeyGenerator:
         except Exception:
             # Last resort: use id
             return f"{name}_{type(obj).__name__}_{id(obj)}"
+
+    @staticmethod
+    def _hash_sklearn_estimator(estimator: Any, name: str) -> str:
+        """Hash sklearn estimator including nested estimators."""
+        try:
+            from sklearn.base import BaseEstimator
+
+            if not isinstance(estimator, BaseEstimator):
+                return CacheKeyGenerator._hash_generic(estimator, name)
+
+            # Use the enhanced estimator hashing from cv_cache
+            from .cv_cache import _hash_estimator
+
+            estimator_hash = _hash_estimator(estimator)
+            return f"{name}_estimator_{estimator_hash}"
+
+        except ImportError:
+            # Fallback if sklearn not available
+            return CacheKeyGenerator._hash_generic(estimator, name)
 
 
 class TimeSeriesCacheKey(CacheKeyGenerator):
