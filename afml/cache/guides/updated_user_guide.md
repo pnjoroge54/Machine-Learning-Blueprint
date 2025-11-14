@@ -7,26 +7,30 @@ This guide explains the streamlined caching architecture that removes redundancy
 ## Key Improvements
 
 ### 1. **DataAccessTracker** (NEW)
-   - **Purpose**: Prevent test set contamination through systematic access logging
-   - **Critical Feature**: Tracks every dataset access with temporal boundaries
-   - **Benefit**: Exposes unconscious data snooping during iterative development
+
+- **Purpose**: Prevent test set contamination through systematic access logging
+- **Critical Feature**: Tracks every dataset access with temporal boundaries
+- **Benefit**: Exposes unconscious data snooping during iterative development
 
 ### 2. **Streamlined CacheKeyGenerator**
-   - **Removed**: Redundant hash methods for ML-specific types (classifiers, CV generators)
-   - **Kept**: Core DataFrame/Series/array hashing with efficient sampling
-   - **Benefit**: Simpler, more maintainable code focused on common use cases
+
+- **Removed**: Redundant hash methods for ML-specific types (classifiers, CV generators)
+- **Kept**: Core DataFrame/Series/array hashing with efficient sampling
+- **Benefit**: Simpler, more maintainable code focused on common use cases
 
 ### 3. **Simplified Decorators**
-   - **Removed**: `create_robust_cacheable()` factory pattern (unnecessary complexity)
-   - **Simplified**: Direct `@robust_cacheable()` and `@time_aware_cacheable()` decorators
-   - **Added**: Optional data tracking in decorators
-   - **Benefit**: Cleaner API, easier to use
+
+- **Removed**: `create_robust_cacheable()` factory pattern (unnecessary complexity)
+- **Simplified**: Direct `@robust_cacheable()` and `@time_aware_cacheable()` decorators
+- **Added**: Optional data tracking in decorators
+- **Benefit**: Cleaner API, easier to use
 
 ## Files to Add/Update
 
 ### New Files
 
 1. **`cache/data_access_tracker.py`** (NEW)
+
    ```
    - DataAccessTracker class
    - Global tracker instance
@@ -35,6 +39,7 @@ This guide explains the streamlined caching architecture that removes redundancy
    ```
 
 2. **`cache/robust_cache_keys_streamlined.py`** (REPLACEMENT)
+
    ```
    - Streamlined CacheKeyGenerator
    - Simplified decorators with tracking integration
@@ -44,6 +49,7 @@ This guide explains the streamlined caching architecture that removes redundancy
 ### Files to Update
 
 3. **`cache/__init__.py`**
+
    ```python
    # Add imports
    from .data_access_tracker import (
@@ -74,6 +80,7 @@ This guide explains the streamlined caching architecture that removes redundancy
 ## Migration Steps
 
 ### Step 1: Add New Files
+
 ```bash
 # Add the new files to your cache module
 cp data_access_tracker.py afml/cache/
@@ -81,6 +88,7 @@ cp robust_cache_keys_streamlined.py afml/cache/robust_cache_keys.py
 ```
 
 ### Step 2: Update Imports
+
 Update your `cache/__init__.py` to export the new functionality:
 
 ```python
@@ -103,6 +111,7 @@ from .robust_cache_keys import (
 ### Step 3: Update Existing Code (Optional)
 
 **Old code** (still works):
+
 ```python
 @robust_cacheable
 def compute_features(df, params):
@@ -110,6 +119,7 @@ def compute_features(df, params):
 ```
 
 **New enhanced code** (with tracking):
+
 ```python
 @robust_cacheable(
     track_data_access=True,
@@ -121,6 +131,7 @@ def compute_features(df, params):
 ```
 
 **Time-series code** (automatically tracks):
+
 ```python
 @time_aware_cacheable(
     dataset_name="test_2024",
@@ -143,6 +154,7 @@ print_contamination_report()
 ```
 
 **Output example:**
+
 ```
 ================================================================================
 DATA CONTAMINATION REPORT
@@ -188,6 +200,7 @@ RECOMMENDATIONS:
 ### From `robust_cache_keys.py`
 
 **1. Removed: Classifier-specific hashing**
+
 ```python
 # REMOVED - Too specific, rarely used
 def _hash_purged_classifier(clf, name):
@@ -203,6 +216,7 @@ def _hash_financial_data(X, y, name):
 **Why**: These are ML-specific use cases that should be handled by specialized modules (like `cv_cache.py`). The core cache key generator should focus on fundamental data types.
 
 **2. Removed: Factory pattern**
+
 ```python
 # REMOVED - Unnecessary complexity
 def create_robust_cacheable(use_time_awareness: bool = False):
@@ -214,6 +228,7 @@ def create_robust_cacheable(use_time_awareness: bool = False):
 **Why**: Direct decorators are simpler and more Pythonic. Users can just use `@robust_cacheable()` or `@time_aware_cacheable()`.
 
 **3. Removed: Lazy initialization globals**
+
 ```python
 # REMOVED - Overcomplicated
 _robust_cacheable = None
@@ -225,6 +240,7 @@ _time_aware_cacheable = None
 ### From Other Files
 
 **Not Changed**: `cv_cache.py`, `backtest_cache.py`, `mlflow_integration.py`
+
 - These specialized caches remain separate and focused
 - They can use the streamlined `CacheKeyGenerator` if needed
 
@@ -241,6 +257,7 @@ _time_aware_cacheable = None
 ### Core Functionality
 
 All existing caching functionality continues to work:
+
 - Joblib-based disk caching
 - Hit/miss statistics tracking
 - Cache clearing and maintenance
@@ -249,6 +266,7 @@ All existing caching functionality continues to work:
 ## New Capabilities
 
 ### 1. Data Contamination Detection
+
 ```python
 from afml.cache import get_data_tracker
 
@@ -264,6 +282,7 @@ print(report)
 ```
 
 ### 2. Automatic Time-Series Tracking
+
 ```python
 @time_aware_cacheable(dataset_name="train", purpose="train")
 def load_data(symbol, start, end):
@@ -278,6 +297,7 @@ def load_data(symbol, start, end):
 ```
 
 ### 3. Manual Data Access Logging
+
 ```python
 from afml.cache import log_data_access
 
@@ -293,17 +313,20 @@ log_data_access(
 ## Performance Impact
 
 ### No Performance Degradation
+
 - Cache key generation: Same speed (or faster with simplified code)
 - Cache hits: Same speed (unchanged)
 - Cache misses: Same speed (unchanged)
 
 ### New Overhead (Minimal)
+
 - Data access logging: ~0.1-0.5ms per access (negligible)
 - Access log storage: ~1KB per 100 accesses (tiny)
 
 ## Best Practices
 
 ### 1. Always Use Descriptive Dataset Names
+
 ```python
 # ❌ Bad
 @time_aware_cacheable(dataset_name="data", purpose="test")
@@ -313,6 +336,7 @@ log_data_access(
 ```
 
 ### 2. Be Honest About Purpose
+
 ```python
 # During development
 purpose="optimize"  # You're testing different parameters
@@ -322,6 +346,7 @@ purpose="validate"  # Final honest assessment
 ```
 
 ### 3. Check Contamination Before Final Validation
+
 ```python
 from afml.cache import get_data_tracker
 
@@ -336,6 +361,7 @@ else:
 ```
 
 ### 4. Export Logs for Documentation
+
 ```python
 from afml.cache import get_data_tracker
 
@@ -348,6 +374,7 @@ tracker.export_detailed_log(Path("./reports/data_access_audit.json"))
 ## Testing Your Integration
 
 ### Quick Test Script
+
 ```python
 # test_streamlined_cache.py
 import pandas as pd
@@ -395,6 +422,7 @@ print("\n✓ All tests passed!")
 ```
 
 Run:
+
 ```bash
 python test_streamlined_cache.py
 ```
@@ -402,22 +430,29 @@ python test_streamlined_cache.py
 ## Troubleshooting
 
 ### Issue: Import errors
+
 ```python
 ImportError: cannot import name 'DataAccessTracker'
 ```
+
 **Solution**: Make sure you updated `__init__.py` with the new imports.
 
 ### Issue: Circular import errors
+
 ```python
 ImportError: cannot import name 'CACHE_DIRS'
 ```
+
 **Solution**: The new code uses runtime imports to avoid circular dependencies. Make sure `CACHE_DIRS` is defined in `__init__.py` before importing other modules.
 
 ### Issue: Access log not saving
+
 ```python
 # No data_access_log.csv file created
 ```
+
 **Solution**: Call `save_access_log()` explicitly:
+
 ```python
 from afml.cache import save_access_log
 save_access_log()

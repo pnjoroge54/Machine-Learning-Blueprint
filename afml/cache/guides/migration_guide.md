@@ -5,6 +5,7 @@ Step-by-step guide to integrate the enhanced caching features into your existing
 ## Overview
 
 All enhancements are **backward compatible**. You can:
+
 - Use new features immediately without breaking existing code
 - Migrate gradually, module by module
 - Keep using `@cacheable` while adopting `@robust_cacheable` for new code
@@ -82,11 +83,13 @@ __all__ = [
 ### Step 3: Install Dependencies (Optional)
 
 For MLflow integration:
+
 ```bash
 pip install mlflow
 ```
 
 For better performance:
+
 ```bash
 pip install pyarrow  # For fast parquet in backtest cache
 ```
@@ -357,11 +360,13 @@ def run_backtest(data, params):
 ### Issue 1: Import Errors
 
 **Problem:**
+
 ```python
 ImportError: cannot import name 'robust_cacheable' from 'afml.cache'
 ```
 
 **Solution:**
+
 ```bash
 # Make sure new files are in place
 ls afml/cache/
@@ -376,16 +381,19 @@ ls afml/cache/
 ### Issue 2: MLflow Not Available
 
 **Problem:**
+
 ```python
 WARNING: MLflow not available - install with: pip install mlflow
 ```
 
 **Solution A (Install MLflow):**
+
 ```bash
 pip install mlflow
 ```
 
 **Solution B (Use without MLflow):**
+
 ```python
 # System still works, just without MLflow tracking
 from afml.cache import MLFLOW_AVAILABLE
@@ -401,6 +409,7 @@ else:
 **Problem:** Cache hit rate dropped after migration.
 
 **Solution:**
+
 ```python
 # Diagnose the issue
 from afml.cache import analyze_cache_patterns
@@ -420,6 +429,7 @@ if patterns['high_miss_rate_functions']:
 **Problem:** Multiple cache systems interfering.
 
 **Solution:**
+
 ```python
 # Clear and rebuild
 from afml.cache import clear_afml_cache, initialize_cache_system
@@ -529,6 +539,7 @@ if __name__ == "__main__":
 ```
 
 Run tests:
+
 ```bash
 pytest tests/test_cache_migration.py -v
 ```
@@ -678,18 +689,21 @@ Migration is successful when:
 If you encounter issues:
 
 1. **Check logs:**
+
    ```python
    from loguru import logger
    logger.add("cache_debug.log", level="DEBUG")
    ```
 
 2. **Analyze cache:**
+
    ```python
    from afml.cache import print_cache_health
    print_cache_health()
    ```
 
 3. **Report patterns:**
+
    ```python
    from afml.cache import analyze_cache_patterns
    patterns = analyze_cache_patterns()
