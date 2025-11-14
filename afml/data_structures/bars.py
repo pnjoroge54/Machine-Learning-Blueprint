@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..cache import time_aware_cacheable
 from ..util.misc import (
     flatten_column_names,
     log_df_info,
@@ -11,7 +10,6 @@ from ..util.misc import (
 )
 
 
-@time_aware_cacheable
 def calculate_ticks_per_period(
     df: pd.DataFrame,
     timeframe: str = "M1",
@@ -51,9 +49,8 @@ def calculate_ticks_per_period(
     return rounded_ticks
 
 
-@time_aware_cacheable
 def _make_bar_type_grouper(
-    df: pd.DataFrame, bar_type: str = "tick", bar_size: int = 100, timeframe: str = "M1"
+    df: pd.DataFrame, bar_type: str = "tick", bar_size: int = 0, timeframe: str = "M1"
 ) -> tuple[pd.core.groupby.generic.DataFrameGroupBy, int]:
     """
     Create a grouped object for aggregating tick data into time/tick/dollar/volume bars.
@@ -117,7 +114,6 @@ def _make_bar_type_grouper(
     return df.groupby(bar_id), bar_size
 
 
-@time_aware_cacheable
 def make_bars(
     tick_df: pd.DataFrame,
     bar_type: str = "tick",
