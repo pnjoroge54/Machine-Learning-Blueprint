@@ -427,18 +427,18 @@ def load_tick_data(
                         df = df.astype({"flags": dtype})
                         mem = (mem - df.memory_usage(deep=True).sum()) / 1024**2
                         logger.info(
-                            f"Converted flags from {dtype_orig} to {df['flags'].dtype} saving {mem:,.1f} MB."
+                            f"Converted flags from {dtype_orig} to {df['flags'].dtype} saving {mem:,.1f} MB"
                         )
                         break
 
         if to_drop:
             df.drop(columns=to_drop, inplace=True)
-            logger.info(f"Dropped empty columns {to_drop}.")
+            logger.info(f"Dropped empty columns {to_drop}")
 
         if not df.index.is_monotonic_increasing:
             df.sort_index(inplace=True)
 
-        logger.success(f"Loaded {len(df):,} rows of {symbol} tick data for account {account_name}.")
+        logger.success(f"Loaded {len(df):,} rows of {symbol} tick data for account {account_name}")
         if verbose:
             log_df_info(df)
 
@@ -449,16 +449,15 @@ def load_tick_data(
         return pd.DataFrame()
 
 
-@time_aware_cacheable
-def load_training_data(
+def load_bars_from_ticks(
     symbol,
     start_date,
     end_date,
+    account_name,
     bar_type,
     timeframe,
     price,
     bar_size,
-    account_name,
     path=None,
 ):
     """
@@ -468,29 +467,22 @@ def load_training_data(
         symbol (str): The financial instrument symbol to load.
         start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
         end_date (Union[str, dt, pd.Timestamp]): The end date of the desired data range.
+        account_name (str): The account name to verify against the data directory.
         bar_type (str): Bar type ('tick', 'time', 'volume', 'dollar').
         timeframe (str): Timeframe for calculation.
         price (str): Price field strategy ('bid', 'ask', 'mid_price', 'bid_ask').
         bar_size (int): For non-time bars; if 0, dynamic calculation is used.
-        drop_zero_volume (bool): If True, drops bars with zero tick volume.
-        account_name (str): The account name to verify against the data directory.
         path (Union[str, Path]): The root folder where the data is stored.
 
     Returns:
         pd.DataFrame: Constructs OHLC bars from tick data, or an empty DataFrame
                       if the account verification fails, dates are invalid, or an error occurs.
     """
-    try:
-        start_dt, end_dt = date_conversion(start_date, end_date)
-        start_dt, end_dt = start_dt.strftime("%y%m%d"), end_dt.strftime("%y%m%d")
-    except:
-        return pd.DataFrame()
-
     columns = ["bid", "ask"]
     if bar_type in ("volume", "dollar"):
         columns += ["volume"]
 
-    df = load_tick_data(
+    tick_df = load_tick_data(
         symbol,
         start_date,
         end_date,
@@ -500,13 +492,21 @@ def load_training_data(
         compress=True,
         verbose=False,
     )
-    _, bar_size = _make_bar_type_grouper(df, bar_type, bar_size, timeframe)
-    df = make_bars(df, bar_type, timeframe, price, bar_size, drop_zero_volume=True, verbose=True)
 
+    df = make_bars(
+        tick_df, bar_type, timeframe, price, bar_size, drop_zero_volume=True, verbose=True
+    )
+
+    return df
+
+
+def track_data_access(symbol, df, bar_type, bar_size, timeframe, purpose):
     # Track data access
+    if bar_size != 0:
+        _, bar_size = _make_bar_type_grouper(df, bar_type, bar_size, timeframe)
+
     bar_info = f"{bar_type}-{bar_size:,}" if (bar_type != "time") else f"{timeframe}"
-    ds_name = f"{symbol}_{bar_info}_{start_dt}_{end_dt}"
-    purpose = "training"
+    ds_name = f"{symbol}_{bar_info}"
 
     tracker = get_data_tracker()
     tracker.log_access(
@@ -518,6 +518,123 @@ def load_training_data(
     )
 
     logger.debug(f"Tracked access: {ds_name} [{df.index[0]} to {df.index[-1]}] for {purpose}")
+
+
+@time_aware_cacheable
+def load_training_data(
+    symbol,
+    start_date,
+    end_date,
+    account_name,
+    bar_type="time",
+    timeframe="M1",
+    price="mid_price",
+    bar_size=0,
+    path=None,
+):
+    """
+    Loads tick data from a partitioned Parquet structure after verifying account.
+
+    Args:
+        symbol (str): The financial instrument symbol to load.
+        start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
+        end_date (Union[str, dt, pd.Timestamp]): The end date of the desired data range.
+        account_name (str): The account name to verify against the data directory.
+        bar_type (str): Bar type ('tick', 'time', 'volume', 'dollar').
+        timeframe (str): Timeframe for calculation.
+        price (str): Price field strategy ('bid', 'ask', 'mid_price', 'bid_ask').
+        bar_size (int): For non-time bars; if 0, dynamic calculation is used.
+        drop_zero_volume (bool): If True, drops bars with zero tick volume.
+        path (Union[str, Path]): The root folder where the data is stored.
+
+    Returns:
+        pd.DataFrame: Constructs OHLC bars from tick data, or an empty DataFrame
+                      if the account verification fails, dates are invalid, or an error occurs.
+    """
+    df = load_bars_from_ticks(
+        symbol, start_date, end_date, account_name, bar_type, timeframe, price, bar_size, path
+    )
+    purpose = "training"
+    track_data_access(symbol, df, bar_type, bar_size, timeframe, purpose)
+    return df
+
+
+@time_aware_cacheable
+def load_testing_data(
+    symbol,
+    start_date,
+    end_date,
+    account_name,
+    bar_type="time",
+    timeframe="M1",
+    price="mid_price",
+    bar_size=0,
+    path=None,
+):
+    """
+    Loads tick data from a partitioned Parquet structure after verifying account.
+
+    Args:
+        symbol (str): The financial instrument symbol to load.
+        start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
+        end_date (Union[str, dt, pd.Timestamp]): The end date of the desired data range.
+        account_name (str): The account name to verify against the data directory.
+        bar_type (str): Bar type ('tick', 'time', 'volume', 'dollar').
+        timeframe (str): Timeframe for calculation.
+        price (str): Price field strategy ('bid', 'ask', 'mid_price', 'bid_ask').
+        bar_size (int): For non-time bars; if 0, dynamic calculation is used.
+        drop_zero_volume (bool): If True, drops bars with zero tick volume.
+        path (Union[str, Path]): The root folder where the data is stored.
+
+    Returns:
+        pd.DataFrame: Constructs OHLC bars from tick data, or an empty DataFrame
+                      if the account verification fails, dates are invalid, or an error occurs.
+    """
+    df = load_bars_from_ticks(
+        symbol, start_date, end_date, account_name, bar_type, timeframe, price, bar_size, path
+    )
+    purpose = "testing"
+    track_data_access(symbol, df, bar_type, bar_size, timeframe, purpose)
+    return df
+
+
+@time_aware_cacheable
+def load_validation_data(
+    symbol,
+    start_date,
+    end_date,
+    account_name,
+    bar_type="time",
+    timeframe="M1",
+    price="mid_price",
+    bar_size=0,
+    path=None,
+):
+    """
+    Loads tick data from a partitioned Parquet structure after verifying account.
+
+    Args:
+        symbol (str): The financial instrument symbol to load.
+        start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
+        end_date (Union[str, dt, pd.Timestamp]): The end date of the desired data range.
+        account_name (str): The account name to verify against the data directory.
+        bar_type (str): Bar type ('tick', 'time', 'volume', 'dollar').
+        timeframe (str): Timeframe for calculation.
+        price (str): Price field strategy ('bid', 'ask', 'mid_price', 'bid_ask').
+        bar_size (int): For non-time bars; if 0, dynamic calculation is used.
+        drop_zero_volume (bool): If True, drops bars with zero tick volume.
+        path (Union[str, Path]): The root folder where the data is stored.
+
+    Returns:
+        pd.DataFrame: Constructs OHLC bars from tick data, or an empty DataFrame
+                      if the account verification fails, dates are invalid, or an error occurs.
+    """
+    df = load_bars_from_ticks(
+        symbol, start_date, end_date, account_name, bar_type, timeframe, price, bar_size, path
+    )
+    purpose = "validation"
+    track_data_access(symbol, df, bar_type, bar_size, timeframe, purpose)
+    return df
 
 
 # --- Main Execution Block ---
