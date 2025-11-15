@@ -5,12 +5,12 @@ Now with robust cache keys, MLflow integration, backtest caching, and monitoring
 
 import json
 import os
-import pickle
 import threading
 from collections import defaultdict
 from functools import wraps
 from pathlib import Path
-from typing import Dict, Optional, Union
+from types import FunctionType
+from typing import Callable, Dict, Optional, Union
 
 from appdirs import user_cache_dir
 from joblib import Memory
@@ -271,8 +271,10 @@ from .data_access_tracker import (
 from .robust_cache_keys import (
     CacheKeyGenerator,
     cacheable,
+    data_tracking_cacheable,
     robust_cacheable,
     time_aware_cacheable,
+    time_aware_data_tracking_cacheable,
 )
 
 # Import selective cleaner functions after base components are defined
@@ -549,12 +551,47 @@ def clear_cache_by_pattern(pattern: str, cache_type: str = "joblib"):
     )
 
 
+def apply_decorator_to_methods(decorator: Callable, *, include_private: bool = False):
+    """
+    Class decorator factory that applies `decorator` to each function attribute
+    on the class (by default public methods only). Preserves staticmethod/classmethod.
+    """
+
+    def class_decorator(cls):
+        for name, attr in list(cls.__dict__.items()):
+            if not include_private and name.startswith("_"):
+                continue
+
+            # staticmethod
+            if isinstance(attr, staticmethod):
+                fn = attr.__func__
+                wrapped = decorator(fn)
+                setattr(cls, name, staticmethod(wrapped))
+                continue
+
+            # classmethod
+            if isinstance(attr, classmethod):
+                fn = attr.__func__
+                wrapped = decorator(fn)
+                setattr(cls, name, classmethod(wrapped))
+                continue
+
+            # plain function (instance method)
+            if isinstance(attr, FunctionType):
+                wrapped = decorator(attr)
+                setattr(cls, name, wrapped)
+
+        return cls
+
+    return class_decorator
+
+
 # =============================================================================
 # 11) EXPORTS
 # =============================================================================
 
 __all__ = [
-    # Core caching (existing)
+    # Core caching
     "memory",
     "cacheable",
     "initialize_cache_system",
@@ -566,7 +603,7 @@ __all__ = [
     "CacheAnalyzer",
     "clear_afml_cache",
     "CACHE_DIRS",
-    # Selective cache management (existing)
+    # Selective cache management
     "selective_cache_clear",
     "smart_cacheable",
     "cache_maintenance",
@@ -575,7 +612,7 @@ __all__ = [
     "clear_changed_labeling_functions",
     "clear_changed_features_functions",
     # Robust cache keys
-    "CacheKeyGenerator",  # Now properly exported
+    "CacheKeyGenerator",
     "DataAccessTracker",
     "get_data_tracker",
     "log_data_access",
@@ -583,6 +620,8 @@ __all__ = [
     "save_access_log",
     "robust_cacheable",
     "time_aware_cacheable",
+    "data_tracking_cacheable",
+    "time_aware_data_tracking_cacheable",
     # MLflow integration
     "MLflowCacheIntegration",
     "setup_mlflow_cache",
@@ -615,6 +654,7 @@ __all__ = [
     # Additional utility functions
     "get_cache_size_info",
     "clear_cache_by_pattern",
+    "apply_decorator_to_methods",
 ]
 
 
