@@ -151,7 +151,6 @@ def _get_cacheable_functions() -> Dict[str, callable]:
     """Find all functions decorated with @cacheable."""
     import gc
     import types
-    import weakref
 
     cacheable_funcs = {}
 

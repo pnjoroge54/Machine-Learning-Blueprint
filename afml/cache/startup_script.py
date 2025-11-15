@@ -19,7 +19,12 @@ logger.add(
     format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
     level="INFO",
 )
-logger.add("mql5_bridge_{time:YYYY-MM-DD}.log", rotation="1 day", retention="7 days", level="DEBUG")
+logger.add(
+    Path("logs", "mql5_bridge_{time:YYYY-MM-DD}.log"),
+    rotation="1 day",
+    retention="7 days",
+    level="DEBUG",
+)
 
 from afml.cache import initialize_cache_system, robust_cacheable
 from afml.cache.mql5_bridge import MQL5Bridge, MQL5CachedStrategy, SignalPacket

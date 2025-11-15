@@ -62,7 +62,7 @@ class MQL5Bridge:
     def __init__(
         self,
         host: str = "localhost",
-        port: int = 9090,
+        port: int = 80,
         mode: str = "live",  # "live" or "backtest"
         cache_dir: Optional[Path] = None,
     ):
