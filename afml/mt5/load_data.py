@@ -34,7 +34,11 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from ..cache import get_data_tracker, time_aware_cacheable
-from ..data_structures.bars import _make_bar_type_grouper, make_bars
+from ..data_structures.bars import (
+    _make_bar_type_grouper,
+    calculate_ticks_per_period,
+    make_bars,
+)
 from ..mt5.clean_data import _save_cleaned_with_structure, clean_tick_data
 from ..util.misc import date_conversion, log_df_info
 
@@ -492,19 +496,20 @@ def load_bars_from_ticks(
         verbose=False,
     )
 
+    if bar_size == 0 and bar_type == "tick":
+        bar_size = calculate_ticks_per_period(tick_df, timeframe, method="mean", verbose=False)
+
+    bar_info = f"{bar_type}-{bar_size:,}" if (bar_type != "time") else f"{timeframe}"
+
     df = make_bars(
         tick_df, bar_type, timeframe, price, bar_size, drop_zero_volume=True, verbose=True
     )
 
-    return df
+    return df, bar_info
 
 
-def track_data_access(symbol, df, bar_type, bar_size, timeframe, purpose):
+def track_data_access(symbol, df, bar_info, purpose):
     # Track data access
-    if bar_size != 0:
-        _, bar_size = _make_bar_type_grouper(df, bar_type, bar_size, timeframe)
-
-    bar_info = f"{bar_type}-{bar_size:,}" if (bar_type != "time") else f"{timeframe}"
     ds_name = f"{symbol}_{bar_info}"
 
     tracker = get_data_tracker()
@@ -552,10 +557,10 @@ def load_data(
         pd.DataFrame: Constructs OHLC bars from tick data, or an empty DataFrame
                       if the account verification fails, dates are invalid, or an error occurs.
     """
-    df = load_bars_from_ticks(
+    df, bar_info = load_bars_from_ticks(
         symbol, start_date, end_date, account_name, bar_type, timeframe, price, bar_size, path
     )
-    track_data_access(symbol, df, bar_type, bar_size, timeframe, purpose)
+    track_data_access(symbol, df, bar_info, purpose)
     return df
 
 
@@ -630,3 +635,4 @@ if __name__ == "__main__":
 
     else:
         logger.critical("Could not log in to MetaTrader 5. Aborting all operations.")
+        logger.info("--- MT5 Connection Closed. Session End ---")

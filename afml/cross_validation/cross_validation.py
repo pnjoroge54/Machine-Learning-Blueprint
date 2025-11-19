@@ -576,7 +576,7 @@ def analyze_cross_val_scores_calibrated(
     cv_gen: BaseCrossValidator,
     sample_weight_train: Optional[pd.Series] = None,
     sample_weight_score: Optional[pd.Series] = None,
-    calibrate: bool = False,  # NEW PARAMETER
+    calibrate: bool = True,
 ):
     """
     Cross-validation with optional per-fold calibration.
