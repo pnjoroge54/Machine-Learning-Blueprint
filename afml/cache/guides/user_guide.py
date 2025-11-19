@@ -11,22 +11,23 @@ Performance gains shown:
 - Iteration speed: 10x improvement
 """
 
-import MetaTrader5 as mt5
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
+
+import MetaTrader5 as mt5
+import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import TimeSeriesSplit
 
 # Import enhanced cache system
 from afml.cache import (
+    cached_backtest,
+    get_comprehensive_cache_status,
+    mlflow_cached,
+    print_cache_health,
+    robust_cacheable,
     setup_production_cache,
     time_aware_cacheable,
-    robust_cacheable,
-    mlflow_cached,
-    cached_backtest,
-    print_cache_health,
-    get_comprehensive_cache_status,
 )
 
 # =============================================================================
@@ -121,6 +122,8 @@ def compute_mt5_features(df: pd.DataFrame, params: dict):
     - First call: ~5 minutes (intensive computations)
     - Subsequent calls: <1 second (cached)
     """
+    import pandas_ta as ta
+    
     print(f"🔧 Computing features (windows: {params})...")
     
     features = pd.DataFrame(index=df.index)
@@ -132,7 +135,7 @@ def compute_mt5_features(df: pd.DataFrame, params: dict):
     
     # Momentum indicators
     for period in params['rsi_periods']:
-        features[f'rsi_{period}'] = compute_rsi(df['close'], period)
+        features[f'rsi_{period}'] = df.ta.rsi(period)
     
     # Volume features
     features['volume_ma'] = df['tick_volume'].rolling(20).mean()
@@ -685,4 +688,4 @@ if __name__ == "__main__":
     print("2. Modify parameters and see only changed parts recompute")
     print("3. Check MLflow UI: mlflow ui --port 5000")
     print("4. Export reports: get_cache_monitor().export_report('report.html')")
-    print("=" * 70)
+    print("=" * 70)    print("=" * 70)
