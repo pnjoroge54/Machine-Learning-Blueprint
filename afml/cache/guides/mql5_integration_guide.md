@@ -80,7 +80,7 @@ print("✅ Python server running. Start your MQL5 EA now.")
 
 1. In MetaTrader 5, drag the `PythonBridgeEA` onto any chart
 2. Check inputs:
-   - PythonHost: "http://127.0.0.1"
+   - PythonHost: "localhost"
    - PythonPort: 80
    - EnableTrading: false (for testing)
 3. Enable AutoTrading (Ctrl+E)
@@ -455,7 +455,7 @@ A: Python side: Yes. MQL5 side: Requires MetaTrader 5 (Windows or Wine on Mac).
 A: Typical speedups: 10-100x for features, 50-500x for backtests with same data.
 
 **Q: Is my data safe?**  
-A: All communication is local (http://127.0.0.1). No external connections.
+A: All communication is local (localhost). No external connections.
 
 **Q: Can I use this for multiple accounts?**  
 A: Yes! Run multiple EA instances with different magic numbers.
