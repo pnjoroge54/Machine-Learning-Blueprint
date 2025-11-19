@@ -10,7 +10,6 @@ import pandas as pd
 from loguru import logger
 from numba import njit, prange
 
-from ..cache.robust_cache_keys import robust_cacheable
 from ..sample_weights.optimized_attribution import get_weights_by_return_optimized
 from ..sampling.optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,
@@ -39,9 +38,8 @@ def apply_pt_sl_on_t1_optimized(close: pd.Series, events: pd.DataFrame, pt_sl: l
     """
     # 1. Prepare data for Numba
     # Get integer locations for events and vertical barriers relative to the `close` series
-    dtype = np.min_scalar_type(len(close))
     event_locs = close.index.get_indexer(events.index)
-    t1_locs = close.index.get_indexer(events["t1"].values)
+    t1_locs = close.index.get_indexer_for(events["t1"].values)
 
     # Convert pandas objects to NumPy arrays for Numba compatibility
     close_val = close.values
@@ -401,7 +399,6 @@ def drop_labels(triple_barrier_events, min_pct=0.05):
     return triple_barrier_events
 
 
-@robust_cacheable
 def triple_barrier_labels(
     close: pd.Series,
     target: pd.Series,
@@ -482,7 +479,6 @@ def triple_barrier_labels(
     return events
 
 
-@robust_cacheable
 def get_event_weights(triple_barrier_events: pd.DataFrame, close: pd.Series, verbose: bool = False):
     """Calculate event weights and average uniqueness for triple-barrier events.
     Args:
