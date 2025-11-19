@@ -3,8 +3,7 @@ from pathlib import Path
 
 from pytz import timezone
 
-DATA_PATH = Path.home() / "tick_data_parquet"
-CLEAN_DATA_PATH = Path.home() / "tick_data_clean_parquet"
+DATA_PATH = Path.home() / "tick_data_parquet" / "clean"
 OHLCV = ["open", "high", "low", "close", "volume"]
 DATE_COMPONENTS = ["year", "month", "day", "hour", "minute", "second", "microsecond"]
 UTC = timezone("UTC")

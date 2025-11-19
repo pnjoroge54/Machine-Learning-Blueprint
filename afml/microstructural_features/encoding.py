@@ -1,6 +1,7 @@
 """
 Various functions for message encoding (quantile)
 """
+
 import numpy as np
 
 
@@ -11,16 +12,16 @@ def encode_tick_rule_array(tick_rule_array: list) -> str:
     :param tick_rule_array: (list) Tick rules
     :return: (str) Encoded message
     """
-    message = ''
+    message = ""
     for element in tick_rule_array:
         if element == 1:
-            message += 'a'
+            message += "a"
         elif element == -1:
-            message += 'b'
+            message += "b"
         elif element == 0:
-            message += 'c'
+            message += "c"
         else:
-            raise ValueError('Unknown value for tick rule: {}'.format(element))
+            raise ValueError(f"Unknown value for tick rule: {element}")
     return message
 
 
@@ -70,8 +71,8 @@ def sigma_mapping(array: list, step: float = 0.01) -> dict:
             encoding_dict[element] = ascii_table[i]
         except IndexError:
             raise ValueError(
-                'Length of dictionary ceil((max(arr) - min(arr)) / step = {} is more than ASCII table lenght)'.format(
-                    len(encoding_steps)))
+                f"Length of dictionary ceil((max(arr) - min(arr)) / step = {len(encoding_steps)} is more than ASCII table lenght)"
+            )
         i += 1
     return encoding_dict
 
@@ -109,7 +110,7 @@ def encode_array(array: list, encoding_dict: dict) -> str:
     :param encoding_dict: (dict) Dict of quantile-symbol
     :return: (str) Encoded message
     """
-    message = ''
+    message = ""
     for element in array:
         message += _get_letter_from_encoding(element, encoding_dict)
     return message
