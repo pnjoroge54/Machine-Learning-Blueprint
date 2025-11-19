@@ -142,8 +142,11 @@ def make_bars(
         # Modifies the tick_df, which is OK as we'll not want to keep
         # repeating this calculation when making other bars.
         tick_df["mid_price"] = (tick_df["bid"] + tick_df["ask"]) / 2
+    if "spread" not in tick_df.columns:
+        tick_df["spread"] = tick_df["ask"] - tick_df["bid"]
 
     price_cols = ["bid", "ask"] if price == "bid_ask" else [price]
+    price_cols += ["spread"]
     if bar_type in ("volume", "dollar"):
         if "volume" not in tick_df:
             raise KeyError(f"'volume' column required for {bar_type} bars")
@@ -161,8 +164,8 @@ def make_bars(
         # Make OHLC using mid-price
         for col in ["open", "high", "low", "close"]:
             ohlc_df[col] = ohlc_df.filter(regex=col).sum(axis=1).div(2)
-        ohlc_df["spread"] = ohlc_df.ask_close - ohlc_df.bid_close
 
+    ohlc_df["spread"] = bar_group["spread"].mean()
     ohlc_df["tick_volume"] = bar_group.size() if bar_type != "tick" else bar_size_
 
     if "volume" in tick_df.columns:
