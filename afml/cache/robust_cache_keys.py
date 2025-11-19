@@ -423,6 +423,12 @@ def _log_dataframe_access(tracker, df, name, purpose):
     )
 
 
+def cacheable(func):
+    return create_robust_cacheable(
+        track_data_access=False, dataset_name=None, purpose=None, use_time_awareness=False
+    )(func)
+
+
 # =============================================================================
 # Final convenience exports
 # =============================================================================
@@ -430,7 +436,6 @@ def _log_dataframe_access(tracker, df, name, purpose):
 # Standard decorators (backward compatible)
 robust_cacheable = create_robust_cacheable(use_time_awareness=False)
 time_aware_cacheable = create_robust_cacheable(use_time_awareness=True)
-cacheable = robust_cacheable
 
 # Data tracking decorators (new functionality)
 data_tracking_cacheable = lambda dataset_name, purpose: create_robust_cacheable(
