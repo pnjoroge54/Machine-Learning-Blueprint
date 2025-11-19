@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import BaggingClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
@@ -37,7 +38,7 @@ def clf_hyper_fit(
     **fit_params,
 ):
     """
-    Hyper-Parameter Search with Purged K-Fold Cross-Validation
+    Hyper-Parameter Fitting with Purged K-Fold Cross-Validation
 
     Performs hyperparameter optimization using purged k-fold cross-validation
     to prevent leakage in time-series data, then optionally fits a bagged
@@ -99,6 +100,15 @@ def clf_hyper_fit(
         from hyperparameter search, fitted on full data.
         If bagging_n_estimators > 0: Returns a BaggingClassifier with the
         best estimator as base, fitted on full data.
+    cv_results : Dict
+        Results of best_estimator_ Pipeline, gs, in the format below:
+        cv_results = {
+            "best_params": gs.best_params_,
+            "best_score": gs.best_score_,
+            "cv_results": pd.DataFrame(gs.cv_results_),
+            "scoring": scoring,
+        }
+
 
     Notes
     -----
@@ -187,7 +197,12 @@ def clf_hyper_fit(
             )
 
         gs = gs.fit(feat, labels, **fit_params).best_estimator_
-
+        cv_results = {
+            "best_params": gs.best_params_,
+            "best_score": gs.best_score_,
+            "cv_results": pd.DataFrame(gs.cv_results_),
+            "scoring": scoring,
+        }
         # 2) fit validated model on the entirety of the data
         if bagging_n_estimators > 0:
             # Create base pipeline with single-threaded estimators to avoid nested parallelism
@@ -212,9 +227,9 @@ def clf_hyper_fit(
                 bag_fit_params["sample_weight"] = fit_params[sample_weight_key]
 
             bag = bag.fit(feat, labels, **bag_fit_params)
-            return bag  # Return BaggingClassifier directly
+            return bag, cv_results  # Return BaggingClassifier directly
 
-        return gs
+        return gs, cv_results
 
     finally:
         # Restore original n_jobs to avoid side effects
