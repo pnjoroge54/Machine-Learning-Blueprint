@@ -1,0 +1,9 @@
+HTML ids
+--------------------
+Find: (?<=id="[^"]*)-
+Replace: _
+
+Markdown Headers
+--------------------
+Find: ^(#{1,6})\s+\*\*(.*?)\*\*\s*$
+Replace: $1 $2
