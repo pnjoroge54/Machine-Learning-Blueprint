@@ -6,7 +6,7 @@ and evaluating calibration quality, with special considerations for financial
 time series data.
 
 Key Features:
-- Calibration metrics (Brier score, ECE, MCE)
+- Calibration metrics (Brier score, Expected Calibration Error (ECE), Maximum Calibration Error (MCE))
 - Reliability diagrams with confidence intervals
 - Multiple calibration methods (Platt scaling, isotonic regression)
 - Integration with purged cross-validation
@@ -670,10 +670,10 @@ def calibrated_cross_val_predict(
 
     for train_idx, test_idx in cv.split(X, y):
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        y_train = y.iloc[train_idx]
 
         # Clone estimator for this fold
-        fold_estimator = clone(estimator)
+        fold_estimator = clone(estimator).set_params(n_jobs=n_jobs)
 
         # Fit on training data
         fold_estimator.fit(X_train, y_train)

@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from afml.cache.robust_cache_keys import robust_cacheable
+
 from ..util.misc import (
     flatten_column_names,
     log_df_info,
@@ -10,6 +12,7 @@ from ..util.misc import (
 )
 
 
+@robust_cacheable
 def calculate_ticks_per_period(
     df: pd.DataFrame,
     timeframe: str = "M1",
