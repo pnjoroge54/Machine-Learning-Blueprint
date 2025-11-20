@@ -436,37 +436,41 @@ class CacheMonitor:
 
             if not cache_dir.exists():
                 logger.debug(f"Cache directory does not exist: {cache_dir}")
-                return None
+                return 0.0
 
-            # Find cache files for this function
             total_size = 0
-            found_files = []
+            found_files = 0
 
-            # Joblib uses a different directory structure based on function fingerprint
-            for cache_file in cache_dir.rglob("*.pkl"):  # Look for pickle files
+            # Joblib stores cache files with hashed names
+            # Look in all subdirectories for function-related cache files
+            for cache_file in cache_dir.rglob("*"):
                 if cache_file.is_file():
-                    # Check if this might belong to our function
-                    # Joblib stores functions in module/function_name subdirectories
-                    if function_name.replace(".", "/") in str(cache_file):
-                        file_size = cache_file.stat().st_size
-                        total_size += file_size
-                        found_files.append((cache_file, file_size))
+                    # Check if this file might belong to our function by checking parent directories
+                    # or looking for patterns that match the function
+                    try:
+                        # Joblib often stores function info in the directory structure
+                        if function_name.replace(".", "_") in str(cache_file):
+                            file_size = cache_file.stat().st_size
+                            total_size += file_size
+                            found_files += 1
+                            logger.debug(f"Found cache file: {cache_file} - {file_size} bytes")
+                    except Exception as e:
+                        logger.debug(f"Error checking file {cache_file}: {e}")
+                        continue
 
-            if found_files:
-                logger.debug(f"Found {len(found_files)} cache files for {function_name}")
-                for file_path, size in found_files:
-                    logger.debug(f"  {file_path.name}: {size / 1024:.2f} KB")
-
+            if found_files > 0:
                 size_mb = total_size / (1024 * 1024)
-                logger.debug(f"Total cache size for {function_name}: {size_mb:.2f} MB")
+                logger.debug(
+                    f"Total cache size for {function_name}: {size_mb:.2f} MB ({found_files} files)"
+                )
                 return size_mb
             else:
                 logger.debug(f"No cache files found for {function_name}")
-                return 0.0  # Return 0 instead of None for no cache files
+                return 0.0
 
         except Exception as e:
             logger.warning(f"Error calculating cache size for {function_name}: {e}")
-            return None
+            return 0.0
 
     def _generate_recommendations(
         self,
