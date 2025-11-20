@@ -9,6 +9,7 @@ import re
 import time
 from datetime import datetime as dt
 from datetime import timedelta
+from pathlib import Path
 from typing import Callable, Literal, Optional, Tuple, Union
 
 import nbformat as nbf
@@ -171,15 +172,18 @@ def optimize_dtypes(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
         if pd.api.types.is_numeric_dtype(col_dtype):
             if pd.api.types.is_integer_dtype(col_dtype):
                 optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="integer")
-            
+
             elif pd.api.types.is_float_dtype(col_dtype):
                 # Simple check: no NaNs and all values are whole numbers
-                if not optimized_df[col].isna().any() and (optimized_df[col] == optimized_df[col].round()).all():
-                    optimized_df[col] = optimized_df[col].astype('int64')
+                if (
+                    not optimized_df[col].isna().any()
+                    and (optimized_df[col] == optimized_df[col].round()).all()
+                ):
+                    optimized_df[col] = optimized_df[col].astype("int64")
                     optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="integer")
                 else:
                     optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="float")
-        
+
         elif pd.api.types.is_object_dtype(col_dtype):
             num_unique_values = optimized_df[col].nunique()
             num_total_values = len(optimized_df[col])
@@ -190,7 +194,9 @@ def optimize_dtypes(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
 
     if verbose:
         reduction_pct = 100 * (start_mem - end_mem) / start_mem
-        print(f"Memory usage reduced from {start_mem:.2f} MB to {end_mem:.2f} MB ({reduction_pct:.1f}% reduction)")
+        print(
+            f"Memory usage reduced from {start_mem:.2f} MB to {end_mem:.2f} MB ({reduction_pct:.1f}% reduction)"
+        )
 
     return optimized_df
 
@@ -606,3 +612,9 @@ def smart_subscript(base, subscript):
         "html": html_result,
         "plain": f"{base}_{subscript}",  # Fallback
     }
+
+
+def get_folder_size(path: str) -> float:
+    folder = Path(path)
+    total_size = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file())
+    return total_size / (1024**2)  # MB
