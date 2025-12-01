@@ -9,7 +9,7 @@ import json
 import pickle
 import time
 from functools import wraps
-from typing import Callable
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -184,26 +184,16 @@ def _generate_cv_cache_key(func: Callable, args: tuple, kwargs: dict) -> str:
     return hashlib.md5(combined.encode()).hexdigest()
 
 
-def cv_cacheable(_func=None, **kwargs):
+def cv_cacheable(
+    _func=None,
+    track_data_access: bool = False,
+    dataset_name: Optional[str] = None,
+    purpose: Optional[str] = None,
+    log_metrics: bool = True,
+):
     """
     Specialized caching decorator for cross-validation functions.
-
-    Properly handles:
-    - Sklearn classifiers (caches based on type + params, not trained state)
-    - CV generators (PurgedKFold, etc.)
-    - DataFrames and Series
-    - Sample weights
-    - Scoring functions
-
-    Usage:
-        @cv_cacheable
-        def ml_cross_val_score(classifier, X, y, cv_gen, sample_weight_train=None, ...):
-            ...
-
-    Performance:
-    - First call: Full CV computation (minutes/hours)
-    - Subsequent calls with same data: <1 second (cached)
-
+    Handles sklearn classifiers, CV generators, and complex ML workflows.
 
     Dual-mode decorator that supports both old and new syntax.
 
@@ -212,16 +202,35 @@ def cv_cacheable(_func=None, **kwargs):
     def my_func(...)
 
     # New syntax
-    @cv_cacheable(track_data_access=True, ...)
+    @cv_cacheable(track_data_access=True, dataset_name='my_data', purpose='train')
     def my_func(...)
+
+    Args:
+        track_data_access: Track DataFrame access for contamination detection
+        dataset_name: Name of dataset for tracking
+        purpose: Purpose of data access (train/test/validate/optimize/analyze)
+        log_metrics: Log results to MLflow if available
     """
 
+    # Validate purpose parameter
+    if purpose and purpose not in ["train", "test", "validate", "optimize", "analyze"]:
+        raise ValueError(
+            f"Invalid purpose: {purpose}. Must be one of: "
+            "train, test, validate, optimize, analyze"
+        )
+
     def decorator(func):
-        # If no kwargs provided, use old behavior
-        if not kwargs:
+        # If no enhanced parameters are set, use old behavior
+        if not track_data_access and dataset_name is None and purpose is None:
             return _cv_cacheable_legacy(func)
         else:
-            return _cv_cacheable_enhanced(func, **kwargs)
+            return _cv_cacheable_enhanced(
+                func,
+                track_data_access=track_data_access,
+                dataset_name=dataset_name,
+                purpose=purpose,
+                log_metrics=log_metrics,
+            )
 
     if _func is None:
         return decorator
