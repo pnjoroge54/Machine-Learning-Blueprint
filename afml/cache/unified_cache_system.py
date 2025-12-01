@@ -24,7 +24,6 @@ from scipy.stats import rv_continuous, rv_discrete
 from . import cache_stats, memory
 from .cache_monitoring import get_cache_monitor
 
-
 # =============================================================================
 # Core: Unified Cache Key Generator (with time-awareness)
 # =============================================================================
@@ -431,7 +430,7 @@ def cacheable(
                 is_hit = False
 
             # Time the operation if it's a miss
-            start_time = time.time() if not is_hit else None
+            start_time = time.time()
 
             # Execute
             try:
