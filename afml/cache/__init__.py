@@ -266,16 +266,6 @@ from .data_access_tracker import (
     print_contamination_report,
 )
 
-# Keep existing robust_cacheable imports
-from .robust_cache_keys import (
-    CacheKeyGenerator,
-    cacheable,
-    data_tracking_cacheable,
-    robust_cacheable,
-    time_aware_cacheable,
-    time_aware_data_tracking_cacheable,
-)
-
 # Import selective cleaner functions after base components are defined
 from .selective_cleaner import (
     cache_maintenance,
@@ -285,6 +275,16 @@ from .selective_cleaner import (
     get_function_tracker,
     selective_cache_clear,
     smart_cacheable,
+)
+
+# Add to imports
+from .unified_cache_system import robust_cacheable  # Backward compatibility alias
+from .unified_cache_system import (
+    cacheable,
+    clf_hyper_fit_auto_cache,
+    cv_cacheable,
+    print_cache_report,
+    time_aware_cacheable,
 )
 
 # MLflow integration (optional)
@@ -641,7 +641,7 @@ __all__ = [
     "FunctionCacheStats",
     "CacheHealthReport",
     "get_cache_monitor",
-    "print_cache_health",
+    "print_cache_report",
     "get_cache_efficiency_report",
     "analyze_cache_patterns",
     "debug_function_cache",
@@ -658,6 +658,7 @@ __all__ = [
     "get_cache_size_info",
     "clear_cache_by_pattern",
     "apply_decorator_to_methods",
+    "clf_hyper_fit_auto_cache",
 ]
 
 
