@@ -319,10 +319,12 @@ def smart_cacheable(func):
     and invalidates its cache accordingly.
     """
     # Import at runtime to avoid circular import
-    from .robust_cache_keys import cacheable
+    from .unified_cache_system import cacheable
 
     # Apply the original cacheable decorator
-    cached_func = cacheable(func)
+    cached_func = cacheable(
+        track_data_access=False, dataset_name=None, purpose=None, time_aware=False
+    )(func)
 
     try:
         tracker = get_function_tracker()
