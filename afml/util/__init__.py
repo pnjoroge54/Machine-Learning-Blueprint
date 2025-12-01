@@ -20,6 +20,7 @@ from .misc import (
     count_max_decimals,
     crop_data_frame_in_batches,
     date_conversion,
+    expand_params,
     flatten_column_names,
     indices_to_mask,
     is_first_weekday,
