@@ -6,6 +6,11 @@ from sklearn.ensemble import BaggingClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 
+from ..cache.unified_cache_system import (
+    cacheable,
+    create_cacheable_param_grid,
+    reconstruct_param_grid,
+)
 from .cross_validation import PurgedKFold
 
 
@@ -239,6 +244,112 @@ def clf_hyper_fit(
                 pipe_clf.set_params(**restore_params)
             except Exception:
                 pass  # Best effort restore
+
+
+@cacheable()
+def clf_hyper_fit_cached(
+    features,
+    labels,
+    t1,
+    pipe_clf,
+    param_grid_cacheable,  # ← Now accepts cacheable version
+    cv=5,
+    bagging_n_estimators=0,
+    bagging_max_samples=1.0,
+    bagging_max_features=1.0,
+    rnd_search_iter=0,
+    n_jobs=-1,
+    pct_embargo=0,
+    random_state=None,
+    verbose=0,
+    **fit_params,
+):
+    """
+    Cached version of clf_hyper_fit that properly handles scipy distributions.
+
+    This is the FIXED version that will cache properly.
+    """
+    # Reconstruct param_grid from cacheable version
+    param_grid = reconstruct_param_grid(param_grid_cacheable)
+
+    return clf_hyper_fit(
+        features=features,
+        labels=labels,
+        t1=t1,
+        pipe_clf=pipe_clf,
+        param_grid=param_grid,
+        cv=cv,
+        bagging_n_estimators=bagging_n_estimators,
+        bagging_max_samples=bagging_max_samples,
+        bagging_max_features=bagging_max_features,
+        rnd_search_iter=rnd_search_iter,
+        n_jobs=n_jobs,
+        pct_embargo=pct_embargo,
+        random_state=random_state,
+        verbose=verbose,
+        **fit_params,
+    )
+
+
+# ============================================================================
+# Convenience wrapper that handles conversion automatically
+# ============================================================================
+
+
+def clf_hyper_fit_auto_cache(
+    features,
+    labels,
+    t1,
+    pipe_clf,
+    param_grid,  # ← Accepts scipy distributions directly
+    cv=5,
+    bagging_n_estimators=0,
+    bagging_max_samples=1.0,
+    bagging_max_features=1.0,
+    rnd_search_iter=0,
+    n_jobs=-1,
+    pct_embargo=0,
+    random_state=None,
+    verbose=0,
+    **fit_params,
+):
+    """
+    Wrapper that automatically converts param_grid for caching.
+
+    Usage:
+        from scipy.stats import randint, uniform
+
+        param_grid = {
+            'clf__n_estimators': randint(100, 500),
+            'clf__max_depth': randint(3, 20),
+        }
+
+        # Just call this instead of clf_hyper_fit
+        model, results = clf_hyper_fit_auto_cache(
+            features, labels, t1, pipe_clf, param_grid
+        )
+    """
+    # Convert to cacheable format
+    param_grid_cacheable = create_cacheable_param_grid(param_grid)
+
+    # Call cached version
+    return clf_hyper_fit_cached(
+        features=features,
+        labels=labels,
+        t1=t1,
+        pipe_clf=pipe_clf,
+        param_grid_cacheable=param_grid_cacheable,
+        cv=cv,
+        bagging_n_estimators=bagging_n_estimators,
+        bagging_max_samples=bagging_max_samples,
+        bagging_max_features=bagging_max_features,
+        rnd_search_iter=rnd_search_iter,
+        n_jobs=n_jobs,
+        pct_embargo=pct_embargo,
+        random_state=random_state,
+        verbose=verbose,
+        **fit_params,
+    )
 
 
 def print_result(clf, n_splits):

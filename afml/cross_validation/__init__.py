@@ -19,7 +19,12 @@ from .cross_validation import (
     ml_cross_val_score,
     ml_get_train_times,
 )
-from .hyperfit import MyPipeline, clf_hyper_fit, param_grid_size
+from .hyperfit import (
+    MyPipeline,
+    clf_hyper_fit,
+    clf_hyper_fit_auto_cache,
+    param_grid_size,
+)
 from .scoring import probability_weighted_accuracy
 
 scoring_methods = {
@@ -44,4 +49,5 @@ __all__ = [
     "CombinatorialPurgedKFold",
     "param_grid_size",
     "scoring_methods",
+    "clf_hyper_fit_auto_cache",
 ]
