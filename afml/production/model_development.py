@@ -1,44 +1,71 @@
-import shutil
-from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 from loguru import logger
+from sklearn import clone
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
-from torch import threshold
 
-from afml.cache import (
+from ..cache import (
+    cacheable,
+    get_cache_monitor,
+    log_data_access,
     print_contamination_report,
-    robust_cacheable,
-    time_aware_cacheable,
-    time_aware_data_tracking_cacheable,
 )
-from afml.cache.cache_monitoring import get_cache_monitor
-from afml.cache.cv_cache import cv_cacheable
-from afml.cache.data_access_tracker import get_data_tracker, log_data_access
-from afml.cache.robust_cache_keys import robust_cacheable, time_aware_cacheable
-from afml.data_structures.bars import calculate_ticks_per_period, make_bars
-from afml.filters.filters import cusum_filter
-from afml.labeling.triple_barrier import (
+
+# from ..cache.unified_cacheable import cached
+from ..data_structures.bars import calculate_ticks_per_period, make_bars
+from ..labeling.triple_barrier import (
     add_vertical_barrier,
     get_event_weights,
     triple_barrier_labels,
 )
-from afml.mt5.load_data import load_tick_data, save_data_to_parquet
-from afml.sample_weights.optimized_attribution import (
-    get_weights_by_time_decay_optimized,
-)
-from afml.strategies.signal_processing import get_entries
-from afml.strategies.signals import BaseStrategy
-from afml.util.constants import DATA_PATH, TIMEFRAMES
-from afml.util.misc import expand_params, value_counts_data
-from afml.util.volatility import get_daily_vol
+from ..mt5.load_data import load_tick_data, save_data_to_parquet
+from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
+from ..strategies.signal_processing import get_entries
+from ..strategies.signals import BaseStrategy
+from ..util.misc import value_counts_data
+from ..util.volatility import get_daily_vol
+
+account_name = ""
 
 
 class TickDataLoader:
+    """
+    Loader for tick-level bid/ask data with local caching.
+
+    Notes
+    -----
+    - Uses in-memory cache keyed by (symbol, start_date, end_date, account_name).
+    - Falls back to MT5 fetch if parquet data is missing.
+    """
+
+    def get_tick_data(self, symbol, start_date, end_date, account_name):
+        """
+        Retrieve tick-level bid/ask data with local caching.
+
+        Parameters
+        ----------
+        symbol : str
+            Trading instrument symbol (e.g., 'EURUSD').
+        start_date : str
+            Start date in 'YYYY-MM-DD' format.
+        end_date : str
+            End date in 'YYYY-MM-DD' format.
+        account_name : str
+            MT5 account identifier for data retrieval.
+
+        Returns
+        -------
+        pd.DataFrame
+            Tick data with columns ['bid', 'ask'] indexed by timestamp.
+
+        Notes
+        -----
+        - Typical performance: ~0.5s for cached retrieval.
+        """
+
     def __init__(self):
         self._cache = {}
 
@@ -68,12 +95,27 @@ class TickDataLoader:
 loader = TickDataLoader()
 
 
-@time_aware_cacheable
+@cacheable()
 def get_bar_size(tick_df, bar_size):
+    """
+    Compute tick-based bar size.
+
+    Parameters
+    ----------
+    tick_df : pd.DataFrame
+        Tick data with bid/ask prices.
+    bar_size : str
+        Bar size specification (e.g., '1min', '5min').
+
+    Returns
+    -------
+    int
+        Number of ticks per period.
+    """
     return calculate_ticks_per_period(tick_df, bar_size)
 
 
-@time_aware_cacheable
+@cacheable(time_aware=True)
 def load_and_prepare_training_data(
     symbol,
     start_date,
@@ -100,17 +142,34 @@ def load_and_prepare_training_data(
     return data
 
 
-@time_aware_cacheable
+@cacheable()
 def create_feature_engineering_pipeline(data: pd.DataFrame, config: Dict) -> pd.DataFrame:
     """
-    Compute all features with caching.
+    Compute engineered features with caching.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Input bar data.
+    config : dict
+        Feature configuration.
+        Expected keys:
+        - func : callable
+            Function that computes features from a DataFrame.
+        - params : dict
+            Parameters passed to `func`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Feature matrix.
     """
     func = config["func"]
     features = func(data, **config["params"])
     return features
 
 
-@time_aware_cacheable
+@cacheable()
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     target_lookback: int,
@@ -120,19 +179,46 @@ def generate_events_triple_barrier(
     max_holding_period: Dict[str, int] = dict(days=1),
     min_ret: float = 0.0,
     vertical_barrier_zero: bool = True,
-) -> pd.Series:
+    filter_as_series: bool = True,
+) -> pd.DataFrame:
     """
-    Generate events using triple-barrier method.
+    Generate trading events using the triple-barrier method.
 
-    Performance:
-    - First run: ~90 seconds
-    - Cached: ~0.5 seconds (180x speedup)
-    - Hit rate: 95.7%
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Price bars with 'close' column.
+    target_lookback : int
+        Lookback window for volatility estimation.
+    strategy : BaseStrategy
+        Strategy instance implementing `generate_signals()`.
+    profit_target : float, default=1
+        Profit-taking threshold multiplier.
+    stop_loss : float, default=1
+        Stop-loss threshold multiplier.
+    max_holding_period : dict, default={'days': 1}
+        Maximum holding period for vertical barrier.
+    min_ret : float, default=0.0
+        Minimum return threshold.
+    vertical_barrier_zero : bool, default=True
+        Allow zero-length vertical barriers.
+    filter_as_series : bool, default=True
+        Pass volatility threshold as series instead of scalar.
+
+    Returns
+    -------
+    pd.DataFrame
+        Event labels with columns:
+        - 'bin' : {-1, 0, 1} classification
+        - 't1'  : vertical barrier timestamps
+        - 'w'   : sample weights
+        - 'tW'  : uniqueness weights
     """
     # Compute barriers
     close = data["close"]
     target = get_daily_vol(close, target_lookback)
-    side, t_events = get_entries(strategy, data, filter_threshold=target.mean())
+    filter_threshold = target if filter_as_series else target.mean()
+    side, t_events = get_entries(strategy, data, filter_threshold)
     vb = add_vertical_barrier(t_events, close, **max_holding_period)
     events = triple_barrier_labels(
         close,
@@ -147,10 +233,11 @@ def generate_events_triple_barrier(
         drop=True,
         verbose=False,
     )
+    events = get_event_weights(events, close)
     return events
 
 
-@time_aware_cacheable
+@cacheable()
 def compute_sample_weights_time_decay(
     events: pd.DataFrame,
     close: pd.Series,
@@ -160,13 +247,29 @@ def compute_sample_weights_time_decay(
 ) -> pd.Series:
     """
     Compute sample weights with time decay.
-    More recent samples get higher weights.
 
-    Performance:
-    - First run: ~5 seconds
-    - Cached: ~0.1 seconds (50x speedup)
+    Parameters
+    ----------
+    events : pd.DataFrame
+        Event labels with uniqueness weights.
+    close : pd.Series
+        Close price series.
+    attribution : str, optional
+        Attribution mode ('return', 'uniqueness', or None).
+    decay_factor : float, default=0.95
+        Decay factor for time weighting.
+    linear : bool, default=True
+        Use linear decay instead of exponential.
+
+    Returns
+    -------
+    pd.Series
+        Time-decay sample weights.
+
+    Notes
+    -----
+    - First run: ~5s; cached: ~0.1s (≈50x speedup).
     """
-    events = get_event_weights(events, close)
     weights = get_weights_by_time_decay_optimized(
         events,
         close.index,
@@ -183,7 +286,6 @@ def compute_sample_weights_time_decay(
         return weights
 
 
-@robust_cacheable
 def train_model_with_cv(
     features: pd.DataFrame,
     events: pd.DataFrame,
@@ -201,21 +303,65 @@ def train_model_with_cv(
     verbose: bool = False,
 ) -> Tuple[RandomForestClassifier, Dict]:
     """
-    Train model with cross-validation.
-    Uses time-aware caching to prevent data leakage.
+    Train model with cross-validation using cached hyperparameter search.
 
-    Performance:
-    - First run: ~300 seconds (5 minutes)
-    - Cached: ~2 seconds (150x speedup)
+    Parameters
+    ----------
+    features : pd.DataFrame
+        Feature matrix.
+    events : pd.DataFrame
+        Event labels.
+    sample_weights : np.ndarray
+        Sample weights aligned with events.
+    pipe_clf : sklearn.Pipeline
+        Pipeline including classifier.
+    param_grid : dict
+        Hyperparameter grid for search.
+    cv_splits : int, default=5
+        Number of CV splits.
+    bagging_n_estimators : int, default=0
+        Number of bagging estimators.
+    bagging_max_samples : float, default=1.0
+        Max samples for bagging.
+    bagging_max_features : float, default=1.0
+        Max features for bagging.
+    rnd_search_iter : int, default=0
+        Randomized search iterations.
+    n_jobs : int, default=-1
+        Parallel jobs.
+    pct_embargo : float, default=0.01
+        Embargo percentage for purging CV splits.
+    random_state : int, optional
+        Random seed.
+    verbose : bool, default=False
+        Verbosity flag.
+
+    Returns
+    -------
+    best_model : RandomForestClassifier
+        Trained best model.
+    cv_results : dict
+        Cross-validation results.
+
+    Notes
+    -----
+    - First run: ~300s; cached: ~2s (≈150x speedup).
+    - Prevents data leakage via time-aware caching.
     """
-    from ..cross_validation.hyperfit import clf_hyper_fit
+    from ..cross_validation.hyperfit import clf_hyper_fit_auto_cache
 
     train_idx = features.dropna().index.intersection(events.index)
     X = features.loc[train_idx]
     y = events.loc[train_idx, "bin"]
     t1 = events.loc[train_idx, "t1"]
     w = sample_weights.loc[train_idx]
-    best_model, cv_results = clf_hyper_fit(
+
+    # Set max_samples to average uniqueness to prevent overfitting
+    if isinstance(pipe_clf.steps[-1][1], RandomForestClassifier):
+        av_uniqueness = events.loc[train_idx, "tW"].mean()
+        pipe_clf.steps[-1][1].set_params(max_samples=av_uniqueness)
+
+    best_model, cv_results = clf_hyper_fit_auto_cache(
         X,
         y,
         t1,
@@ -248,27 +394,95 @@ def develop_production_model(
     reports: bool = False,
 ) -> Tuple[RandomForestClassifier, List[str], Dict]:
     """
-    Complete model development pipeline with aggressive caching.
+    End-to-end production model development pipeline with aggressive caching.
 
-    This function orchestrates the entire workflow, where each
-    step is individually cached for maximum iteration speed.
+    Parameters
+    ----------
+    symbol : str
+        Trading instrument symbol.
+    train_start : str
+        Training start date ('YYYY-MM-DD').
+    train_end : str
+        Training end date ('YYYY-MM-DD').
+    data_config : dict
+        Bar construction config. Keys:
+        - bar_type : str ('tick', 'volume', 'time')
+        - bar_size : int or str
+        - price : str ('bid', 'ask', 'mid')
+    feature_config : dict
+        Feature engineering config. Keys:
+        - func : callable
+        - params : dict
+    label_config : dict
+        Triple-barrier labeling config. Keys:
+        - target_lookback : int
+        - strategy : BaseStrategy
+        - profit_target : float
+        - stop_loss : float
+        - max_holding_period : dict
+        - min_ret : float
+        - vertical_barrier_zero : bool
+        - filter_as_series : bool
+    model_params : dict
+        Configuration for model training and cross-validation.
+        Expected keys:
+        - pipe_clf : sklearn.Pipeline
+            Pipeline including classifier (e.g., RandomForestClassifier).
+        - param_grid : dict
+            Hyperparameter grid for search.
+        - cv_splits : int, optional (default=5)
+            Number of CV splits.
+        - bagging_n_estimators : int, optional (default=0)
+            Number of bagging estimators.
+        - bagging_max_samples : float, optional (default=1.0)
+            Max samples for bagging.
+        - bagging_max_features : float, optional (default=1.0)
+            Max features for bagging.
+        - rnd_search_iter : int, optional (default=0)
+            Randomized search iterations.
+        - n_jobs : int, optional (default=-1)
+            Parallel jobs.
+        - pct_embargo : float, optional (default=0.01)
+            Embargo percentage for purging CV splits.
+        - random_state : int, optional
+            Random seed.
+        - verbose : bool, optional (default=False)
+            Verbosity flag.
+    sample_weight_params : dict
+        Configuration for sample weighting.
+        Expected keys:
+        - attribution : str, optional
+            Attribution mode ('return', 'uniqueness', or None).
+        - decay_factor : float, optional (default=0.95)
+            Decay factor for time weighting.
+        - linear : bool, optional (default=True)
+            Use linear decay instead of exponential.
+    Returns
+    -------
+    model : RandomForestClassifier
+        Trained best model.
+    features : list of str
+        Names of engineered features.
+    metrics : dict
+        Dictionary containing:
+        - 'cv_results' : cross-validation results
+        - 'feature_importance' : ranked feature importance DataFrame
+        - 'training_samples' : number of samples used
+        - 'feature_count' : number of features generated
 
-    Example usage:
-        model, features, metrics = develop_production_model(
-            symbol='EURUSD',
-            train_start='2024-01-01',
-            train_end='2024-06-30',
-            feature_config={'vpin_window': 100},
-            label_config={'profit_target': 0.01, 'stop_loss': 0.005},
-            model_params={'n_estimators': [100, 200], 'max_depth': [5, 10]}
-        )
+    Notes
+    -----
+    Config dictionaries must include the following keys:
 
-    Performance (50 hyperparameter configurations):
-        Without cache: 5.4 hours
-        With cache (first run): 5.4 hours
-        With cache (subsequent runs): 1.5 hours
-        Time saved per iteration: 3.9 hours
+    - data_config : {'bar_type', 'bar_size', 'price'}
+    - feature_config : {'func', 'params'}
+    - label_config : {'target_lookback', 'strategy', 'profit_target', 'stop_loss', ...}
+    - model_params : {'pipe_clf', 'param_grid', 'cv_splits', ...}
+    - sample_weight_params : {'attribution', 'decay_factor', 'linear'}
+
+    See individual function docstrings for detailed argument descriptions.
     """
+
     print("\n" + "=" * 70)
     print("PRODUCTION MODEL DEVELOPMENT PIPELINE")
     print("=" * 70)
