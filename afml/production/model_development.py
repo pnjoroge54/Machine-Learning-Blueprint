@@ -3,7 +3,6 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from loguru import logger
-from sklearn import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
@@ -28,8 +27,6 @@ from ..strategies.signals import BaseStrategy
 from ..util.misc import value_counts_data
 from ..util.volatility import get_daily_vol
 
-account_name = ""
-
 
 class TickDataLoader:
     """
@@ -40,6 +37,9 @@ class TickDataLoader:
     - Uses in-memory cache keyed by (symbol, start_date, end_date, account_name).
     - Falls back to MT5 fetch if parquet data is missing.
     """
+
+    def __init__(self):
+        self._cache = {}
 
     def get_tick_data(self, symbol, start_date, end_date, account_name):
         """
@@ -65,11 +65,6 @@ class TickDataLoader:
         -----
         - Typical performance: ~0.5s for cached retrieval.
         """
-
-    def __init__(self):
-        self._cache = {}
-
-    def get_tick_data(self, symbol, start_date, end_date, account_name):
         key = (symbol, start_date, end_date, account_name)
         if key in self._cache:
             return self._cache[key]
@@ -117,14 +112,39 @@ def get_bar_size(tick_df, bar_size):
 
 @cacheable(time_aware=True)
 def load_and_prepare_training_data(
-    symbol,
-    start_date,
-    end_date,
-    account_name,
-    bar_type,
-    bar_size,
-    price,
+    symbol, start_date, end_date, account_name, bar_type, bar_size, price
 ):
+    """
+    Load tick data and construct bars for training.
+
+    Parameters
+    ----------
+    symbol : str
+        Trading instrument symbol.
+    start_date : str
+        Training start date ('YYYY-MM-DD').
+    end_date : str
+        Training end date ('YYYY-MM-DD').
+    account_name : str
+        MT5 account identifier.
+    bar_type : str
+        Type of bar ('tick', 'volume', 'time').
+    bar_size : int or str
+        Bar size. If 'tick' and str, converted via `get_bar_size`.
+    price : str
+        Price type ('bid', 'ask', 'mid').
+
+    Returns
+    -------
+    pd.DataFrame
+        Constructed bars indexed by timestamp.
+
+    Notes
+    -----
+    - Logs data access for contamination tracking.
+    - Cached for reproducibility.
+    """
+
     tick_df = loader.get_tick_data(symbol, start_date, end_date, account_name)
 
     if bar_type == "tick" and isinstance(bar_size, str):
