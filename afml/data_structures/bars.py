@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from afml.util.misc import (
+from ..util.misc import (
     flatten_column_names,
     log_df_info,
     optimize_dtypes,
@@ -69,6 +69,7 @@ def _make_bar_type_grouper(
     Returns:
         - GroupBy object for aggregation
         - Calculated bar_size (for tick/dollar/volume bars)
+        - Bar ids
     """
     df = df.copy(deep=False)
 
@@ -91,7 +92,7 @@ def _make_bar_type_grouper(
             if not freq.startswith(("B", "W"))
             else df.resample(freq)
         )
-        return bar_group, bar_size
+        return bar_group, bar_size, None
 
     # Dynamic bar sizing
     if isinstance(bar_size, str) and bar_type == "tick":
@@ -119,7 +120,7 @@ def _make_bar_type_grouper(
     else:
         raise NotImplementedError(f"{bar_type} bars not implemented")
 
-    return df.groupby(bar_id), bar_size
+    return df.groupby(bar_id), bar_size, bar_id
 
 
 def make_bars(
@@ -127,6 +128,7 @@ def make_bars(
     bar_type: str = "tick",
     bar_size: Union[int, str] = 100,
     price: str = "mid_price",
+    tick_num: bool = True,
     verbose: bool = False,
 ):
     """
@@ -138,26 +140,25 @@ def make_bars(
         bar_size (int | str): For non-time bars; if str, dynamic calculation is used.
         timeframe (str): Timeframe for calculation.
         price (str): Price field strategy ('bid', 'ask', 'mid_price', 'bid_ask').
+        tick_num (bool): Add column with index of which tick where each bar was formed if True.
         verbose (bool): Prints runtime details if True.
 
     Returns:
         pd.DataFrame: OHLC bars with additional metrics.
     """
-    if price == "mid_price" and price not in tick_df.columns:
-        # Modifies the tick_df, which is OK as we'll not want to keep
-        # repeating this calculation when making other bars.
-        tick_df["mid_price"] = (tick_df["bid"] + tick_df["ask"]) / 2
+    tick_df["mid_price"] = (tick_df["bid"] + tick_df["ask"]) / 2
     if "spread" not in tick_df.columns:
         tick_df["spread"] = tick_df["ask"] - tick_df["bid"]
+        tick_df["spread_bps"] = tick_df["spread"] / tick_df["mid_price"] * 10000
 
     price_cols = ["bid", "ask"] if price == "bid_ask" else [price]
-    price_cols += ["spread"]
+    price_cols += ["spread", "spread_bps"]
     if bar_type in ("volume", "dollar"):
         if "volume" not in tick_df:
             raise KeyError(f"'volume' column required for {bar_type} bars")
         price_cols.append("volume")  # Add volume for dollar- and volume- bars
 
-    bar_group, bar_size = _make_bar_type_grouper(tick_df[price_cols], bar_type, bar_size)
+    bar_group, bar_size, bar_id = _make_bar_type_grouper(tick_df[price_cols], bar_type, bar_size)
 
     if price != "bid_ask":
         ohlc_df = bar_group[price].ohlc()
@@ -169,6 +170,7 @@ def make_bars(
             ohlc_df[col] = ohlc_df.filter(regex=col).sum(axis=1).div(2)
 
     ohlc_df["spread"] = bar_group["spread"].mean()
+    ohlc_df["spread_bps"] = bar_group["spread_bps"].mean()
     ohlc_df["tick_volume"] = bar_group.size() if bar_type != "tick" else bar_size
 
     if "volume" in tick_df.columns:
@@ -176,18 +178,27 @@ def make_bars(
 
     if bar_type == "time":
         eq_zero = ohlc_df["tick_volume"] == 0
-        nzeros = eq_zero.sum()
-        nrows = ohlc_df.shape[0]
-        msg = f"{nzeros:,} of {nrows:,} ({nzeros / nrows:.2%}) rows with zero tick volume."
         ohlc_df = ohlc_df[~eq_zero]
+
+        nzeros = eq_zero.sum()
         if nzeros > 0:
+            nrows = ohlc_df.shape[0]
+            msg = f"{nzeros:,} of {nrows:,} ({nzeros / nrows:.2%}) rows with zero tick volume."
             logger.info(f"Dropped {msg}")
+
+        if tick_num:
+            ohlc_df["tick_num"] = ohlc_df["tick_volume"].cumsum() - 1
+
     else:
         ohlc_df.index = bar_group["time"].last() + pd.Timedelta(
             microseconds=1
         )  # Ensure end time is after last tick
+
         if len(tick_df) % bar_size > 0:
             ohlc_df = ohlc_df.iloc[:-1]
+
+        if tick_num:
+            ohlc_df["tick_num"] = _get_bar_tick_indices(tick_df, bar_size, bar_id)
 
     try:
         ohlc_df = ohlc_df.tz_convert(None)  # Remove timezone information from index
@@ -206,3 +217,41 @@ def make_bars(
         log_df_info(ohlc_df)
 
     return ohlc_df
+
+
+def _get_bar_tick_indices(tick_df, bar_size, bar_id) -> pd.Series:
+    """
+    Return the tick indices that form each bar.
+
+    Parameters
+    ----------
+    tick_df : pd.DataFrame
+        Tick data with datetime index (or 'time' column).
+    bar_type : str, default 'tick'
+        Bar type ('tick', 'time', 'volume', 'dollar').
+    bar_size : int or str, default 100
+        Bar size. If str and bar_type='tick', dynamic calculation is used.
+
+    Returns
+    -------
+    pd.Series
+        Series indexed by bar end time with tick number on which bar was formed
+    """
+    n_ticks = len(tick_df)
+
+    # Find where bar_id changes (new bar starts)
+    # diff > 0 indicates a bar boundary
+    diff = np.diff(bar_id, prepend=-1)
+    boundary_indices = np.where(diff > 0)[0]
+
+    # Last tick indices are one before each boundary
+    last_indices = boundary_indices - 1
+
+    # Add final bar if complete
+    if n_ticks % bar_size == 0 and n_ticks > 0:
+        last_indices = np.append(last_indices, n_ticks - 1)
+
+    # Filter valid indices
+    last_indices = last_indices[last_indices >= 0]
+
+    return last_indices
