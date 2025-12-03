@@ -32,9 +32,7 @@ def get_entries(
                                 - -1 = Short signal
                                 - 0 = No signal/neutral
 
-        data (pd.DataFrame): Market data DataFrame. Must contain 'close' column if
-                            filter_events=True. Index must be DatetimeIndex.
-
+        data (pd.DataFrame): Market data OHLC DataFrame.
         filter_threshold (Union[float, pd.Series], optional): Threshold for CUSUM filter.
                                                              - If float: Fixed threshold
                                                              - If Series: Dynamic threshold
@@ -68,8 +66,8 @@ def get_entries(
         Based on concepts from "Advances in Financial Machine Learning" by Marcos López de Prado,
         particularly around event-driven backtesting and signal processing.
     """
-    primary_signals = strategy.generate_signals(data)
-    signal_mask = primary_signals != 0
+    signals = strategy.generate_signals(data)
+    signal_mask = signals != 0
 
     # Vectorized CUSUM filter application
     if filter_threshold is not None:
@@ -85,7 +83,7 @@ def get_entries(
             close = close.reindex(filter_threshold.index)
 
         filtered_events = cusum_filter(close, filter_threshold)
-        signal_mask &= primary_signals.index.isin(filtered_events)
+        signal_mask &= signals.index.isin(filtered_events)
         thres = (
             f"(threshold = {filter_threshold:.4%})"
             if isinstance(filter_threshold, float)
@@ -95,15 +93,19 @@ def get_entries(
     else:
         # Vectorized signal change detection
         if on_crossover:
-            signal_mask &= primary_signals != primary_signals.shift()
+            signal_mask &= signals != signals.shift()
             msg = " generated from crossovers"
         else:
             msg = ""
 
-    t_events = primary_signals.index[signal_mask]
+    t_events = signals.index[signal_mask]
     n = len(t_events)
+    long = (signals.loc[t_events] == 1).sum()
+    short = (signals.loc[t_events] == -1).sum()
     logger.info(
-        f"{strategy.get_strategy_name()} | {n:,} ({n / sum(primary_signals != 0):.2%}) trade events{msg}."
+        f"\n{strategy.get_strategy_name()} | {n:,} ({n / sum(signals != 0):.2%}) trade events{msg}.\n"
+        f"   Long signals:  {long:,} ({long / n:.2%})\n"
+        f"   Short signals: {short:,} ({short / n:.2%})\n"
     )
 
-    return primary_signals, t_events
+    return signals, t_events

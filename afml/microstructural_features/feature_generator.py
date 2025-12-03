@@ -5,22 +5,21 @@ Vectorized implementation for market microstructure feature calculation.
 Uses Numba for critical path optimization and avoids Python loops.
 """
 
-from typing import Union, Optional, Dict, List
+from typing import Dict, List, Optional, Union
+
 import numpy as np
 import pandas as pd
 from numba import njit, prange
-import warnings
 
 # Local imports
 from ..util.misc import crop_data_frame_in_batches
-from .encoding import encode_array, encode_tick_rule_array
+from .encoding import encode_array
 from .entropy import (
     get_konto_entropy,
     get_lempel_ziv_entropy,
     get_plug_in_entropy,
     get_shannon_entropy,
 )
-from .misc import get_avg_tick_size, vwap
 from .second_generation import (
     get_trades_based_amihud_lambda,
     get_trades_based_hasbrouck_lambda,
@@ -180,7 +179,7 @@ def _compute_basic_features_numba(
     return avg_tick_sizes, tick_rule_sums, vwap_values
 
 
-class OptimizedMicrostructuralFeaturesGenerator:
+class MicrostructuralFeaturesGenerator:
     """
     Optimized version of MicrostructuralFeaturesGenerator with:
     - Numba-accelerated core loops
@@ -346,7 +345,7 @@ class OptimizedMicrostructuralFeaturesGenerator:
 
         Examples
         --------
-        >>> generator = OptimizedMicrostructuralFeaturesGenerator(tick_data, bar_indices)
+        >>> generator = MicrostructuralFeaturesGenerator(tick_data, bar_indices)
         >>> features = generator.get_features(verbose=True)
         >>> features.shape
         (1000, 22)  # Number of bars × number of features
@@ -627,40 +626,3 @@ class OptimizedMicrostructuralFeaturesGenerator:
             pd.to_datetime(test_batch.iloc[0, 0])
         except ValueError:
             print("Column 0 is not a valid datetime format:", test_batch.iloc[0, 0])
-
-
-# ========== SIMPLIFIED VERSION ==========
-class SimpleMicrostructuralFeaturesGenerator(OptimizedMicrostructuralFeaturesGenerator):
-    """
-    Simplified version that only computes Shannon and Lempel-Ziv entropy.
-
-    This is recommended for most applications where you need basic entropy measures
-    without the computational overhead of all four entropy types.
-
-    Usage:
-    ------
-    >>> generator = SimpleMicrostructuralFeaturesGenerator(
-    ...     tick_data, bar_indices,
-    ...     volume_encoding={'quantile': 10},
-    ...     pct_encoding={'sigma': 0.01}
-    ... )
-    >>> features = generator.get_features()
-    """
-
-    def __init__(
-        self,
-        trades_input: Union[str, pd.DataFrame],
-        tick_num_series: pd.Series,
-        batch_size: int = 2_000_000,
-        volume_encoding: Optional[Dict] = None,
-        pct_encoding: Optional[Dict] = None,
-    ):
-        # Only compute Shannon and Lempel-Ziv entropy
-        super().__init__(
-            trades_input=trades_input,
-            tick_num_series=tick_num_series,
-            batch_size=batch_size,
-            volume_encoding=volume_encoding,
-            pct_encoding=pct_encoding,
-            entropy_types=["shannon", "lempel_ziv"],  # Only these two
-        )

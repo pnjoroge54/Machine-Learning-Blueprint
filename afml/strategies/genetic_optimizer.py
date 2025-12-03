@@ -1,3 +1,41 @@
+"""
+Genetic Algorithm Optimization for Triple Barrier Labeling
+==========================================================
+
+This module provides tools to optimize profit-taking, stop-loss, and time-horizon
+parameters for triple barrier labeling in trading strategies. It integrates
+performance evaluation, caching, and genetic algorithms (single-objective and
+multi-objective Pareto optimization).
+
+Main Components
+---------------
+- GAOptimal: Dataclass representing optimal GA solutions.
+- OptimizationConfig: Dataclass for tracking optimization runs.
+- TripleBarrierEvaluator: Evaluates triple barrier parameters with caching and
+  computes performance metrics.
+- SingleObjectiveOptimizer: Genetic algorithm optimizer for single objective
+  strategies.
+- ParetoOptimizer: Multi-objective optimizer using NSGA-II for Pareto front
+  solutions.
+- select_knee_point: Utility to select the knee point from Pareto front.
+- get_optimal_triple_barrier_labels: High-level function to run optimization and
+  return labeled events and metrics.
+
+Dependencies
+------------
+- pandas, numpy, deap, numba, loguru
+- Internal modules: backtest_statistics, cache, labeling, util.volatility,
+  signal_processing, signals
+
+Usage Example
+-------------
+>>> strategy = MyStrategy(params)
+>>> optimizer = ParetoOptimizer(population_size=100, generations=50)
+>>> events, metrics = get_optimal_triple_barrier_labels(
+...     strategy, optimizer, data, bar_size="1h"
+... )
+"""
+
 import hashlib
 import inspect
 import json
@@ -91,7 +129,51 @@ class OptimizationConfig:
 
 
 class TripleBarrierEvaluator:
-    """Evaluator for triple barrier parameters with performance caching"""
+    """
+    Evaluator for triple barrier parameters with performance caching.
+
+    Responsibilities
+    ----------------
+    - Generate entry signals from a trading strategy.
+    - Apply triple barrier labeling with profit-taking, stop-loss, and vertical barriers.
+    - Cache expensive evaluations using dataset fingerprints.
+    - Compute performance metrics (Sharpe, Sortino, Calmar, etc.).
+    - Provide objective scores for single- and multi-objective optimization.
+
+    Parameters
+    ----------
+    strategy : BaseStrategy
+        Trading strategy instance (e.g., Bollinger, MA).
+    data : pd.DataFrame
+        Market data with DateTimeIndex and 'close' prices.
+    target_vol_params : dict, default {"days": 1, "lookback": 100}
+        Parameters for volatility estimation.
+    target_vol_multiplier : int, default 1
+        Multiplier for volatility-based barriers.
+    filter_events : bool, default False
+        Whether to apply CUSUM filter to events.
+    filter_as_series : bool, default False
+        Pass volatility threshold as series instead of scalar.
+    vertical_barrier_zero : bool, default True
+        Label vertical barrier events as 0 instead of sign of return.
+    trading_days_per_year : int, default 252
+        Annualization factor for metrics.
+    trading_hours_per_day : int, default 24
+        Annualization factor for metrics.
+    on_crossover : bool, default True
+        Whether to generate signals on crossover events.
+
+    Methods
+    -------
+    evaluate_performance(pt, sl, time_horizon)
+        Apply triple barrier labeling with caching.
+    calculate_strategy_metrics(events)
+        Compute performance metrics from labeled events.
+    get_objective_score(metrics)
+        Return weighted score for single-objective optimization.
+    get_multi_objectives(metrics)
+        Return tuple of objectives for Pareto optimization.
+    """
 
     def __init__(
         self,
@@ -496,7 +578,7 @@ class ParetoOptimizer:
         generations=50,
         crossover_rate=0.8,
         mutation_rate=0.2,
-        bounds=dict(pt=[0.5, 5], sl=[0.5, 5], time_horizon=[5, 100]),
+        bounds=dict(pt=[0, 5], sl=[0.5, 5], time_horizon=[5, 100]),
     ):
         # Set population_size to multiple of 4 to avoid error with `tools.selTournamentDCD`
         self.population_size = population_size - (population_size % 4)
@@ -715,6 +797,54 @@ def get_optimal_triple_barrier_labels(
     target_vol_params: dict = {"days": 1, "lookback": 100},
     **kwargs,
 ) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Run Pareto optimization for triple barrier labeling and return optimal events.
+
+    Parameters
+    ----------
+    strategy : BaseStrategy
+        Trading strategy instance.
+    optimizer : ParetoOptimizer
+        Multi-objective optimizer instance.
+    data : pd.DataFrame
+        Market data with DateTimeIndex and OHLC prices.
+    bar_size : str
+        Bar size string (e.g., 'H1', 'M5').
+    target_vol_params : dict, optional
+        Parameters for volatility estimation.
+    **kwargs :
+        Additional evaluator parameters passed to `TripleBarrierEvaluator`.
+
+        Supported keys:
+        ----------------
+        filter_events : bool, default False
+            Apply CUSUM filter to close prices using target volatility series as threshold.
+        filter_as_series : bool, default False
+            If True, pass the volatility threshold as a Series; otherwise, use a scalar mean.
+        vertical_barrier_zero : bool, default True
+            If True, label events that touch the vertical barrier as 0; otherwise, use the sign of return.
+        trading_days_per_year : int, default 252
+            Number of trading days used for annualization of metrics.
+        trading_hours_per_day : int, default 24
+            Number of trading hours used for annualization of metrics.
+        on_crossover : bool, default True
+            Whether to generate primary signals on crossover events.
+        target_vol_multiplier : int, default 1
+            Multiplier applied to the volatility series when setting horizontal barriers.
+
+    Returns
+    -------
+    events : pd.DataFrame
+        Labeled trades with returns and barrier outcomes.
+    trade_metrics : pd.Series
+        Performance metrics for the optimal solution.
+
+    Notes
+    -----
+    - Uses knee-point selection from Pareto front.
+    - Saves optimization results to JSON in GA_logs_triple_barrier/.
+    """
+
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_seed = get_dynamic_seed()
     random.seed(run_seed)
