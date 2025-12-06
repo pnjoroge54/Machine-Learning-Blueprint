@@ -19,9 +19,8 @@ from sklearn.metrics import (
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection._split import _BaseKFold
 
-from afml.cache.cv_cache import cv_cache_with_classifier_state, cv_cacheable
-from afml.cross_validation.scoring import probability_weighted_accuracy
-from afml.ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from .scoring import probability_weighted_accuracy
 
 
 def ml_get_train_times(t1: pd.Series, test_times: pd.Series) -> pd.Series:
@@ -154,11 +153,12 @@ class PurgedSplit:
                     train_indices.extend(loc)
                 else:
                     train_indices.append(loc)
-            return np.array(train_indices), test_indices
+            return train_indices, test_indices
 
 
 # noinspection PyPep8Naming
-@cv_cacheable
+
+
 def ml_cross_val_score(
     classifier: ClassifierMixin,
     X: pd.DataFrame,
@@ -295,7 +295,6 @@ def ml_cross_val_score(
     return np.array(ret_scores)
 
 
-@cv_cache_with_classifier_state
 def ml_cross_val_score_with_models(
     classifier: ClassifierMixin,
     X: pd.DataFrame,
@@ -437,7 +436,6 @@ def ml_cross_val_score_with_models(
     return np.array(ret_scores), models
 
 
-@cv_cacheable
 def analyze_cross_val_scores(
     classifier: ClassifierMixin,
     X: pd.DataFrame,
@@ -568,7 +566,6 @@ def analyze_cross_val_scores(
     return ret_scores, scores_df, confusion_matrix_breakdown
 
 
-@cv_cacheable
 def analyze_cross_val_scores_calibrated(
     classifier: ClassifierMixin,
     X: pd.DataFrame,
