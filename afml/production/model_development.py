@@ -7,6 +7,7 @@ from loguru import logger
 from numba import njit, prange
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
+from tqdm import tqdm
 
 from ..cache import (
     cacheable,
@@ -15,8 +16,6 @@ from ..cache import (
     print_contamination_report,
 )
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
-
-# from ..cache.unified_cacheable import cached
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..labeling.triple_barrier import (
     add_vertical_barrier,
@@ -295,8 +294,8 @@ def generate_events_triple_barrier(
     return events
 
 
-@cacheable()
-def compute_sample_weights(
+@cacheable(time_aware=True)
+def compute_best_sample_weights(
     data: pd.DataFrame,
     events: pd.DataFrame,
     features: pd.DataFrame,
@@ -357,13 +356,23 @@ def compute_sample_weights(
 
     best_scheme = None
     best_score = 0
-    for scheme, weight in weighting_schemes.items():
+    for scheme, weight in tqdm(
+        weighting_schemes.items(),
+        desc=f"Computing best weighting scheme from {list(weighting_schemes.keys())}",
+        leave=False,
+        total=len(weighting_schemes),
+    ):
         best_scheme, best_score = get_best_weighting_scheme(weight, scheme, best_scheme, best_score)
 
     decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
     best_weighting_scheme = best_scheme
     best_weight = weighting_schemes[best_scheme]
-    for time_decay in reversed(decay_factors):
+    for time_decay in tqdm(
+        reversed(decay_factors),
+        desc=f"{best_weighting_scheme} time-decay for decay factors in {decay_factors}",
+        leave=False,
+        total=len(decay_factors),
+    ):
         for linear in (0, 1):
             decay_w = get_weights_by_time_decay_optimized(
                 triple_barrier_events=events.loc[valid_index],
@@ -454,26 +463,6 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
         metrics[f"rolling_f1_{window}"] = f1
 
     return metrics.dropna()
-
-
-def add_rolling_metrics_with_trend(events, close):
-    """Include trend-following metrics alongside mean-reversion metrics"""
-    features = {}
-    recent_signals = []
-    index = close.index.get_indexer(events.index)
-
-    for i, j in enumerate(index):
-        if i >= 100:
-            price_position = (
-                abs(close.iloc[i] - close.iloc[i - 20 : i].mean()) / close.iloc[i - 20 : i].std()
-            )
-            if price_position > 2:  # More than 2 std from mean
-                recent_signals.append(events["bin"].iloc[j])
-
-        if recent_signals and len(recent_signals) >= 10:
-            features[events.index[j]] = np.mean(recent_signals[j - 10 : j])
-
-    return pd.Series(features, name="trend_following_performance")
 
 
 def train_model_with_cv(
@@ -691,7 +680,8 @@ def develop_production_model(
 
     # Step 4: Sample weights (cached)
     print("\n[Step 4/7] Computing sample weights...")
-    sample_weights = compute_sample_weights(data, events, features)
+    features = features.join(events["side"], how="inner")
+    sample_weights = compute_best_sample_weights(data, events, features)
 
     # Step 5: Rolling meta-label features (cached)
     print("\n[Step 5/7] Computing rolling meta-label features...")
