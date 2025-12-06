@@ -246,8 +246,8 @@ def clf_hyper_fit(
                 pass  # Best effort restore
 
 
-@cacheable()
-def clf_hyper_fit_cached(
+@cacheable(auto_versioning=False)
+def clf_hyper_fit_internal(
     features,
     labels,
     t1,
@@ -296,7 +296,7 @@ def clf_hyper_fit_cached(
 # ============================================================================
 
 
-def clf_hyper_fit_auto_cache(
+def clf_hyper_fit_cached(
     features,
     labels,
     t1,
@@ -333,7 +333,7 @@ def clf_hyper_fit_auto_cache(
     param_grid_cacheable = create_cacheable_param_grid(param_grid)
 
     # Call cached version
-    return clf_hyper_fit_cached(
+    return clf_hyper_fit_internal(
         features=features,
         labels=labels,
         t1=t1,
