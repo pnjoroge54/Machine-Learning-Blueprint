@@ -1,8 +1,10 @@
+from pprint import pprint
 from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 from loguru import logger
+from numba import njit, prange
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
@@ -12,6 +14,7 @@ from ..cache import (
     log_data_access,
     print_contamination_report,
 )
+from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 
 # from ..cache.unified_cacheable import cached
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
@@ -90,6 +93,32 @@ class TickDataLoader:
 loader = TickDataLoader()
 
 
+# def generate_features_with_dual_price(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+#     """
+#     Generate features using both bid and ask prices separately.
+#     Returns features for analysis and conservative estimates for trading.
+#     """
+#     # For signal generation (use mid)
+#     df["mid_price"] = (df["bid"] + df["ask"]) / 2
+#     mid_features = calculate_features(df, price_col="mid_price")
+
+#     # For conservative trading estimates (use worse case)
+#     # Assume you buy at ask, sell at bid
+#     df["conservative_long"] = df["ask"]  # Entry for longs
+#     df["conservative_short"] = df["bid"]  # Entry for shorts
+
+#     # For bid-ask spread analysis
+#     df["spread"] = df["ask"] - df["bid"]
+#     df["spread_bps"] = df["spread"] / df["mid_price"] * 10000
+
+#     return {
+#         "mid_features": mid_features,  # For signal generation
+#         "bid_features": calculate_features(df, "bid"),
+#         "ask_features": calculate_features(df, "ask"),
+#         "spread_features": df[["spread", "spread_bps"]],
+#     }
+
+
 @cacheable()
 def get_bar_size(tick_df, bar_size):
     """
@@ -143,6 +172,7 @@ def load_and_prepare_training_data(
     -----
     - Logs data access for contamination tracking.
     - Cached for reproducibility.
+    - Prevents data leakage via time-aware caching.
     """
 
     tick_df = loader.get_tick_data(symbol, start_date, end_date, account_name)
@@ -162,7 +192,7 @@ def load_and_prepare_training_data(
     return data
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def create_feature_engineering_pipeline(data: pd.DataFrame, config: Dict) -> pd.DataFrame:
     """
     Compute engineered features with caching.
@@ -183,13 +213,17 @@ def create_feature_engineering_pipeline(data: pd.DataFrame, config: Dict) -> pd.
     -------
     pd.DataFrame
         Feature matrix.
+
+    Notes
+    -----
+    - Prevents data leakage via time-aware caching.
     """
     func = config["func"]
     features = func(data, **config["params"])
     return features
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     target_lookback: int,
@@ -221,7 +255,7 @@ def generate_events_triple_barrier(
     min_ret : float, default=0.0
         Minimum return threshold.
     vertical_barrier_zero : bool, default=True
-        Allow zero-length vertical barriers.
+        Set label to zero if vertical barrier is reached.
     filter_as_series : bool, default=True
         Pass volatility threshold as series instead of scalar.
 
@@ -233,6 +267,10 @@ def generate_events_triple_barrier(
         - 't1'  : vertical barrier timestamps
         - 'w'   : sample weights
         - 'tW'  : uniqueness weights
+
+    Notes
+    -----
+    - Prevents data leakage via time-aware caching.
     """
     # Compute barriers
     close = data["close"]
@@ -258,52 +296,184 @@ def generate_events_triple_barrier(
 
 
 @cacheable()
-def compute_sample_weights_time_decay(
+def compute_sample_weights(
+    data: pd.DataFrame,
     events: pd.DataFrame,
-    close: pd.Series,
-    attribution: str = None,
-    decay_factor: float = 0.95,
-    linear: bool = True,
+    features: pd.DataFrame,
 ) -> pd.Series:
     """
-    Compute sample weights with time decay.
+    Compute best sample weight with time decay.
 
     Parameters
     ----------
+    data: pd.DataFrame
+        Price data.
     events : pd.DataFrame
         Event labels with uniqueness weights.
-    close : pd.Series
-        Close price series.
-    attribution : str, optional
-        Attribution mode ('return', 'uniqueness', or None).
-    decay_factor : float, default=0.95
-        Decay factor for time weighting.
-    linear : bool, default=True
-        Use linear decay instead of exponential.
+    features: pd.DataFrame
+        Training features
 
     Returns
     -------
     pd.Series
-        Time-decay sample weights.
+        Sample weights.
 
-    Notes
-    -----
-    - First run: ~5s; cached: ~0.1s (≈50x speedup).
     """
-    weights = get_weights_by_time_decay_optimized(
-        events,
-        close.index,
-        last_weight=decay_factor,
-        linear=linear,
-        av_uniqueness=events["tW"],
-        verbose=False,
+    valid_index = features.index.intersection(events.index)
+    cont = events.loc[valid_index]
+    weighting_schemes = {
+        "unweighted": pd.Series(1.0, index=valid_index),
+        "uniqueness": cont["tW"],
+        "return": cont["w"],
+    }
+    X = features.loc[valid_index]
+    y = cont["bin"]
+    cv_gen = PurgedKFold(n_splits=5, t1=cont["t1"], pct_embargo=0.01)
+    classifier = RandomForestClassifier(
+        criterion="entropy",
+        class_weight="balanced_subsample",
+        max_samples=cont["tW"].mean(),
+        max_depth=4,
+        min_weight_fraction_leaf=0.05,
+        random_state=42,
+        n_jobs=-1,
     )
-    if attribution == "return":
-        return weights * events["w"]
-    elif attribution == "uniqueness":
-        return weights * events["tW"]
-    else:
-        return weights
+
+    def get_best_weighting_scheme(weight, scheme, best_scheme, best_score):
+        cv_scores = ml_cross_val_score(
+            classifier,
+            X,
+            y,
+            cv_gen,
+            sample_weight_train=weight,
+            sample_weight_score=weight,
+            scoring="f1",
+        )
+        score = cv_scores.mean()
+        best_score = max(score, best_score)
+        if best_scheme is None or score == best_score:
+            best_scheme = scheme
+        return best_scheme, best_score
+
+    best_scheme = None
+    best_score = 0
+    for scheme, weight in weighting_schemes.items():
+        best_scheme, best_score = get_best_weighting_scheme(weight, scheme, best_scheme, best_score)
+
+    decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
+    best_weighting_scheme = best_scheme
+    best_weight = weighting_schemes[best_scheme]
+    for time_decay in reversed(decay_factors):
+        for linear in (0, 1):
+            decay_w = get_weights_by_time_decay_optimized(
+                triple_barrier_events=events.loc[valid_index],
+                close_index=data.index,
+                last_weight=time_decay,
+                linear=linear,
+                av_uniqueness=cont["tW"],
+            )
+            weight = best_weight * decay_w
+            decay_method = "linear" if linear else "exponential"
+            scheme = f"{best_weighting_scheme}_{decay_method}_decay_{time_decay}"
+            weighting_schemes[scheme] = weight
+            best_scheme, best_score = get_best_weighting_scheme(
+                weight, scheme, best_scheme, best_score
+            )
+
+    logger.info(f"\nBest Weighting Scheme: {' '.join(best_scheme.split('_')).title()}")
+
+    return weighting_schemes[best_scheme]
+
+
+@njit(parallel=True, fastmath=True, cache=True)
+def _rolling_metrics_numba(y_true, y_pred, weights, window):
+    """Numba-accelerated rolling metrics calculation."""
+    n = len(y_true)
+    accuracy = np.full(n, np.nan)
+    precision = np.full(n, np.nan)
+    recall = np.full(n, np.nan)
+    f1 = np.full(n, np.nan)
+
+    for i in prange(window - 1, n):
+        start = i - window + 1
+        tp = fp = tn = fn = 0.0
+
+        # Inner loop for window
+        for j in range(start, i + 1):
+            if y_true[j] == 1 and y_pred[j] == 1:
+                tp += weights[j]
+            elif y_true[j] == 0 and y_pred[j] == 1:
+                fp += weights[j]
+            elif y_true[j] == 0 and y_pred[j] == 0:
+                tn += weights[j]
+            elif y_true[j] == 1 and y_pred[j] == 0:
+                fn += weights[j]
+
+        total = tp + fp + tn + fn
+        if total > 0:
+            accuracy[i] = (tp + tn) / total
+
+        denom_prec = tp + fp
+        if denom_prec > 0:
+            precision[i] = tp / denom_prec
+
+        denom_rec = tp + fn
+        if denom_rec > 0:
+            recall[i] = tp / denom_rec
+
+        if not np.isnan(precision[i]) and not np.isnan(recall[i]):
+            denom_f1 = precision[i] + recall[i]
+            if denom_f1 > 0:
+                f1[i] = 2 * (precision[i] * recall[i]) / denom_f1
+
+    return accuracy, precision, recall, f1
+
+
+@cacheable(time_aware=True)
+def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
+    """
+    Calculate rolling performance metrics with Numba acceleration.
+
+    Returns: DataFrame of rolling metrics
+    """
+    y_true = events["bin"].to_numpy().astype(np.int8)
+    y_pred = np.ones(len(y_true), dtype=np.int8)  # All predictions are 1
+    weights = sample_weight.to_numpy().astype(np.float32)
+
+    metrics = pd.DataFrame(index=events.index)
+
+    for window in window_sizes:
+        if window > len(y_true):
+            continue
+
+        accuracy, precision, recall, f1 = _rolling_metrics_numba(y_true, y_pred, weights, window)
+
+        metrics[f"rolling_accuracy_{window}"] = accuracy
+        metrics[f"rolling_precision_{window}"] = precision
+        metrics[f"rolling_recall_{window}"] = recall
+        metrics[f"rolling_f1_{window}"] = f1
+
+    return metrics.dropna()
+
+
+def add_rolling_metrics_with_trend(events, close):
+    """Include trend-following metrics alongside mean-reversion metrics"""
+    features = {}
+    recent_signals = []
+    index = close.index.get_indexer(events.index)
+
+    for i, j in enumerate(index):
+        if i >= 100:
+            price_position = (
+                abs(close.iloc[i] - close.iloc[i - 20 : i].mean()) / close.iloc[i - 20 : i].std()
+            )
+            if price_position > 2:  # More than 2 std from mean
+                recent_signals.append(events["bin"].iloc[j])
+
+        if recent_signals and len(recent_signals) >= 10:
+            features[events.index[j]] = np.mean(recent_signals[j - 10 : j])
+
+    return pd.Series(features, name="trend_following_performance")
 
 
 def train_model_with_cv(
@@ -363,25 +533,22 @@ def train_model_with_cv(
     cv_results : dict
         Cross-validation results.
 
-    Notes
-    -----
-    - First run: ~300s; cached: ~2s (≈150x speedup).
-    - Prevents data leakage via time-aware caching.
     """
-    from ..cross_validation.hyperfit import clf_hyper_fit_auto_cache
+    from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 
-    train_idx = features.dropna().index.intersection(events.index)
-    X = features.loc[train_idx]
-    y = events.loc[train_idx, "bin"]
-    t1 = events.loc[train_idx, "t1"]
-    w = sample_weights.loc[train_idx]
+    valid_index = features.index.intersection(events.index)
+    cont = events.loc[valid_index]
+    X = features.loc[valid_index]
+    y = cont["bin"]
+    t1 = cont["t1"]
+    w = sample_weights.loc[valid_index]
 
     # Set max_samples to average uniqueness to prevent overfitting
     if isinstance(pipe_clf.steps[-1][1], RandomForestClassifier):
-        av_uniqueness = events.loc[train_idx, "tW"].mean()
+        av_uniqueness = cont["tW"].mean()
         pipe_clf.steps[-1][1].set_params(max_samples=av_uniqueness)
 
-    best_model, cv_results = clf_hyper_fit_auto_cache(
+    best_model, cv_results = clf_hyper_fit_cached(
         X,
         y,
         t1,
@@ -410,7 +577,6 @@ def develop_production_model(
     feature_config: Dict,
     label_config: Dict,
     model_params: Dict,
-    sample_weight_params: Dict,
     reports: bool = False,
 ) -> Tuple[RandomForestClassifier, List[str], Dict]:
     """
@@ -468,15 +634,7 @@ def develop_production_model(
             Random seed.
         - verbose : bool, optional (default=False)
             Verbosity flag.
-    sample_weight_params : dict
-        Configuration for sample weighting.
-        Expected keys:
-        - attribution : str, optional
-            Attribution mode ('return', 'uniqueness', or None).
-        - decay_factor : float, optional (default=0.95)
-            Decay factor for time weighting.
-        - linear : bool, optional (default=True)
-            Use linear decay instead of exponential.
+
     Returns
     -------
     model : RandomForestClassifier
@@ -498,7 +656,6 @@ def develop_production_model(
     - feature_config : {'func', 'params'}
     - label_config : {'target_lookback', 'strategy', 'profit_target', 'stop_loss', ...}
     - model_params : {'pipe_clf', 'param_grid', 'cv_splits', ...}
-    - sample_weight_params : {'attribution', 'decay_factor', 'linear'}
 
     See individual function docstrings for detailed argument descriptions.
     """
@@ -507,34 +664,50 @@ def develop_production_model(
     print("PRODUCTION MODEL DEVELOPMENT PIPELINE")
     print("=" * 70)
 
-    # Step 1: Load data (tracked for contamination)
-    print("\n[Step 1/6] Loading training data...")
-    bars = load_and_prepare_training_data(symbol, train_start, train_end, **data_config)
-    print(f"✓ Loaded {len(bars):,} samples from {train_start} to {train_end}")
+    # print(f"\nData Configuration: \n{'-' * 30}")
+    # pprint(data_config, sort_dicts=False)
 
-    # Step 2: Feature engineering (cached - 98.2% hit rate)
-    print("\n[Step 2/6] Computing features...")
-    features = create_feature_engineering_pipeline(bars, feature_config)
+    # print(f"\nFeature Configuration: \n{'-' * 30}")
+    # pprint(feature_config, sort_dicts=False)
+
+    print(f"\nLabel Configuration: \n{'-' * 30}")
+    pprint(label_config, sort_dicts=False)
+
+    # Step 1: Load data (tracked for contamination)
+    print("\n[Step 1/7] Loading training data...")
+    data = load_and_prepare_training_data(symbol, train_start, train_end, **data_config)
+    print(f"✓ Loaded {len(data):,} samples from {train_start} to {train_end}")
+
+    # Step 2: Feature engineering  (cached)
+    print("\n[Step 2/7] Computing features...")
+    features = create_feature_engineering_pipeline(data, feature_config)
     print(f"✓ Generated {len(features.columns)} features")
 
-    # Step 3: Label generation (cached - 95.7% hit rate)
-    print("\n[Step 3/6] Generating events...")
-    events = generate_events_triple_barrier(bars, **label_config)
+    # Step 3: Label generation (cached)
+    print("\n[Step 3/7] Generating events...")
+    events = generate_events_triple_barrier(data, **label_config)
     print(f"✓ Generated events: \n{value_counts_data(events['bin'])}")
+    print(f"\nAverage Uniqueness: {events['tW'].mean():.4f}")
 
     # Step 4: Sample weights (cached)
-    print("\n[Step 4/6] Computing sample weights...")
-    sample_weights = compute_sample_weights_time_decay(events, bars.close, **sample_weight_params)
-    print(f"✓ Computed time-decay weights")
+    print("\n[Step 4/7] Computing sample weights...")
+    sample_weights = compute_sample_weights(data, events, features)
 
-    # Step 5: Model training with CV (cached)
-    print("\n[Step 5/6] Training model with cross-validation...")
+    # Step 5: Rolling meta-label features (cached)
+    print("\n[Step 5/7] Computing rolling meta-label features...")
+    meta_features = calculate_rolling_metrics(events, sample_weights)
+    features = features.join(meta_features, how="inner")
+    events = events.reindex(features.index)  # Align indices
+    print(f"✓ Computed rolling meta-label features")
+
+    # Step 6: Model training with CV (cached)
+    print("\n[Step 6/7] Training model with cross-validation...")
     best_model, cv_results = train_model_with_cv(features, events, sample_weights, **model_params)
     print(f"✓ Best CV score: {cv_results['best_score']:.4f}")
     print(f"✓ Best params: {cv_results['best_params']}")
 
     # Step 6: Feature importance analysis
-    print("\n[Step 6/6] Analyzing feature importance...")
+    print("\n[Step 7/7] Analyzing feature importance...")
     feature_importance = pd.DataFrame(
         {
             "feature": features.columns,
@@ -562,7 +735,7 @@ def develop_production_model(
     metrics = {
         "cv_results": cv_results,
         "feature_importance": feature_importance,
-        "training_samples": len(bars),
+        "training_samples": len(data),
         "feature_count": len(features.columns),
     }
 

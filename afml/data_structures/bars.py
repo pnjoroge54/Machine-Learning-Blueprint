@@ -187,7 +187,7 @@ def make_bars(
             logger.info(f"Dropped {msg}")
 
         if tick_num:
-            ohlc_df["tick_num"] = ohlc_df["tick_volume"].cumsum() - 1
+            ohlc_df["tick_num"] = ohlc_df["tick_volume"].cumsum()  # 1-based index
 
     else:
         ohlc_df.index = bar_group["time"].last() + pd.Timedelta(
@@ -251,7 +251,7 @@ def _get_bar_tick_indices(tick_df, bar_size, bar_id) -> pd.Series:
     if n_ticks % bar_size == 0 and n_ticks > 0:
         last_indices = np.append(last_indices, n_ticks - 1)
 
-    # Filter valid indices
-    last_indices = last_indices[last_indices >= 0]
+    # Filter valid indices and set to 1-based index
+    last_indices = last_indices[last_indices >= 0] + 1
 
     return last_indices
