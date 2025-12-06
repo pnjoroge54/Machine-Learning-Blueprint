@@ -1,58 +1,67 @@
 """
-Selective cache cleaning system that only invalidates functions that have changed.
-Uses source code hashing and modification times to detect changes.
+Cache cleanup utility for orphaned function versions.
+
+This module is now focused on MAINTENANCE rather than active cache invalidation:
+- Identifies orphaned cache entries from old function versions
+- Provides size-based and age-based cleanup
+- Works as a scheduled/manual maintenance tool
+
+It NO LONGER does active change detection (that's handled by auto_versioning).
 """
 
 import hashlib
 import inspect
 import json
 import os
-from functools import wraps
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from loguru import logger
 
 
-class FunctionTracker:
-    """Tracks function signatures and source code hashes."""
+class FunctionVersionTracker:
+    """
+    Tracks function versions to identify orphaned caches.
+
+    This is now a PASSIVE tracker - it records current versions
+    and helps identify old versions that can be cleaned up.
+    """
 
     def __init__(self):
         # Import CACHE_DIRS at runtime to avoid circular import
         from . import CACHE_DIRS
 
-        self.tracker_file = CACHE_DIRS["base"] / "function_tracker.json"
-        self.tracked_functions: Dict[str, Dict] = {}
-        # Registry to keep strong references to tracked functions
-        self.function_registry: Dict[str, callable] = {}
-        self._load_tracking_data()
+        self.tracker_file = CACHE_DIRS["base"] / "function_versions.json"
+        self.current_versions: Dict[str, Dict] = {}
+        self._load_version_data()
 
-    def _load_tracking_data(self):
-        """Load existing function tracking data."""
+    def _load_version_data(self):
+        """Load existing version tracking data."""
         if self.tracker_file.exists():
             try:
                 with open(self.tracker_file, "r") as f:
-                    self.tracked_functions = json.load(f)
-                logger.debug("Loaded tracking data for {} functions", len(self.tracked_functions))
+                    self.current_versions = json.load(f)
+                logger.debug("Loaded version data for {} functions", len(self.current_versions))
             except Exception as e:
-                logger.warning("Failed to load function tracker: {}", e)
-                self.tracked_functions = {}
+                logger.warning("Failed to load version tracker: {}", e)
+                self.current_versions = {}
 
-    def _save_tracking_data(self):
-        """Save function tracking data."""
+    def _save_version_data(self):
+        """Save version tracking data."""
         try:
             with open(self.tracker_file, "w") as f:
-                json.dump(self.tracked_functions, f, indent=2)
+                json.dump(self.current_versions, f, indent=2)
         except Exception as e:
-            logger.warning("Failed to save function tracker: {}", e)
+            logger.warning("Failed to save version tracker: {}", e)
 
     def _get_function_hash(self, func) -> Optional[str]:
         """Get hash of function source code."""
         try:
             source = inspect.getsource(func)
-            return hashlib.md5(source.encode()).hexdigest()
+            return hashlib.md5(source.encode()).hexdigest()[:12]
         except (OSError, TypeError):
-            # Can't get source (built-in, dynamically created, etc.)
             return None
 
     def _get_file_mtime(self, func) -> Optional[float]:
@@ -63,375 +72,232 @@ class FunctionTracker:
         except (OSError, TypeError):
             return None
 
-    def register_function(self, func):
-        """Register a function to keep a strong reference to it."""
-        func_name = f"{func.__module__}.{func.__qualname__}"
-        self.function_registry[func_name] = func
-
-    def track_function(self, func) -> bool:
+    def record_current_version(self, func) -> Dict[str, any]:
         """
-        Track a function and return True if it has changed.
+        Record the current version of a function.
 
         Returns:
-            True if function has changed or is new, False if unchanged
+            Dict with version info: {hash, mtime, module, timestamp}
         """
         func_name = f"{func.__module__}.{func.__qualname__}"
 
-        # Register the function to prevent garbage collection
-        self.register_function(func)
+        version_info = {
+            "hash": self._get_function_hash(func),
+            "mtime": self._get_file_mtime(func),
+            "module": func.__module__,
+            "last_seen": time.time(),
+        }
 
-        # Get current function metadata
-        current_hash = self._get_function_hash(func)
-        current_mtime = self._get_file_mtime(func)
+        self.current_versions[func_name] = version_info
+        self._save_version_data()
 
-        # Get stored metadata
-        stored = self.tracked_functions.get(func_name, {})
-        stored_hash = stored.get("hash")
-        stored_mtime = stored.get("mtime")
+        return version_info
 
-        # Check if function has changed
-        has_changed = (
-            current_hash != stored_hash
-            or current_mtime != stored_mtime
-            or stored_hash is None  # New function
-        )
+    def get_all_current_versions(self) -> Dict[str, Dict]:
+        """Get all currently tracked function versions."""
+        return self.current_versions.copy()
 
-        if has_changed:
-            # Update tracking data
-            self.tracked_functions[func_name] = {
-                "hash": current_hash,
-                "mtime": current_mtime,
-                "module": func.__module__,
-            }
-            self._save_tracking_data()
+    def scan_cacheable_functions(self) -> Dict[str, Dict]:
+        """
+        Scan for all @cacheable functions and record their versions.
 
-            if stored_hash is not None:  # Not a new function
-                logger.debug("Function changed: {}", func_name)
+        Returns:
+            Dict of function_name -> version_info
+        """
+        import gc
+        import types
 
-        return has_changed
-
-    def get_changed_functions(self, module_names: Optional[List[str]] = None) -> List[str]:
-        """Get list of functions that have changed in specified modules."""
-        changed = []
+        scanned = {}
 
         try:
-            # First try to get functions from our registry (more reliable)
-            for func_name, func in self.function_registry.items():
-                if module_names and not any(func_name.startswith(mod) for mod in module_names):
-                    continue
+            for obj in gc.get_objects():
                 try:
-                    if self.track_function(func):
-                        changed.append(func_name)
+                    if (
+                        isinstance(obj, types.FunctionType)
+                        and hasattr(obj, "_afml_cacheable")
+                        and obj._afml_cacheable
+                    ):
+                        func_name = f"{obj.__module__}.{obj.__qualname__}"
+                        version_info = self.record_current_version(obj)
+                        scanned[func_name] = version_info
                 except (ReferenceError, AttributeError):
-                    # Function reference is stale, remove from registry
-                    logger.debug("Removing stale function reference: {}", func_name)
                     continue
-
-            # Fallback to garbage collection method for any missed functions
-            try:
-                for name, obj in _get_cacheable_functions().items():
-                    if name in self.function_registry:
-                        continue  # Already processed above
-
-                    if module_names and not any(name.startswith(mod) for mod in module_names):
-                        continue
-
-                    if self.track_function(obj):
-                        changed.append(name)
-            except Exception as e:
-                logger.debug("Error in fallback function discovery: {}", e)
-
         except Exception as e:
-            logger.debug("Error getting changed functions: {}", e)
+            logger.debug("Error during function scan: {}", e)
 
-        return changed
-
-
-def _get_cacheable_functions() -> Dict[str, callable]:
-    """Find all functions decorated with @cacheable."""
-    import gc
-    import types
-
-    cacheable_funcs = {}
-
-    try:
-        # Search through all function objects in memory
-        for obj in gc.get_objects():
-            try:
-                if (
-                    isinstance(obj, types.FunctionType)
-                    and hasattr(obj, "_afml_cacheable")
-                    and obj._afml_cacheable
-                ):
-                    func_name = f"{obj.__module__}.{obj.__qualname__}"
-                    cacheable_funcs[func_name] = obj
-            except (ReferenceError, AttributeError):
-                # Skip objects that are being garbage collected or have weak references
-                continue
-
-    except Exception as e:
-        logger.debug("Error during cacheable function discovery: {}", e)
-
-    return cacheable_funcs
+        logger.info("Scanned {} cacheable functions", len(scanned))
+        return scanned
 
 
-# Global function tracker - initialize lazily to avoid circular import
-_function_tracker = None
+# Global version tracker
+_version_tracker: Optional[FunctionVersionTracker] = None
 
 
-def get_function_tracker():
-    """Get the global function tracker, creating it if needed."""
-    global _function_tracker
-    if _function_tracker is None:
-        _function_tracker = FunctionTracker()
-    return _function_tracker
+def get_version_tracker() -> FunctionVersionTracker:
+    """Get global version tracker instance."""
+    global _version_tracker
+    if _version_tracker is None:
+        _version_tracker = FunctionVersionTracker()
+    return _version_tracker
 
 
-# For backward compatibility
-@property
-def function_tracker():
-    return get_function_tracker()
+# =============================================================================
+# Cache Cleanup Utilities
+# =============================================================================
 
 
-def selective_cache_clear(
-    modules: Optional[Union[str, List[str]]] = None,
-    functions: Optional[Union[str, List[str]]] = None,
-    dry_run: bool = False,
+def find_orphaned_caches(
+    modules: Optional[Union[str, List[str]]] = None, dry_run: bool = True
 ) -> Dict[str, List[str]]:
     """
-    Selectively clear cache for changed functions.
+    Find cache entries for old function versions.
+
+    This identifies caches that were created by previous versions
+    of functions (when auto_versioning is enabled).
 
     Args:
-        modules: Module name(s) to check for changes (e.g., 'afml.labeling')
-        functions: Specific function name(s) to check/clear
-        dry_run: If True, only report what would be cleared
+        modules: Module name(s) to check (None = all modules)
+        dry_run: If True, only report (don't delete)
 
     Returns:
-        Dict with 'changed', 'cleared', and 'errors' lists
+        Dict with 'orphaned_files', 'current_functions', 'total_size_mb'
     """
     if isinstance(modules, str):
         modules = [modules]
-    if isinstance(functions, str):
-        functions = [functions]
 
-    result = {"changed": [], "cleared": [], "errors": []}
+    from . import memory
 
-    try:
-        tracker = get_function_tracker()
-    except Exception as e:
-        result["errors"].append(f"Failed to initialize function tracker: {e}")
-        return result
+    cache_dir = Path(memory.location)
+    if not cache_dir.exists():
+        return {"orphaned_files": [], "current_functions": [], "total_size_mb": 0.0}
 
-    try:
-        # Find changed functions
-        if functions:
-            # Check specific functions
-            try:
-                cacheable_funcs = _get_cacheable_functions()
-                for func_name in functions:
-                    if func_name in cacheable_funcs:
-                        try:
-                            if tracker.track_function(cacheable_funcs[func_name]):
-                                result["changed"].append(func_name)
-                        except (ReferenceError, AttributeError) as e:
-                            result["errors"].append(
-                                f"Function reference error for {func_name}: {e}"
-                            )
-                    else:
-                        result["errors"].append(f"Function not found: {func_name}")
-            except Exception as e:
-                result["errors"].append(f"Error checking specific functions: {e}")
-        else:
-            # Check modules
-            try:
-                result["changed"] = tracker.get_changed_functions(modules)
-            except Exception as e:
-                result["errors"].append(f"Error checking module functions: {e}")
+    # Scan current function versions
+    tracker = get_version_tracker()
+    current_versions = tracker.scan_cacheable_functions()
 
-        # Clear cache for changed functions
-        if result["changed"] and not dry_run:
-            try:
-                result["cleared"] = _clear_function_caches(result["changed"])
-            except Exception as e:
-                result["errors"].append(f"Error clearing caches: {e}")
+    # Filter by modules if specified
+    if modules:
+        current_versions = {
+            name: info
+            for name, info in current_versions.items()
+            if any(name.startswith(mod) for mod in modules)
+        }
 
-        # Log results
-        if result["changed"]:
-            action = "Would clear" if dry_run else "Cleared"
-            logger.info(
-                "{} cache for {} changed functions: {}",
-                action,
-                len(result["changed"]),
-                result["changed"][:3],
-            )
-            if len(result["changed"]) > 3:
-                logger.debug("Full list: {}", result["changed"])
-        else:
-            logger.info("No function changes detected")
+    logger.info("Checking for orphaned caches across {} functions", len(current_versions))
 
-        if result["errors"]:
-            logger.warning("Errors: {}", result["errors"])
+    # Build list of current version hashes
+    current_hashes = {info["hash"] for info in current_versions.values() if info["hash"]}
 
-    except Exception as e:
-        logger.error("Selective cache clear failed: {}", e)
-        result["errors"].append(str(e))
+    # Scan cache directory for versioned cache files
+    orphaned_files = []
+    total_size = 0.0
+
+    for cache_file in cache_dir.rglob("*"):
+        if not cache_file.is_file():
+            continue
+
+        # Look for version markers in cache filenames/paths
+        cache_path_str = str(cache_file)
+
+        # Check if this is a versioned cache (contains v_<hash>)
+        if "_v_" in cache_path_str:
+            # Extract version hash from path
+            for current_hash in current_hashes:
+                if f"v_{current_hash}" in cache_path_str:
+                    break  # Found current version
+            else:
+                # No current version found - this is orphaned
+                file_size = cache_file.stat().st_size / (1024 * 1024)
+                orphaned_files.append(
+                    {
+                        "path": str(cache_file),
+                        "size_mb": file_size,
+                        "mtime": cache_file.stat().st_mtime,
+                    }
+                )
+                total_size += file_size
+
+    result = {
+        "orphaned_files": orphaned_files,
+        "current_functions": list(current_versions.keys()),
+        "total_size_mb": round(total_size, 2),
+        "orphaned_count": len(orphaned_files),
+    }
+
+    if orphaned_files:
+        logger.info("Found {} orphaned cache files ({:.2f} MB)", len(orphaned_files), total_size)
+    else:
+        logger.info("No orphaned caches found")
 
     return result
 
 
-def _clear_function_caches(func_names: List[str]) -> List[str]:
-    """Clear joblib cache for specific functions."""
-    # Import at runtime to avoid circular import
-    from . import memory
-
-    cleared = []
-
-    # Get joblib cache store
-    cache_location = Path(memory.location)
-
-    for func_name in func_names:
-        try:
-            # Joblib stores cache with function name as part of path
-            # Look for directories matching the function pattern
-            func_pattern = func_name.replace(".", os.sep)
-
-            for cache_dir in cache_location.rglob("*"):
-                if cache_dir.is_dir() and func_pattern in str(cache_dir):
-                    # Remove the cache directory
-                    import shutil
-
-                    shutil.rmtree(cache_dir)
-                    cleared.append(func_name)
-                    logger.debug("Cleared cache directory: {}", cache_dir)
-                    break
-
-        except Exception as e:
-            logger.warning("Failed to clear cache for {}: {}", func_name, e)
-
-    return cleared
-
-
-def smart_cacheable(func):
+def clean_orphaned_caches(
+    modules: Optional[Union[str, List[str]]] = None,
+    min_age_hours: int = 24,
+) -> Dict[str, any]:
     """
-    Enhanced @cacheable decorator that auto-tracks function changes.
-
-    This wrapper automatically detects when a function has changed
-    and invalidates its cache accordingly.
-    """
-    # Import at runtime to avoid circular import
-    from .unified_cache_system import cacheable
-
-    # Apply the original cacheable decorator
-    cached_func = cacheable(
-        track_data_access=False, dataset_name=None, purpose=None, time_aware=False
-    )(func)
-
-    try:
-        tracker = get_function_tracker()
-        # Register the function immediately to prevent garbage collection issues
-        tracker.register_function(func)
-    except Exception as e:
-        logger.debug("Failed to register function with tracker: {}", e)
-        # Fall back to basic cacheable behavior
-        return cached_func
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Check if function has changed before calling
-        try:
-            if tracker.track_function(func):
-                # Function changed - clear its cache
-                func_name = f"{func.__module__}.{func.__qualname__}"
-                try:
-                    cleared = _clear_function_caches([func_name])
-                    if cleared:
-                        logger.info("Auto-cleared changed function cache: {}", func_name)
-                except Exception as e:
-                    logger.debug("Auto-clear failed for {}: {}", func_name, e)
-        except (ReferenceError, AttributeError) as e:
-            logger.debug("Function reference error in smart_cacheable: {}", e)
-        except Exception as e:
-            logger.debug("Error in smart_cacheable change detection: {}", e)
-
-        return cached_func(*args, **kwargs)
-
-    wrapper._afml_cacheable = True
-    wrapper._original_func = func
-    return wrapper
-
-
-def cache_maintenance(
-    auto_clear_changed: bool = True,
-    max_cache_size_mb: Optional[int] = None,
-    max_age_days: Optional[int] = None,
-) -> Dict[str, Union[int, List[str]]]:
-    """
-    Perform comprehensive cache maintenance.
+    Remove orphaned cache entries from old function versions.
 
     Args:
-        auto_clear_changed: Automatically clear caches for changed functions
-        max_cache_size_mb: Clear oldest caches if total size exceeds this
-        max_age_days: Clear caches older than this many days
+        modules: Module name(s) to clean (None = all)
+        min_age_hours: Only remove orphaned caches older than this
 
     Returns:
-        Maintenance report
+        Dict with cleanup results
     """
-    report = {
-        "functions_checked": 0,
-        "changed_functions": [],
-        "cleared_functions": [],
-        "size_cleared_mb": 0,
-        "old_files_removed": 0,
+    # Find orphaned caches
+    orphaned = find_orphaned_caches(modules=modules, dry_run=True)
+
+    if not orphaned["orphaned_files"]:
+        logger.info("No orphaned caches to clean")
+        return {
+            "removed_count": 0,
+            "removed_size_mb": 0.0,
+            "kept_count": 0,
+        }
+
+    # Filter by age
+    cutoff_time = time.time() - (min_age_hours * 3600)
+    to_remove = [f for f in orphaned["orphaned_files"] if f["mtime"] < cutoff_time]
+
+    # Remove files
+    removed_count = 0
+    removed_size = 0.0
+    errors = []
+
+    for file_info in to_remove:
+        try:
+            file_path = Path(file_info["path"])
+            if file_path.exists():
+                file_path.unlink()
+                removed_count += 1
+                removed_size += file_info["size_mb"]
+        except Exception as e:
+            errors.append(f"{file_info['path']}: {e}")
+            logger.debug("Failed to remove {}: {}", file_info["path"], e)
+
+    kept_count = len(orphaned["orphaned_files"]) - removed_count
+
+    result = {
+        "removed_count": removed_count,
+        "removed_size_mb": round(removed_size, 2),
+        "kept_count": kept_count,  # Too recent to remove
+        "errors": errors,
     }
 
-    try:
-        # Auto-clear changed functions
-        if auto_clear_changed:
-            try:
-                result = selective_cache_clear(dry_run=False)
-                report["changed_functions"] = result["changed"]
-                report["cleared_functions"] = result["cleared"]
+    logger.info(
+        "Cleaned {} orphaned caches ({:.2f} MB), kept {} recent",
+        removed_count,
+        removed_size,
+        kept_count,
+    )
 
-                # Count functions checked from registry + GC scan
-                try:
-                    tracker = get_function_tracker()
-                    registry_count = len(tracker.function_registry)
-                    gc_count = len(_get_cacheable_functions())
-                    report["functions_checked"] = max(registry_count, gc_count)
-                except Exception:
-                    report["functions_checked"] = len(result["changed"]) + len(result["cleared"])
-
-            except Exception as e:
-                logger.warning("Auto-clear failed during maintenance: {}", e)
-
-        # Size-based cleanup
-        if max_cache_size_mb:
-            try:
-                size_cleared = _cleanup_by_size(max_cache_size_mb)
-                report["size_cleared_mb"] = size_cleared
-            except Exception as e:
-                logger.warning("Size-based cleanup failed: {}", e)
-
-        # Age-based cleanup
-        if max_age_days:
-            try:
-                files_removed = _cleanup_by_age(max_age_days)
-                report["old_files_removed"] = files_removed
-            except Exception as e:
-                logger.warning("Age-based cleanup failed: {}", e)
-
-        logger.info("Cache maintenance completed: {}", _format_maintenance_report(report))
-
-    except Exception as e:
-        logger.error("Cache maintenance failed: {}", e)
-        report["error"] = str(e)
-
-    return report
+    return result
 
 
-def _cleanup_by_size(max_size_mb: int) -> float:
+def cleanup_by_size(max_size_mb: int) -> float:
     """Remove oldest cache files if total size exceeds limit."""
-    # Import at runtime to avoid circular import
     from . import memory
 
     cache_dir = Path(memory.location)
@@ -450,6 +316,7 @@ def _cleanup_by_size(max_size_mb: int) -> float:
             total_size += size_mb
 
     if total_size <= max_size_mb:
+        logger.info("Cache size {:.1f} MB is under limit {:.1f} MB", total_size, max_size_mb)
         return 0.0
 
     # Sort by modification time (oldest first)
@@ -465,17 +332,15 @@ def _cleanup_by_size(max_size_mb: int) -> float:
         try:
             file_path.unlink()
             removed_size += size_mb
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to remove {}: {}", file_path, e)
 
+    logger.info("Removed {:.1f} MB of old caches (limit: {:.1f} MB)", removed_size, max_size_mb)
     return removed_size
 
 
-def _cleanup_by_age(max_age_days: int) -> int:
+def cleanup_by_age(max_age_days: int) -> int:
     """Remove cache files older than specified age."""
-    import time
-
-    # Import at runtime to avoid circular import
     from . import memory
 
     cache_dir = Path(memory.location)
@@ -491,24 +356,100 @@ def _cleanup_by_age(max_age_days: int) -> int:
                 if file_path.stat().st_mtime < cutoff_time:
                     file_path.unlink()
                     removed_count += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to remove {}: {}", file_path, e)
 
+    logger.info("Removed {} caches older than {} days", removed_count, max_age_days)
     return removed_count
+
+
+# =============================================================================
+# Main Cache Maintenance Function
+# =============================================================================
+
+
+def cache_maintenance(
+    clean_orphaned: bool = True,
+    max_cache_size_mb: Optional[int] = None,
+    max_age_days: Optional[int] = None,
+    min_orphan_age_hours: int = 24,
+) -> Dict[str, Union[int, float, List[str]]]:
+    """
+    Perform comprehensive cache maintenance.
+
+    This is now focused on CLEANUP rather than change detection:
+    - Removes orphaned caches from old function versions
+    - Enforces size limits
+    - Removes stale old caches
+
+    Args:
+        clean_orphaned: Clean orphaned caches from old versions
+        max_cache_size_mb: Clear oldest caches if total size exceeds this
+        max_age_days: Clear caches older than this many days
+        min_orphan_age_hours: Only remove orphaned caches older than this
+
+    Returns:
+        Maintenance report
+    """
+    report = {
+        "orphaned_removed": 0,
+        "orphaned_size_mb": 0.0,
+        "size_cleared_mb": 0.0,
+        "old_files_removed": 0,
+        "functions_scanned": 0,
+    }
+
+    try:
+        # Scan current functions
+        tracker = get_version_tracker()
+        versions = tracker.scan_cacheable_functions()
+        report["functions_scanned"] = len(versions)
+
+        # Clean orphaned caches
+        if clean_orphaned:
+            try:
+                result = clean_orphaned_caches(min_age_hours=min_orphan_age_hours)
+                report["orphaned_removed"] = result["removed_count"]
+                report["orphaned_size_mb"] = result["removed_size_mb"]
+            except Exception as e:
+                logger.warning("Orphaned cache cleanup failed: {}", e)
+
+        # Size-based cleanup
+        if max_cache_size_mb:
+            try:
+                size_cleared = cleanup_by_size(max_cache_size_mb)
+                report["size_cleared_mb"] = size_cleared
+            except Exception as e:
+                logger.warning("Size-based cleanup failed: {}", e)
+
+        # Age-based cleanup
+        if max_age_days:
+            try:
+                files_removed = cleanup_by_age(max_age_days)
+                report["old_files_removed"] = files_removed
+            except Exception as e:
+                logger.warning("Age-based cleanup failed: {}", e)
+
+        logger.info("Cache maintenance completed: {}", _format_maintenance_report(report))
+
+    except Exception as e:
+        logger.error("Cache maintenance failed: {}", e)
+        report["error"] = str(e)
+
+    return report
 
 
 def _format_maintenance_report(report: Dict) -> str:
     """Format maintenance report for logging."""
     parts = []
 
-    if report["functions_checked"]:
-        parts.append(f"{report['functions_checked']} functions checked")
+    if report["functions_scanned"]:
+        parts.append(f"{report['functions_scanned']} functions scanned")
 
-    if report["changed_functions"]:
-        parts.append(f"{len(report['changed_functions'])} changed")
-
-    if report["cleared_functions"]:
-        parts.append(f"{len(report['cleared_functions'])} cleared")
+    if report["orphaned_removed"]:
+        parts.append(
+            f"{report['orphaned_removed']} orphaned removed ({report['orphaned_size_mb']:.1f}MB)"
+        )
 
     if report["size_cleared_mb"]:
         parts.append(f"{report['size_cleared_mb']:.1f}MB size-cleared")
@@ -516,12 +457,104 @@ def _format_maintenance_report(report: Dict) -> str:
     if report["old_files_removed"]:
         parts.append(f"{report['old_files_removed']} old files removed")
 
-    return ", ".join(parts) if parts else "no changes"
+    return ", ".join(parts) if parts else "no cleanup needed"
 
 
+# =============================================================================
+# Analysis Functions
+# =============================================================================
+
+
+def analyze_cache_versions() -> Dict[str, any]:
+    """
+    Analyze cache fragmentation by function versions.
+
+    Returns info about how many versions exist for each function.
+    """
+    from . import memory
+
+    cache_dir = Path(memory.location)
+    if not cache_dir.exists():
+        return {}
+
+    # Count versions per function
+    version_counts = defaultdict(lambda: {"versions": set(), "total_size_mb": 0.0})
+
+    for cache_file in cache_dir.rglob("*"):
+        if not cache_file.is_file():
+            continue
+
+        cache_path = str(cache_file)
+
+        # Extract function name and version from path
+        # Path typically contains: module_name/function_name/hash/...
+        parts = cache_path.split(os.sep)
+
+        for i, part in enumerate(parts):
+            if "_v_" in part:
+                # Found a versioned cache
+                func_name = parts[i - 1] if i > 0 else "unknown"
+                version_hash = part.split("_v_")[1].split("_")[0]
+
+                version_counts[func_name]["versions"].add(version_hash)
+                file_size = cache_file.stat().st_size / (1024 * 1024)
+                version_counts[func_name]["total_size_mb"] += file_size
+
+    # Format results
+    analysis = {}
+    for func_name, data in version_counts.items():
+        analysis[func_name] = {
+            "version_count": len(data["versions"]),
+            "total_size_mb": round(data["total_size_mb"], 2),
+            "avg_size_per_version_mb": (
+                round(data["total_size_mb"] / len(data["versions"]), 2) if data["versions"] else 0.0
+            ),
+        }
+
+    return analysis
+
+
+def print_version_analysis():
+    """Print analysis of cache versions."""
+    analysis = analyze_cache_versions()
+
+    if not analysis:
+        print("\nNo versioned caches found.")
+        return
+
+    print("\n" + "=" * 70)
+    print("CACHE VERSION ANALYSIS")
+    print("=" * 70)
+
+    # Sort by version count
+    sorted_funcs = sorted(analysis.items(), key=lambda x: x[1]["version_count"], reverse=True)
+
+    total_versions = sum(info["version_count"] for _, info in sorted_funcs)
+    total_size = sum(info["total_size_mb"] for _, info in sorted_funcs)
+
+    print(f"\nOverall:")
+    print(f"  Functions with versions: {len(sorted_funcs)}")
+    print(f"  Total versions: {total_versions}")
+    print(f"  Total size: {total_size:.2f} MB")
+
+    print(f"\nTop fragmented functions:")
+    for i, (func_name, info) in enumerate(sorted_funcs[:10], 1):
+        if info["version_count"] > 1:
+            print(f"  {i}. {func_name}")
+            print(f"     Versions: {info['version_count']}")
+            print(f"     Size: {info['total_size_mb']:.2f} MB")
+            print(f"     Avg per version: {info['avg_size_per_version_mb']:.2f} MB")
+
+    print("=" * 70 + "\n")
+
+
+# =============================================================================
 # Convenience functions for common use cases
-def clear_changed_ml_functions():
-    """Clear cache for changed ML-related functions."""
+# =============================================================================
+
+
+def clear_orphaned_ml_caches():
+    """Clear orphaned caches for ML-related functions."""
     ml_modules = [
         "afml.ensemble",
         "afml.clustering",
@@ -529,26 +562,35 @@ def clear_changed_ml_functions():
         "afml.cross_validation",
         "afml.backtester",
     ]
-    return selective_cache_clear(modules=ml_modules)
+    return clean_orphaned_caches(modules=ml_modules)
 
 
-def clear_changed_labeling_functions():
-    """Clear cache for changed labeling functions."""
-    return selective_cache_clear(modules=["afml.labeling"])
+def clear_orphaned_labeling_caches():
+    """Clear orphaned caches for labeling functions."""
+    return clean_orphaned_caches(modules=["afml.labeling"])
 
 
-def clear_changed_features_functions():
-    """Clear cache for changed feature functions."""
-    return selective_cache_clear(modules=["afml.features", "afml.strategies"])
+def clear_orphaned_features_caches():
+    """Clear orphaned caches for feature functions."""
+    return clean_orphaned_caches(modules=["afml.features", "afml.strategies"])
 
 
-# Export new functionality
 __all__ = [
-    "selective_cache_clear",
-    "smart_cacheable",
+    # Core tracker
+    "FunctionVersionTracker",
+    "get_version_tracker",
+    # Main maintenance function
     "cache_maintenance",
-    "get_function_tracker",
-    "clear_changed_ml_functions",
-    "clear_changed_labeling_functions",
-    "clear_changed_features_functions",
+    # Cleanup functions
+    "find_orphaned_caches",
+    "clean_orphaned_caches",
+    "cleanup_by_size",
+    "cleanup_by_age",
+    # Analysis
+    "analyze_cache_versions",
+    "print_version_analysis",
+    # Convenience functions
+    "clear_orphaned_ml_caches",
+    "clear_orphaned_labeling_caches",
+    "clear_orphaned_features_caches",
 ]

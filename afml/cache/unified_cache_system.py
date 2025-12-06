@@ -25,7 +25,90 @@ from . import cache_stats, memory
 from .cache_monitoring import get_cache_monitor
 
 # =============================================================================
-# Core: Unified Cache Key Generator (with time-awareness)
+# Core: Function Versioning Support
+# =============================================================================
+
+
+def _get_function_source_hash(func: Callable) -> Optional[str]:
+    """
+    Get stable hash of function source code.
+
+    Unwraps decorators to hash the original function, not wrapper code.
+    This ensures nested @cacheable or other decorators don't affect the hash.
+
+    Returns None if source cannot be obtained (built-ins, etc.)
+    """
+    # Unwrap to find original function
+    # This handles @functools.wraps and similar patterns
+    original_func = func
+    while hasattr(original_func, "__wrapped__"):
+        original_func = original_func.__wrapped__
+
+    try:
+        source = inspect.getsource(original_func)
+        source_hash = hashlib.md5(source.encode()).hexdigest()[:12]
+
+        # For nested functions with closures, include closure state in hash
+        # This ensures different closure values create different cache keys
+        if original_func.__closure__:
+            closure_hash = _get_closure_hash(original_func)
+            if closure_hash:
+                return f"{source_hash}_{closure_hash}"
+
+        return source_hash
+    except (OSError, TypeError):
+        # Can't get source (built-in, dynamically created, etc.)
+        return None
+
+
+def _get_closure_hash(func: Callable) -> Optional[str]:
+    """
+    Hash closure variables for nested functions.
+
+    This ensures that nested functions with different closure state
+    get different cache keys, even though their source code is identical.
+    """
+    if not func.__closure__:
+        return None
+
+    try:
+        # Extract closure values
+        closure_values = []
+        for cell in func.__closure__:
+            try:
+                val = cell.cell_contents
+                # Try to create a stable representation
+                if isinstance(val, (int, float, str, bool, type(None))):
+                    closure_values.append(f"{type(val).__name__}:{val}")
+                elif isinstance(val, (list, tuple)):
+                    closure_values.append(f"{type(val).__name__}:{hash(str(val))}")
+                else:
+                    # For complex objects, use type and id
+                    closure_values.append(f"{type(val).__name__}:{id(val)}")
+            except ValueError:
+                # Cell is empty (rare)
+                closure_values.append("empty")
+
+        closure_str = "_".join(closure_values)
+        return hashlib.md5(closure_str.encode()).hexdigest()[:8]
+    except Exception as e:
+        logger.debug(f"Failed to hash closure: {e}")
+        return None
+
+
+def _get_function_file_mtime(func: Callable) -> Optional[float]:
+    """Get modification time of function's source file."""
+    try:
+        file_path = inspect.getfile(func)
+        from pathlib import Path
+
+        return Path(file_path).stat().st_mtime
+    except (OSError, TypeError):
+        return None
+
+
+# =============================================================================
+# Core: Unified Cache Key Generator (with versioning support)
 # =============================================================================
 
 
@@ -40,10 +123,17 @@ class UnifiedCacheKeyGenerator:
     - Scipy distributions (KEY FIX for clf_hyper_fit)
     - CV generators (KFold, PurgedKFold, etc.)
     - Time-series data with lookback periods
+    - Function versioning (auto-invalidation on code changes) - DEFAULT ENABLED
     """
 
     @staticmethod
-    def generate_key(func: Callable, args: tuple, kwargs: dict, time_aware: bool = False) -> str:
+    def generate_key(
+        func: Callable,
+        args: tuple,
+        kwargs: dict,
+        time_aware: bool = False,
+        auto_versioning: bool = True,  # NOW DEFAULT!
+    ) -> str:
         """
         Generate unified cache key.
 
@@ -52,11 +142,35 @@ class UnifiedCacheKeyGenerator:
             args: Positional arguments
             kwargs: Keyword arguments
             time_aware: If True, include temporal bounds in key
+            auto_versioning: If True, include function source hash in key (DEFAULT)
 
         Returns:
             MD5 hash representing unique call signature
         """
         key_parts = [func.__module__, func.__qualname__]
+
+        # Add function version to key (NOW DEFAULT, with graceful fallback)
+        if auto_versioning:
+            func_hash = _get_function_source_hash(func)
+            if func_hash:
+                key_parts.append(f"v_{func_hash}")
+                logger.trace(f"Auto-versioning enabled for {func.__qualname__}: v_{func_hash[:8]}")
+            else:
+                # Graceful fallback to mtime if source unavailable
+                mtime = _get_function_file_mtime(func)
+                if mtime:
+                    key_parts.append(f"mtime_{int(mtime)}")
+                    logger.debug(
+                        f"Cannot hash source for {func.__qualname__} "
+                        f"(built-in or dynamic), using file mtime for versioning"
+                    )
+                else:
+                    # Last resort: no versioning (but don't crash)
+                    logger.warning(
+                        f"Auto-versioning unavailable for {func.__qualname__} "
+                        f"(no source or file). Cache won't invalidate on changes. "
+                        f"Consider using @cacheable(auto_versioning=False) explicitly."
+                    )
 
         # Get function signature for proper parameter mapping
         sig = inspect.signature(func)
@@ -346,7 +460,13 @@ class UnifiedCacheMonitor:
         if cache_key:
             log_msg += f" (key: {cache_key[:8]}...)"
         if computation_time:
-            log_msg += f" ({computation_time:.2f}s)"
+            if computation_time < 60:
+                log_msg += f" ({computation_time:.2f}s)"
+            else:
+                log_msg += f" ({pd.Timedelta(seconds=computation_time).round('1s')})".replace(
+                    "0 days ", ""
+                )
+
         logger.debug(log_msg)
 
 
@@ -372,6 +492,7 @@ def cacheable(
     track_data_access: bool = False,
     dataset_name: Optional[str] = None,
     purpose: Optional[str] = None,
+    auto_versioning: bool = True,  # DEFAULT: True for correctness
 ):
     """
     Universal caching decorator - replaces all previous decorators.
@@ -382,61 +503,103 @@ def cacheable(
     - data_tracking_cacheable
     - cv_cacheable
     - cv_cache_with_classifier_state
+    - smart_cacheable (removed - now handled by auto_versioning)
 
     Args:
         time_aware: Include temporal bounds in cache key
         track_data_access: Log DataFrame access for contamination detection
         dataset_name: Name for data tracking
         purpose: train/test/validate/optimize
+        auto_versioning: Include function source hash in key (DEFAULT: True)
+                        Set to False ONLY if:
+                        - Computation takes hours/days and you want to preserve cache
+                        - You're absolutely certain the function won't change
+                        - You understand the risk of stale cached results
 
     Usage:
-        # Basic (replaces robust_cacheable)
+        # Basic - auto_versioning is DEFAULT
         @cacheable()
         def my_function(df): ...
+        # Cache invalidates automatically when function changes!
 
-        # Time-aware (replaces time_aware_cacheable)
+        # Opt-out only for expensive, stable functions
+        @cacheable(auto_versioning=False)
+        def expensive_stable_function(df): ...
+
+        # Time-aware
         @cacheable(time_aware=True)
         def my_function(df): ...
 
-        # Data tracking (replaces data_tracking_cacheable)
-        @cacheable(track_data_access=True, dataset_name="my_data", purpose="train")
+        # Data tracking
+        @cacheable(track_data_access=True, dataset_name="data", purpose="train")
         def my_function(df): ...
 
-        # CV caching (replaces cv_cacheable)
-        @cacheable()  # Just works automatically!
+        # CV caching - just works automatically
+        @cacheable()
         def ml_cross_val_score(clf, X, y, cv_gen): ...
     """
 
     def decorator(func: Callable) -> Callable:
         func_name = f"{func.__module__}.{func.__qualname__}"
+
+        # Warn if function is already cached (nested @cacheable)
+        if hasattr(func, "_afml_cacheable") and func._afml_cacheable:
+            logger.warning(
+                f"Function {func_name} already has @cacheable decorator. "
+                f"Nested @cacheable is redundant and wastes resources. "
+                f"Remove the duplicate decorator."
+            )
+            # Still proceed, but user should fix this
+
+        # Warn about nested functions with closures
+        if "<locals>" in func.__qualname__ and func.__closure__:
+            logger.debug(
+                f"Caching nested function {func_name} with closure variables. "
+                f"Cache keys will include closure state. If you're seeing unexpected "
+                f"cache misses, this may be why. Consider moving to module level."
+            )
+
         monitor = get_unified_monitor()
         cached_func = memory.cache(func)
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Generate cache key
+            # Generate cache key (with auto_versioning by default!)
             cache_key = UnifiedCacheKeyGenerator.generate_key(
-                func, args, kwargs, time_aware=time_aware
+                func, args, kwargs, time_aware=time_aware, auto_versioning=auto_versioning
             )
 
-            # Check cache status
-            is_hit = False
+            # Track whether we actually computed (miss) or used cache (hit)
+            # We determine this by checking if cached_func actually calls the original function
+            computation_happened = False
             computation_time = None
-
-            try:
-                cached_func.check_call_in_cache(*args, **kwargs)
-                is_hit = True
-            except:
-                is_hit = False
-
-            # Time the operation if it's a miss
             start_time = time.time()
 
-            # Execute
+            # Execute with cache
             try:
-                result = cached_func(*args, **kwargs)
+                # Wrap the original function to detect if it's actually called
+                original_func = cached_func.func
+                call_count = [0]  # Use list to allow mutation in nested scope
 
-                if start_time:
+                def tracked_func(*args, **kwargs):
+                    call_count[0] += 1
+                    return original_func(*args, **kwargs)
+
+                # Temporarily replace func to track calls
+                cached_func.func = tracked_func
+
+                try:
+                    result = cached_func(*args, **kwargs)
+                finally:
+                    # Restore original function
+                    cached_func.func = original_func
+
+                # If function was called, it was a miss
+                computation_happened = call_count[0] > 0
+                is_hit = not computation_happened
+
+                # Track computation time only for misses
+                if computation_happened:
                     computation_time = time.time() - start_time
 
             except (EOFError, Exception) as e:
@@ -447,9 +610,12 @@ def cacheable(
                 except:
                     pass
 
+                # Direct call without cache
                 start_time = time.time()
                 result = func(*args, **kwargs)
                 computation_time = time.time() - start_time
+                is_hit = False
+                computation_happened = True
 
             # Track in unified monitor
             monitor.track_cache_call(
@@ -466,6 +632,7 @@ def cacheable(
             return result
 
         wrapper._afml_cacheable = True
+        wrapper._auto_versioning = auto_versioning  # Track for cleanup utilities
         return wrapper
 
     return decorator
@@ -505,18 +672,53 @@ def _track_data_access(args, kwargs, dataset_name, purpose):
 
 
 # =============================================================================
-# Convenience Aliases (backward compatibility)
+# Convenience Aliases (backward compatibility) - NOW WITH AUTO_VERSIONING
 # =============================================================================
 
-# Old names → new unified decorator
-robust_cacheable = cacheable()
-time_aware_cacheable = cacheable(time_aware=True)
-cv_cacheable = cacheable()  # Works automatically with CV generators
+# Old names → new unified decorator (with auto_versioning enabled by default)
+robust_cacheable = cacheable()  # auto_versioning=True by default
+time_aware_cacheable = cacheable(time_aware=True)  # auto_versioning=True by default
+cv_cacheable = cacheable()  # auto_versioning=True by default
 
 
 def data_tracking_cacheable(dataset_name: str, purpose: str):
     """Backward compatible data tracking decorator."""
-    return cacheable(track_data_access=True, dataset_name=dataset_name, purpose=purpose)
+    return cacheable(
+        track_data_access=True,
+        dataset_name=dataset_name,
+        purpose=purpose,
+        # auto_versioning=True by default
+    )
+
+
+# =============================================================================
+# Utility: Bulk disable auto_versioning
+# =============================================================================
+
+
+def disable_auto_versioning():
+    """
+    Factory function for bulk opt-out of auto_versioning.
+
+    Use this when you have many expensive, stable functions and want
+    to explicitly opt-out of auto_versioning for all of them.
+
+    Usage:
+        cacheable_stable = disable_auto_versioning()
+
+        @cacheable_stable()
+        def expensive_function_1(data): ...
+
+        @cacheable_stable()
+        def expensive_function_2(data): ...
+    """
+
+    def _cacheable_no_versioning(**kwargs):
+        # Force auto_versioning to False
+        kwargs["auto_versioning"] = False
+        return cacheable(**kwargs)
+
+    return _cacheable_no_versioning
 
 
 # =============================================================================
@@ -571,31 +773,6 @@ def reconstruct_param_grid(cacheable_params: Dict) -> Dict:
     return reconstructed
 
 
-@cacheable()
-def clf_hyper_fit_cached(features, labels, t1, pipe_clf, param_grid_cacheable, **kwargs):
-    """Cached version of clf_hyper_fit."""
-    from .hyper_fit import clf_hyper_fit
-
-    param_grid = reconstruct_param_grid(param_grid_cacheable)
-
-    return clf_hyper_fit(
-        features=features, labels=labels, t1=t1, pipe_clf=pipe_clf, param_grid=param_grid, **kwargs
-    )
-
-
-def clf_hyper_fit_auto_cache(features, labels, t1, pipe_clf, param_grid, **kwargs):
-    """
-    Drop-in replacement for clf_hyper_fit with automatic caching.
-
-    Just replace:
-        clf_hyper_fit(features, labels, t1, pipe_clf, param_grid)
-    with:
-        clf_hyper_fit_auto_cache(features, labels, t1, pipe_clf, param_grid)
-    """
-    param_grid_cacheable = create_cacheable_param_grid(param_grid)
-    return clf_hyper_fit_cached(features, labels, t1, pipe_clf, param_grid_cacheable, **kwargs)
-
-
 # =============================================================================
 # Convenience: Print cache report
 # =============================================================================
@@ -624,6 +801,8 @@ def print_cache_report():
             name = perf.function_name.split(".")[-1]
             print(f"  {i}. {name}: {perf.hit_rate:.1%} ({perf.total_calls} calls)")
 
+    print("\nNote: Auto-versioning is ENABLED by default.")
+    print("Cache automatically invalidates when function code changes.")
     print("=" * 70 + "\n")
 
 
@@ -639,10 +818,11 @@ __all__ = [
     "time_aware_cacheable",
     "cv_cacheable",
     "data_tracking_cacheable",
-    # clf_hyper_fit support
-    "clf_hyper_fit_auto_cache",
-    "clf_hyper_fit_cached",
-    "create_cacheable_param_grid",
     # Utilities
+    "disable_auto_versioning",
+    # clf_hyper_fit support
+    "reconstruct_param_grid",
+    "create_cacheable_param_grid",
+    # Reports
     "print_cache_report",
 ]

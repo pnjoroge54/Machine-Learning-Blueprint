@@ -12,28 +12,20 @@ import numpy as np
 from loguru import logger
 
 from .cache import (
-    CACHE_DIRS,
     CacheAnalyzer,
     cache_maintenance,
-    cache_stats,
     cacheable,
     clear_afml_cache,
     clear_cache_stats,
-    clear_changed_features_functions,
-    clear_changed_labeling_functions,
-    clear_changed_ml_functions,
     get_cache_hit_rate,
     get_cache_stats,
     get_cache_summary,
     get_comprehensive_cache_status,
-    get_function_tracker,
     initialize_cache_system,
     memory,
     optimize_cache_system,
     robust_cacheable,
-    selective_cache_clear,
     setup_production_cache,
-    smart_cacheable,
     time_aware_cacheable,
 )
 
@@ -268,30 +260,6 @@ def cache_status() -> str:
     return " | ".join(status_parts)
 
 
-def smart_cache_clear(modules: str = None, dry_run: bool = False):
-    """
-    Intelligently clear cache for changed functions.
-
-    Args:
-        modules: Module name to check (e.g., 'labeling', 'features')
-        dry_run: If True, only report what would be cleared
-
-    Examples:
-        smart_cache_clear('labeling')  # Clear changed labeling functions
-        smart_cache_clear(dry_run=True)  # See what would be cleared
-    """
-    if modules:
-        module_name = f"afml.{modules}" if not modules.startswith("afml.") else modules
-        result = selective_cache_clear(modules=[module_name], dry_run=dry_run)
-    else:
-        result = selective_cache_clear(dry_run=dry_run)
-
-    if not dry_run and result["cleared"]:
-        logger.info("Smart cache clear completed - cleared {} functions", len(result["cleared"]))
-
-    return result
-
-
 def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days: int = 30):
     """
     Perform intelligent cache maintenance.
@@ -319,7 +287,6 @@ __all__ = [
     # Core cache system
     "memory",
     "cacheable",
-    "smart_cacheable",
     "get_cache_hit_rate",
     "get_cache_stats",
     "clear_cache_stats",
@@ -354,15 +321,9 @@ __all__ = [
     "get_loaded_heavy_modules",
     # Utilities
     "cache_status",
-    "smart_cache_clear",
     "maintain_cache",
     # Selective cache management
-    "selective_cache_clear",
     "cache_maintenance",
-    "clear_changed_ml_functions",
-    "clear_changed_labeling_functions",
-    "clear_changed_features_functions",
-    "get_function_tracker",
     # Numba utilities
     "lazy_warmup",
     "prewarm_numba_in_package",

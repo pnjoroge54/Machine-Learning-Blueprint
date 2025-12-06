@@ -268,22 +268,27 @@ from .data_access_tracker import (
 
 # Import selective cleaner functions after base components are defined
 from .selective_cleaner import (
+    analyze_cache_versions,
     cache_maintenance,
-    clear_changed_features_functions,
-    clear_changed_labeling_functions,
-    clear_changed_ml_functions,
-    get_function_tracker,
-    selective_cache_clear,
-    smart_cacheable,
+    clean_orphaned_caches,
+    cleanup_by_age,
+    cleanup_by_size,
+    clear_orphaned_features_caches,
+    clear_orphaned_labeling_caches,
+    clear_orphaned_ml_caches,
+    find_orphaned_caches,
+    get_version_tracker,
+    print_version_analysis,
 )
 
 # Add to imports
 from .unified_cache_system import robust_cacheable  # Backward compatibility alias
 from .unified_cache_system import (
     cacheable,
-    clf_hyper_fit_auto_cache,
+    create_cacheable_param_grid,
     cv_cacheable,
     print_cache_report,
+    reconstruct_param_grid,
     time_aware_cacheable,
 )
 
@@ -594,7 +599,7 @@ def apply_decorator_to_methods(decorator: Callable, *, include_private: bool = F
 __all__ = [
     # Core caching
     "memory",
-    "cacheable",
+    "cacheable",  # NEW: Universal decorator
     "initialize_cache_system",
     "cache_stats",
     "get_cache_hit_rate",
@@ -604,25 +609,31 @@ __all__ = [
     "CacheAnalyzer",
     "clear_afml_cache",
     "CACHE_DIRS",
-    # Selective cache management
-    "selective_cache_clear",
-    "smart_cacheable",
+    # Selective cache management (NOW FOCUSED ON CLEANUP)
     "cache_maintenance",
-    "get_function_tracker",
-    "clear_changed_ml_functions",
-    "clear_changed_labeling_functions",
-    "clear_changed_features_functions",
+    "find_orphaned_caches",
+    "clean_orphaned_caches",
+    "cleanup_by_size",
+    "cleanup_by_age",
+    "get_version_tracker",
+    "clear_orphaned_ml_caches",
+    "clear_orphaned_labeling_caches",
+    "clear_orphaned_features_caches",
+    "analyze_cache_versions",
+    "print_version_analysis",
+    # NOTE: Removed exports:
+    # - smart_cacheable (replaced by auto_versioning parameter)
+    # - clear_changed_* functions (replaced by clean_orphaned_* functions)
+    # - selective_cache_clear (replaced by clean_orphaned_caches)
     # Robust cache keys
     "CacheKeyGenerator",
     "DataAccessTracker",
     "get_data_tracker",
     "log_data_access",
     "print_contamination_report",
-    "save_access_log",
-    "robust_cacheable",
-    "time_aware_cacheable",
+    "robust_cacheable",  # Alias for cacheable()
+    "time_aware_cacheable",  # Alias for cacheable(time_aware=True)
     "data_tracking_cacheable",
-    "time_aware_data_tracking_cacheable",
     # MLflow integration
     "MLflowCacheIntegration",
     "setup_mlflow_cache",
@@ -651,14 +662,16 @@ __all__ = [
     "optimize_cache_system",
     "setup_production_cache",
     # Cache cross-validation
-    "cv_cacheable",
+    "cv_cacheable",  # Alias for cacheable()
     "cv_cache_with_classifier_state",
     "clear_cv_cache",
     # Additional utility functions
     "get_cache_size_info",
     "clear_cache_by_pattern",
     "apply_decorator_to_methods",
-    "clf_hyper_fit_auto_cache",
+    # Hyper-parameter fit helpers
+    "reconstruct_param_grid",
+    "create_cacheable_param_grid",
 ]
 
 
@@ -668,13 +681,9 @@ __all__ = [
 
 # Add to end of file to show new features are available
 logger.debug("Enhanced cache features available:")
+logger.debug("  - Unified cacheable() decorator with auto_versioning")
 logger.debug("  - Robust cache keys for NumPy/Pandas")
 logger.debug("  - MLflow integration: {}", "✓" if MLFLOW_INTEGRATION_AVAILABLE else "✗")
 logger.debug("  - Backtest caching: ✓")
 logger.debug("  - Cache monitoring: ✓")
-logger.debug("  - Cache size analysis: ✓")
-logger.debug("  - Robust cache keys for NumPy/Pandas")
-logger.debug("  - MLflow integration: {}", "✓" if MLFLOW_INTEGRATION_AVAILABLE else "✗")
-logger.debug("  - Backtest caching: ✓")
-logger.debug("  - Cache monitoring: ✓")
-logger.debug("  - Cache size analysis: ✓")
+logger.debug("  - Orphaned cache cleanup: ✓")
