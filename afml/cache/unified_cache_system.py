@@ -346,10 +346,11 @@ class UnifiedCacheKeyGenerator:
         # Sample content for large DataFrames
         if df.size > 10000:
             sample = df.iloc[:: max(1, len(df) // 100)]
-            content_hash = hashlib.md5(sample.values.tobytes()).hexdigest()[:8]
+            content_str = sample.to_json(orient="values", double_precision=6)
         else:
-            content_hash = hashlib.md5(df.values.tobytes()).hexdigest()[:8]
+            content_str = df.to_json(orient="values", double_precision=6)
 
+        content_hash = hashlib.md5(content_str.encode()).hexdigest()
         parts.append(f"data_{content_hash}")
         return f"{name}_df_{'_'.join(parts)}"
 
@@ -363,10 +364,11 @@ class UnifiedCacheKeyGenerator:
 
         if len(series) > 1000:
             sample = series.iloc[:: max(1, len(series) // 100)]
-            content_hash = hashlib.md5(sample.values.tobytes()).hexdigest()[:8]
+            content_str = sample.to_json(orient="values", double_precision=6)
         else:
-            content_hash = hashlib.md5(series.values.tobytes()).hexdigest()[:8]
+            content_str = series.to_json(orient="values", double_precision=6)
 
+        content_hash = hashlib.md5(content_str.encode()).hexdigest()
         parts.append(f"data_{content_hash}")
         return f"{name}_ser_{'_'.join(parts)}"
 
@@ -375,10 +377,12 @@ class UnifiedCacheKeyGenerator:
         """Hash numpy array."""
         if arr.size > 10000:
             sample = arr.flat[:: max(1, arr.size // 1000)]
-            content_hash = hashlib.md5(sample.tobytes()).hexdigest()[:8]
+            rounded = np.round(sample, decimals=6)  # Avoid float precision issues
         else:
-            content_hash = hashlib.md5(arr.tobytes()).hexdigest()[:8]
+            rounded = np.round(arr, decimals=6)  # Avoid float precision issues
 
+        content_str = ",".join(str(x) for x in rounded)
+        content_hash = hashlib.md5(content_str.encode()).hexdigest()
         return f"{name}_arr_{arr.shape}_{arr.dtype}_{content_hash}"
 
     @staticmethod
@@ -466,7 +470,6 @@ class UnifiedCacheMonitor:
                 log_msg += f" ({pd.Timedelta(seconds=computation_time).round('1s')})".replace(
                     "0 days ", ""
                 )
-
         logger.debug(log_msg)
 
 
@@ -492,7 +495,7 @@ def cacheable(
     track_data_access: bool = False,
     dataset_name: Optional[str] = None,
     purpose: Optional[str] = None,
-    auto_versioning: bool = True,  # DEFAULT: True for correctness
+    auto_versioning: bool = True,
 ):
     """
     Universal caching decorator - replaces all previous decorators.
@@ -540,84 +543,66 @@ def cacheable(
     """
 
     def decorator(func: Callable) -> Callable:
+        import pickle
+        from pathlib import Path
+
         func_name = f"{func.__module__}.{func.__qualname__}"
 
-        # Warn if function is already cached (nested @cacheable)
+        # Warn if function is already cached
         if hasattr(func, "_afml_cacheable") and func._afml_cacheable:
             logger.warning(
                 f"Function {func_name} already has @cacheable decorator. "
-                f"Nested @cacheable is redundant and wastes resources. "
-                f"Remove the duplicate decorator."
-            )
-            # Still proceed, but user should fix this
-
-        # Warn about nested functions with closures
-        if "<locals>" in func.__qualname__ and func.__closure__:
-            logger.debug(
-                f"Caching nested function {func_name} with closure variables. "
-                f"Cache keys will include closure state. If you're seeing unexpected "
-                f"cache misses, this may be why. Consider moving to module level."
+                f"Nested @cacheable is redundant."
             )
 
-        monitor = get_unified_monitor()
         cached_func = memory.cache(func)
+        monitor = get_unified_monitor()
+
+        # Track seen cache keys for this session
+        seen_signatures = set()
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Generate cache key (with auto_versioning by default!)
+            nonlocal seen_signatures
+
+            # Generate our custom cache key for tracking/monitoring
             cache_key = UnifiedCacheKeyGenerator.generate_key(
                 func, args, kwargs, time_aware=time_aware, auto_versioning=auto_versioning
             )
 
-            # Track whether we actually computed (miss) or used cache (hit)
-            # We determine this by checking if cached_func actually calls the original function
-            computation_happened = False
+            is_hit = cached_func.check_call_in_cache(*args, **kwargs)
             computation_time = None
-            start_time = time.time()
 
-            # Execute with cache
+            # Track for session
+            seen_signatures.add(cache_key)
+
+            # Execute through joblib (it handles all persistence)
             try:
-                # Wrap the original function to detect if it's actually called
-                original_func = cached_func.func
-                call_count = [0]  # Use list to allow mutation in nested scope
-
-                def tracked_func(*args, **kwargs):
-                    call_count[0] += 1
-                    return original_func(*args, **kwargs)
-
-                # Temporarily replace func to track calls
-                cached_func.func = tracked_func
-
-                try:
+                if not is_hit:
+                    start_time = time.time()
                     result = cached_func(*args, **kwargs)
-                finally:
-                    # Restore original function
-                    cached_func.func = original_func
-
-                # If function was called, it was a miss
-                computation_happened = call_count[0] > 0
-                is_hit = not computation_happened
-
-                # Track computation time only for misses
-                if computation_happened:
                     computation_time = time.time() - start_time
+                else:
+                    result = cached_func(*args, **kwargs)
 
-            except (EOFError, Exception) as e:
-                # Cache corruption - clear and recompute
-                logger.warning(f"Cache error for {func_name}: {e}")
+            except (EOFError, pickle.PickleError, OSError) as e:
+                # Handle cache corruption - let joblib retry
+                logger.warning(
+                    f"Cache corruption for {func_name}: {type(e).__name__} - recomputing"
+                )
+
+                # Clear corrupted cache
                 try:
                     cached_func.clear()
                 except:
                     pass
 
-                # Direct call without cache
+                # Execute directly
                 start_time = time.time()
                 result = func(*args, **kwargs)
                 computation_time = time.time() - start_time
-                is_hit = False
-                computation_happened = True
 
-            # Track in unified monitor
+            # Track stats
             monitor.track_cache_call(
                 func_name=func_name,
                 is_hit=is_hit,
@@ -631,8 +616,16 @@ def cacheable(
 
             return result
 
+        # Expose cache management methods
         wrapper._afml_cacheable = True
-        wrapper._auto_versioning = auto_versioning  # Track for cleanup utilities
+        wrapper._auto_versioning = auto_versioning
+        wrapper.cache_clear = cached_func.clear
+        wrapper.cache_info = lambda: {
+            "function_name": func_name,
+            "auto_versioning": auto_versioning,
+            "seen_signatures": len(seen_signatures),
+        }
+
         return wrapper
 
     return decorator
