@@ -8,11 +8,32 @@ This implements the proper separation:
 """
 
 import warnings
+from typing import Dict
 
 import numpy as np
 import pandas as pd
+from sklearn.base import ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+
+from afml.cache.unified_cache_system import cacheable
+from afml.cross_validation.cross_validation import (
+    PurgedKFold,
+    PurgedSplit,
+    ml_cross_val_score,
+)
+from afml.labeling.triple_barrier import (
+    add_vertical_barrier,
+    get_event_weights,
+    triple_barrier_labels,
+)
+from afml.sample_weights.optimized_attribution import (
+    get_weights_by_time_decay_optimized,
+)
+from afml.strategies.bollinger_features import create_bollinger_features
+from afml.strategies.signal_processing import get_entries
+from afml.strategies.signals import BaseStrategy, BollingerStrategy
+from afml.util.volatility import get_daily_vol
 
 warnings.filterwarnings("ignore")
 
@@ -28,91 +49,192 @@ class BollingerBandsMetaLabeling:
     4. Cold start: No predictions until N signals have been observed
     """
 
-    def __init__(self, bb_window=20, bb_std=2, min_signals_for_metrics=20):
+    def __init__(
+        self,
+        bb_window: int = 20,
+        bb_std: float = 2,
+        min_signals_for_metrics: int = 20,
+        target_lookback: int = 100,
+        profit_target: float = 1,
+        stop_loss: float = 2,
+        max_holding_period: Dict[str, int] = dict(days=1),
+        min_ret: float = 0.0,
+        vertical_barrier_zero: bool = True,
+        filter_as_series: bool = True,
+    ):
         """
-        Args:
-            bb_window: Bollinger Bands SMA window
-            bb_std: Number of standard deviations for bands
-            min_signals_for_metrics: Minimum signals before calculating metrics (cold start)
+        Parameters
+        ----------
+            bb_window : int
+                Bollinger Bands SMA window
+            bb_std : float
+                Number of standard deviations for bands
+            min_signals_for_metrics : int
+                Minimum signals before calculating metrics (cold start)
+            target_lookback : int
+                Lookback window for volatility estimation with EWM daily volatility.
+            profit_target : float, default=1
+                Profit-taking threshold multiplier.
+            stop_loss : float, default=1
+                Stop-loss threshold multiplier.
+            max_holding_period : dict, default={'days': 1}
+                Maximum holding period for vertical barrier.
+            min_ret : float, default=0.0
+                Minimum return threshold.
+            vertical_barrier_zero : bool, default=True
+                Set label to zero if vertical barrier is reached.
+            filter_as_series : bool, default=True
+                Pass volatility threshold as series instead of scalar.
         """
         self.bb_window = bb_window
         self.bb_std = bb_std
         self.min_signals_for_metrics = min_signals_for_metrics
+        self.strategy = BollingerStrategy(bb_window, bb_std)
+        self.signals = pd.Series()
+        self.target_lookback = target_lookback
+        self.profit_target = profit_target
+        self.stop_loss = stop_loss
+        self.max_holding_period = max_holding_period
+        self.min_ret = min_ret
+        self.vertical_barrier_zero = vertical_barrier_zero
+        self.filter_as_series = filter_as_series
 
         # Track BB signal history for rolling metrics
         self.signal_history = []  # List of (signal, actual_outcome) tuples
         self.meta_model = None
 
-    def generate_bb_signals(self, prices):
-        """
-        Primary Model: Generate Bollinger Bands trading signals.
-        Returns: Series of {-1, 0, +1}
-        """
-        signals = pd.Series(0, index=prices.index)
-
-        # Calculate Bollinger Bands
-        sma = prices.rolling(window=self.bb_window).mean()
-        std = prices.rolling(window=self.bb_window).std()
-        upper_band = sma + (std * self.bb_std)
-        lower_band = sma - (std * self.bb_std)
-
-        # Mean reversion strategy
-        # Long when price crosses below lower band
-        long_signal = (prices < lower_band) & (prices.shift(1) >= lower_band.shift(1))
-        # Short when price crosses above upper band
-        short_signal = (prices > upper_band) & (prices.shift(1) <= upper_band.shift(1))
-
-        signals[long_signal] = 1
-        signals[short_signal] = -1
-
-        return signals, sma, upper_band, lower_band
-
+    @cacheable()
     def calculate_meta_labels(
-        self, prices, signals, holding_period=5, profit_target=0.02, stop_loss=0.01
-    ):
+        self,
+        data: pd.DataFrame,
+    ) -> pd.DataFrame:
         """
-        Calculate meta-labels using triple barrier method.
-        Only calculates for observations where signals != 0.
+        Generate trading events using the triple-barrier method.
 
-        Returns: Series of meta-labels (1 = profitable, 0 = not profitable)
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Price bars with 'close' column.
+
+        Returns
+        -------
+        pd.DataFrame
+            Event labels with columns:
+            - 'bin' : {-1, 0, 1} classification
+            - 't1'  : vertical barrier timestamps
+            - 'w'   : sample weights
+            - 'tW'  : uniqueness weights
         """
-        meta_labels = pd.Series(np.nan, index=prices.index)
+        close = data["close"]
 
-        for i in range(len(prices) - holding_period):
-            if signals.iloc[i] == 0:
-                continue
+        # Compute signals and CUSUM-filtered trade events
+        target = get_daily_vol(close, self.target_lookback)  # target volatility for barriers
+        threshold = (
+            target if self.filter_as_series else target.mean()
+        )  # target threshold for CUSUM-filter
+        side, t_events = get_entries(self.strategy, data, threshold)
 
-            entry_price = prices.iloc[i]
-            side = signals.iloc[i]
-            future_prices = prices.iloc[i + 1 : i + holding_period + 1]
+        # Compute barriers
+        vb = add_vertical_barrier(t_events, close, **self.max_holding_period)
+        events = triple_barrier_labels(
+            close,
+            target,
+            t_events,
+            vertical_barrier_times=vb,
+            side_prediction=side,
+            pt_sl=[self.profit_target, self.stop_loss],
+            min_ret=self.min_ret,
+            min_pct=0.05,
+            vertical_barrier_zero=self.vertical_barrier_zero,
+            drop=True,
+            verbose=False,
+        )
+        events = get_event_weights(events, close)
+        self.signals = side.reindex(events.index)
+        return events
 
-            if side == 1:  # Long position
-                returns = (future_prices - entry_price) / entry_price
-                hit_profit = (returns >= profit_target).any()
-                hit_stop = (returns <= -stop_loss).any()
+    def compute_sample_weights(
+        self,
+        events: pd.DataFrame,
+        data: pd.DataFrame,
+        X_train: pd.DataFrame,
+        model: ClassifierMixin,
+    ) -> pd.Series:
+        """
+        Compute sample weights with time decay.
 
-                if hit_profit and not hit_stop:
-                    meta_labels.iloc[i] = 1
-                elif hit_stop:
-                    meta_labels.iloc[i] = 0
-                else:
-                    final_return = (future_prices.iloc[-1] - entry_price) / entry_price
-                    meta_labels.iloc[i] = 1 if final_return > 0 else 0
+        Parameters
+        ----------
+        events : pd.DataFrame
+            Event labels with uniqueness weights.
+        data: pd.DataFrame
+            Price data.
+        X_train: pd.DataFrame
+            Training features
+        model: ClassifierMixin
+            Classifier model.
 
-            elif side == -1:  # Short position
-                returns = (entry_price - future_prices) / entry_price
-                hit_profit = (returns >= profit_target).any()
-                hit_stop = (returns <= -stop_loss).any()
+        Returns
+        -------
+        pd.Series
+            Sample weights.
 
-                if hit_profit and not hit_stop:
-                    meta_labels.iloc[i] = 1
-                elif hit_stop:
-                    meta_labels.iloc[i] = 0
-                else:
-                    final_return = (entry_price - future_prices.iloc[-1]) / entry_price
-                    meta_labels.iloc[i] = 1 if final_return > 0 else 0
+        Notes
+        -----
+        - First run: ~5s; cached: ~0.1s (≈50x speedup).
+        """
+        valid_index = X_train.index.intersection(events.index)
+        weighting_schemes = {
+            "unweighted": pd.Series(1.0, index=valid_index),
+            "uniqueness": events.loc[valid_index, "tW"],
+            "return": events.loc[valid_index, "w"],
+        }
+        X = X_train.loc[valid_index]
+        y = events.loc[valid_index, "bin"]
+        cv_gen = PurgedKFold(n_splits=5, t1=events.loc[valid_index, "t1"], pct_embargo=0.01)
+        best_scheme = None
 
-        return meta_labels
+        def get_best_weighting_scheme(weight, scheme, best_score):
+            nonlocal best_scheme
+            cv_scores = ml_cross_val_score(
+                clone(model).set_params(n_estimators=None),
+                X,
+                y,
+                cv_gen,
+                sample_weight_train=weight,
+                sample_weight_score=weight,
+                scoring="f1",
+            )
+            score = cv_scores.mean()
+            best_score = max(score, best_score)
+            if not best_scheme or score == best_score:
+                best_scheme = scheme
+            return best_scheme, best_score
+
+        best_score = 0
+        for scheme, weight in weighting_schemes.items():
+            best_scheme, best_score = get_best_weighting_scheme(weight, scheme, best_score)
+
+        decay_factors = [0.01, 0.1, 0.25, 0.5, 0.75, 0.9]
+        best_weighting_scheme = best_scheme
+        best_weight = weighting_schemes[best_scheme]
+        for time_decay in reversed(decay_factors):
+            for linear in (0, 1):
+                decay_w = get_weights_by_time_decay_optimized(
+                    triple_barrier_events=events.loc[valid_index],
+                    close_index=data.index,
+                    last_weight=time_decay,
+                    linear=linear,
+                    av_uniqueness=events.loc[valid_index, "tW"],
+                )
+                weight = best_weight * decay_w
+                scheme = f"{best_weighting_scheme}_{('linear' if linear else 'exponential')}"
+                weighting_schemes[f"{scheme}_decay_{time_decay}"] = weight
+                best_scheme, best_score = get_best_weighting_scheme(weight, scheme, best_score)
+
+        print("Best Weighting Scheme:", " ".join(best_scheme.split("_")).title())
+
+        return weighting_schemes[best_scheme]
 
     def calculate_rolling_metrics(self, window_sizes=[20, 50]):
         """
@@ -147,7 +269,7 @@ class BollingerBandsMetaLabeling:
 
         return metrics
 
-    def prepare_features(self, prices, signals, index):
+    def prepare_features(self, data, signals, index):
         """
         Prepare feature vector for a specific signal at given index.
 
@@ -168,24 +290,26 @@ class BollingerBandsMetaLabeling:
         features = {
             "signal": signals.iloc[index],
         }
+        idx = data.index.get_loc(signals.index[index])
+        prices = data["close"]
 
         # Market context features
         if index >= 20:
-            features["volatility_20"] = prices.iloc[index - 20 : index].std()
+            features["volatility_20"] = prices.iloc[idx - 20 : idx].std()
             features["price_position"] = (
-                prices.iloc[index] - prices.iloc[index - 20 : index].mean()
-            ) / prices.iloc[index - 20 : index].std()
+                prices.iloc[idx] - prices.iloc[idx - 20 : idx].mean()
+            ) / prices.iloc[idx - 20 : idx].std()
         else:
             features["volatility_20"] = np.nan
             features["price_position"] = np.nan
 
         if index >= 5:
-            features["momentum_5"] = prices.iloc[index] / prices.iloc[index - 5] - 1
+            features["momentum_5"] = prices.iloc[idx] / prices.iloc[idx - 5] - 1
         else:
             features["momentum_5"] = np.nan
 
         if index >= 10:
-            features["momentum_10"] = prices.iloc[index] / prices.iloc[index - 10] - 1
+            features["momentum_10"] = prices.iloc[idx] / prices.iloc[idx - 10] - 1
         else:
             features["momentum_10"] = np.nan
 
@@ -194,7 +318,11 @@ class BollingerBandsMetaLabeling:
 
         return features
 
-    def train(self, prices, validation_split=0.3):
+    def get_features(self, data, meta_features):
+        features = create_bollinger_features(data, self.bb_window, self.bb_std)
+        return features.join(meta_features, how="inner").dropna()
+
+    def train(self, data, test_split=0.3):
         """
         Complete training pipeline:
         1. Generate BB signals
@@ -208,72 +336,67 @@ class BollingerBandsMetaLabeling:
         print("Training Bollinger Bands Meta-Labeling System")
         print("=" * 80)
 
-        # Step 1: Generate BB signals (Primary Model)
-        signals, sma, upper_band, lower_band = self.generate_bb_signals(prices)
-        n_signals = (signals != 0).sum()
-        print(f"\n1. Bollinger Bands generated {n_signals} signals")
-        print(f"   Long signals: {(signals == 1).sum()}")
-        print(f"   Short signals: {(signals == -1).sum()}")
-
-        # Step 2: Calculate meta-labels
-        meta_labels = self.calculate_meta_labels(prices, signals)
-        bb_precision = meta_labels[signals != 0].mean()
-        print(f"\n2. Meta-labels calculated")
+        # Step 1: Calculate meta-labels
+        events = self.calculate_meta_labels(data)
+        bb_precision = events["bin"].mean()
+        print(f"\n1. Meta-labels calculated")
         print(f"   Raw BB strategy precision: {bb_precision:.2%}")
 
-        # Step 3: Build training dataset with rolling metrics
-        feature_list = []
-        target_list = []
+        # Step 2: Build training dataset with rolling metrics
+        meta_features = {}
 
-        for i in range(len(prices)):
-            if signals.iloc[i] == 0:
-                continue  # Skip non-signals
-
-            if pd.isna(meta_labels.iloc[i]):
-                continue  # Skip if meta-label couldn't be calculated
-
+        for i in range(len(events)):
             # Update signal history BEFORE calculating features
             # This ensures rolling metrics are based on PAST signals only
             if len(self.signal_history) > 0:
-                features = self.prepare_features(prices, signals, i)
+                features = self.prepare_features(data, self.signals, i)
 
                 if features is not None:  # Past cold start period
-                    feature_list.append(features)
-                    target_list.append(meta_labels.iloc[i])
+                    meta_features[events.index[i]] = features
 
             # Now add this signal to history for future rolling calculations
-            self.signal_history.append((signals.iloc[i], meta_labels.iloc[i]))
+            self.signal_history.append((self.signals.iloc[i], events["bin"].iloc[i]))
+        meta_features = pd.DataFrame.from_dict(meta_features, orient="index")
 
-        print(f"\n3. Features prepared")
+        print(f"\n2. Features prepared")
         print(f"   Cold start period: {self.min_signals_for_metrics} signals")
-        print(f"   Training observations after cold start: {len(feature_list)}")
+        print(f"   Training observations after cold start: {len(meta_features)}")
 
         # Convert to DataFrame
-        X = pd.DataFrame(feature_list)
-        y = pd.Series(target_list)
+        features = self.get_features(data, meta_features)
 
         # Remove any remaining NaN values
-        valid_mask = ~X.isnull().any(axis=1)
-        X = X[valid_mask]
-        y = y[valid_mask]
+        valid_index = events.index.intersection(features.index)
+        cont = events.loc[valid_index]
+        X = features.loc[valid_index]
+        y = cont["bin"]
 
         print(f"   Final training samples: {len(X)}")
 
         # Step 4: Train/validation split
-        split_idx = int(len(X) * (1 - validation_split))
-        X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+        train_idx, test_idx = PurgedSplit(t1=cont["t1"], test_size_pct=test_split).split(X)
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
         print(f"\n4. Train/Validation split")
         print(f"   Training: {len(X_train)} samples")
-        print(f"   Validation: {len(X_val)} samples")
+        print(f"   Validation: {len(X_test)} samples")
 
         # Step 5: Train meta-model
+        av_uniqueness = cont["tW"].iloc[train_idx].mean()
         self.meta_model = RandomForestClassifier(
-            n_estimators=100, max_depth=5, min_samples_split=10, random_state=42
+            n_estimators=200,
+            criterion="entropy",
+            class_weight="balanced_subsample",
+            max_depth=4,
+            max_samples=av_uniqueness,
+            min_weight_fraction_leaf=0.05,
+            random_state=42,
+            n_jobs=-1,
         )
 
-        self.meta_model.fit(X_train, y_train)
+        w_train = self.compute_sample_weights(cont, data, X_train, self.meta_model)
+        self.meta_model.fit(X_train, y_train, sample_weight=w_train)
 
         # Feature importance
         feature_importance = pd.DataFrame(
@@ -282,30 +405,30 @@ class BollingerBandsMetaLabeling:
 
         print(f"\n5. Meta-model trained")
         print(f"\n   Top 5 Most Important Features:")
-        for idx, row in feature_importance.head().iterrows():
+        for _, row in feature_importance.head().iterrows():
             print(f"     {row['feature']:30s}: {row['importance']:.4f}")
 
         # Step 6: Evaluate
-        y_val_pred_proba = self.meta_model.predict_proba(X_val)[:, 1]
+        y_pred_proba = self.meta_model.predict_proba(X_test)[:, 1]
 
-        baseline_precision = y_val.mean()
+        baseline_precision = y_test.mean()
 
         print(f"\n6. Validation Performance")
         print(f"\n   Baseline (accept all BB signals):")
         print(f"     Precision: {baseline_precision:.2%}")
-        print(f"     Number of trades: {len(y_val)}")
+        print(f"     Number of trades: {len(y_test)}")
 
         for threshold in [0.5, 0.6, 0.7]:
-            filtered_mask = y_val_pred_proba >= threshold
+            filtered_mask = y_pred_proba >= threshold
             if filtered_mask.sum() == 0:
                 continue
 
-            filtered_precision = y_val[filtered_mask].mean()
+            filtered_precision = y_test[filtered_mask].mean()
             n_trades = filtered_mask.sum()
 
             print(f"\n   Meta-model @ threshold {threshold:.1f}:")
             print(f"     Precision: {filtered_precision:.2%}")
-            print(f"     Number of trades: {n_trades} ({n_trades/len(y_val):.1%} of signals)")
+            print(f"     Number of trades: {n_trades} ({n_trades/len(y_test):.1%} of signals)")
             print(f"     Improvement: {filtered_precision - baseline_precision:+.2%}")
 
         print("\n" + "=" * 80)
@@ -314,12 +437,12 @@ class BollingerBandsMetaLabeling:
             "feature_importance": feature_importance,
             "validation_metrics": {
                 "baseline_precision": baseline_precision,
-                "y_val": y_val,
-                "y_val_pred_proba": y_val_pred_proba,
+                "y_test": y_test,
+                "y_pred_proba": y_pred_proba,
             },
         }
 
-    def predict(self, prices, signals, index):
+    def predict(self, data, signals, index):
         """
         Make prediction for a new signal at given index.
 
@@ -330,16 +453,17 @@ class BollingerBandsMetaLabeling:
         if self.meta_model is None:
             raise ValueError("Model not trained. Call train() first.")
 
-        features = self.prepare_features(prices, signals, index)
+        meta_features = self.prepare_features(data, signals, index)
+        meta_features = pd.DataFrame(meta_features, index=signals.index[index])
 
         if features is None:
             return None  # Still in cold start
 
         # Convert to DataFrame with same column order as training
-        feature_df = pd.DataFrame([features])
-        feature_df = feature_df[self.meta_model.feature_names_in_]
+        features = self.get_features(data, meta_features)
+        features = features[self.meta_model.feature_names_in_]
 
-        return self.meta_model.predict_proba(feature_df)[0, 1]
+        return self.meta_model.predict_proba(features)[0, 1]
 
 
 def run_example():
@@ -351,14 +475,14 @@ def run_example():
     n_points = 1000
     dates = pd.date_range("2020-01-01", periods=n_points, freq="D")
     returns = np.random.normal(0.0005, 0.02, n_points)
-    prices = pd.Series(100 * np.exp(np.cumsum(returns)), index=dates)
+    data = pd.Series(100 * np.exp(np.cumsum(returns)), index=dates)
 
     # Initialize and train system
     system = BollingerBandsMetaLabeling(
         bb_window=20, bb_std=2, min_signals_for_metrics=20  # Cold start period
     )
 
-    results = system.train(prices, validation_split=0.3)
+    results = system.train(data, validation_split=0.3)
 
     print("\n" + "=" * 80)
     print("KEY ARCHITECTURE POINTS:")
