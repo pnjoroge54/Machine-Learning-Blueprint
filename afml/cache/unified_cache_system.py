@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 from loguru import logger
-from scipy.stats import rv_continuous, rv_discrete
+from scipy.stats._distn_infrastructure import rv_continuous_frozen, rv_discrete_frozen
 
 from . import cache_stats, memory
 from .cache_monitoring import get_cache_monitor
@@ -210,7 +210,7 @@ class UnifiedCacheKeyGenerator:
         """Route parameter to appropriate hashing method."""
 
         # 1. Scipy distributions (fixes clf_hyper_fit caching)
-        if isinstance(value, (rv_discrete, rv_continuous)):
+        if isinstance(value, (rv_discrete_frozen, rv_continuous_frozen)):
             return UnifiedCacheKeyGenerator._hash_scipy_dist(name, value)
 
         # 2. Dictionaries (may contain scipy distributions)
@@ -724,7 +724,7 @@ def create_cacheable_param_grid(param_distributions: Dict) -> Dict:
     cacheable_params = {}
 
     for key, value in param_distributions.items():
-        if isinstance(value, (rv_discrete, rv_continuous)):
+        if isinstance(value, (rv_discrete_frozen, rv_continuous_frozen)):
             dist_info = (
                 type(value).__name__,
                 value.args if hasattr(value, "args") else (),
@@ -747,15 +747,15 @@ def reconstruct_param_grid(cacheable_params: Dict) -> Dict:
         if isinstance(value, tuple) and len(value) == 3:
             dist_type, args, kwds = value
 
-            if dist_type == "randint_gen":
+            if dist_type == "rv_discrete_frozen":
                 reconstructed[key] = randint(*args, **kwds)
-            elif dist_type == "uniform_gen":
+            elif dist_type == "rv_continuous_frozen":
                 reconstructed[key] = uniform(*args, **kwds)
             else:
                 try:
                     import scipy.stats as stats
 
-                    dist_class = getattr(stats, dist_type.replace("_gen", ""))
+                    dist_class = getattr(stats, dist_type.replace("_frozen", ""))
                     reconstructed[key] = dist_class(*args, **kwds)
                 except:
                     logger.warning(f"Could not reconstruct: {dist_type}")
