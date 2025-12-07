@@ -254,7 +254,9 @@ def analyze_hyperparameter_results(
 
     # 8.5 Fold consistency
     fold_labels = [f"Fold {i}" for i in range(len(fold_means))]
-    axes[1, 2].bar(fold_labels, fold_means, yerr=fold_stds, capsize=5, alpha=0.7)
+    axes[1, 2].bar(
+        fold_labels, fold_means, yerr=fold_stds, capsize=5, alpha=0.7, error_kw={"ecolor": "red"}
+    )
     axes[1, 2].set_title("Cross-Validation Fold Performance")
     axes[1, 2].set_ylabel("Mean Score")
     axes[1, 2].tick_params(axis="x", rotation=45)
@@ -314,7 +316,7 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
     print("-" * 50)
 
     # Top model analysis
-    best_model = cv_results.iloc[0]
+    best_model = cv_results.sort_values(by="mean_test_score", ascending=False).iloc[0]
     print(
         f"Best Model: max_depth={best_model['param_clf__max_depth']}, "
         f"n_estimators={best_model['param_clf__n_estimators']}"
@@ -396,20 +398,3 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
             else "MEDIUM" if best_model["std_test_score"] < 0.04 else "LOW"
         ),
     }
-
-
-# Main analysis
-# if __name__ == "__main__":
-#     # Assuming your cv_results DataFrame is already loaded
-#     # cv_results = pd.read_csv('your_cv_results.csv')  # Or however you have it
-
-#     # Run comprehensive analysis
-#     analysis = analyze_hyperparameter_results(
-#         cv_results=cv_results,  # Your DataFrame
-#         target_metric='mean_test_score',
-#         time_constraint=10.0,  # Optional: maximum training time
-#         stability_threshold=0.03
-#     )
-
-#     # Run specific analysis for your results
-#     specific_insights = analyze_your_results(cv_results)

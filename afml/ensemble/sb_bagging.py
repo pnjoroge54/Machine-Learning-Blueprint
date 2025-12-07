@@ -490,7 +490,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         When set to True, reuse the solution of the previous call to fit
         and add more estimators to the ensemble, otherwise, just fit
         a whole new ensemble.
-    :param n_jobs: (int or None), optional (default=None)
+    :param n_jobs: (int or None), optional (default=-1)
         The number of jobs to run in parallel for both `fit` and `predict`.
         ``None`` means 1 unless in a :obj:`joblib.parallel_backend` context.
         ``-1`` means using all processors.
@@ -530,7 +530,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         bootstrap_features=True,
         oob_score=False,
         warm_start=False,
-        n_jobs=None,
+        n_jobs=-1,
         random_state=None,
         verbose=0,
     ):

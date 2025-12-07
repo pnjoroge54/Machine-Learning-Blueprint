@@ -156,7 +156,7 @@ def clf_hyper_fit(
     else:
         scoring = "neg_log_loss"  # symmetric towards all cases
 
-    # 1) hyperparameter search, on train data
+    # hyperparameter search, on train data
     inner_cv = PurgedKFold(n_splits=cv, t1=t1, pct_embargo=pct_embargo)
 
     # Normalize outer n_jobs
@@ -165,6 +165,7 @@ def clf_hyper_fit(
     # Save original n_jobs from pipeline estimators
     orig_n_jobs = {}
     n_jobs_steps = []
+
     for name, est in pipe_clf.named_steps.items():
         if hasattr(est, "n_jobs"):
             n_jobs_steps.append(name)
@@ -208,7 +209,7 @@ def clf_hyper_fit(
         }
         gs = gs.best_estimator_
 
-        # 2) fit validated model on the entirety of the data
+        # fit validated model on the entirety of the data
         if bagging_n_estimators > 0:
             # Create base pipeline with single-threaded estimators to avoid nested parallelism
             base_pipe = MyPipeline(gs.steps)
