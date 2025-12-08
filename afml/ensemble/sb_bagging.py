@@ -256,8 +256,8 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     @abstractmethod
     def __init__(
         self,
-        samples_info_sets,
-        price_bars_index,
+        samples_info_sets=None,
+        price_bars_index=None,
         estimator=None,
         n_estimators=10,
         max_samples=1.0,
@@ -685,8 +685,8 @@ class SequentiallyBootstrappedBaggingRegressor(
 
     def __init__(
         self,
-        samples_info_sets,
-        price_bars_index,
+        samples_info_sets=None,
+        price_bars_index=None,
         estimator=None,
         n_estimators=10,
         max_samples=1.0,
