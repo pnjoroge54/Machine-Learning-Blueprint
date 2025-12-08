@@ -475,7 +475,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         If None, then the base estimator is a decision tree.
     :param n_estimators: (int), optional (default=10)
         The number of base estimators in the ensemble.
-    :param max_samples: (int or float), optional (default=1.0)
+    :param max_samples: (int or float), optional (default=0.8)
         The number of samples to draw from X to train each base estimator.
         If int, then draw `max_samples` samples. If float, then draw `max_samples * X.shape[0]` samples.
     :param max_features: (int or float), optional (default=1.0)
@@ -525,7 +525,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         price_bars_index,
         estimator=None,
         n_estimators=10,
-        max_samples=1.0,
+        max_samples=0.8,
         max_features=1.0,
         bootstrap_features=False,
         oob_score=False,
@@ -640,7 +640,7 @@ class SequentiallyBootstrappedBaggingRegressor(
         The base estimator to fit on random subsets of the dataset. If None, then the base estimator is a decision tree.
     :param n_estimators: (int), optional (default=10)
         The number of base estimators in the ensemble.
-    :param max_samples: (int or float), optional (default=1.0)
+    :param max_samples: (int or float), optional (default=0.8)
         The number of samples to draw from X to train each base estimator.
         If int, then draw `max_samples` samples. If float, then draw `max_samples * X.shape[0]` samples.
     :param max_features: (int or float), optional (default=1.0)
@@ -689,7 +689,7 @@ class SequentiallyBootstrappedBaggingRegressor(
         price_bars_index=None,
         estimator=None,
         n_estimators=10,
-        max_samples=1.0,
+        max_samples=0.8,
         max_features=1.0,
         bootstrap_features=False,
         oob_score=False,
