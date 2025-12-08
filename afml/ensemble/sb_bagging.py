@@ -560,14 +560,68 @@ class SequentiallyBootstrappedBaggingClassifier(
                 max_depth=6,
             )
         )
-
+        
     def _fit(self, X, y, max_samples=None, sample_weight=None):
         """
-        Override _fit to set classes_ and n_classes_ for classifier compatibility.
+        Build a Sequentially Bootstrapped Bagging ensemble...
         """
-        # Set classes_ and n_classes_ before calling parent _fit
-        self.classes_ = np.unique(y)
-        self.n_classes_ = len(self.classes_)
+        # Set classes_ and n_classes_ for classifier compatibility
+        if hasattr(self, "classes_") and not hasattr(self, "n_classes_"):
+            self.classes_ = np.unique(y)
+            self.n_classes_ = len(self.classes_)
+    
+        # Validate parameters
+        random_state = check_random_state(self.random_state)
+    
+        # Generate random seeds
+        self._seeds = random_state.randint(np.iinfo(np.int32).max, size=self.n_estimators)
+    
+        # Convert data and validate
+        X, y = check_X_y(X, y, ["csr", "csc"])
+        n_samples = X.shape[0]
+    
+        # Check sample weight
+        if sample_weight is not None:
+            sample_weight = check_array(sample_weight, ensure_2d=False)
+            check_consistent_length(y, sample_weight)
+    
+        # Remap output for continuous or binary classification
+        self._validate_estimator()
+    
+        # Validate max_samples
+        if max_samples is None:
+            max_samples = self.max_samples
+    
+        if not isinstance(max_samples, (numbers.Integral, numbers.Real)):
+            raise ValueError("max_samples must be int or float, got %s" % type(max_samples))
+    
+        if isinstance(max_samples, numbers.Integral):
+            max_samples = min(max_samples, n_samples)
+        else:  # float
+            if not (0.0 < max_samples <= 1.0):
+                raise ValueError("max_samples must be in (0, 1], got %r" % max_samples)
+            max_samples = int(round(max_samples * n_samples))
+    
+        self._max_samples = max_samples
+    
+        # Compute indicator matrix for sequential bootstrap
+        if self.active_indices_ is None:
+            # Check if required data is provided
+            if self.samples_info_sets is None or self.price_bars_index is None:
+                raise ValueError(
+                    "samples_info_sets and price_bars_index must be provided "
+                    "either in __init__ or by setting them as attributes before calling fit()"
+                )
+                self.active_indices_ = get_active_indices(
+                self.samples_info_sets, self.price_bars_index
+                )
+    
+        # Check if indicator matrix matches data shape
+        if len(self.active_indices_) != n_samples:
+            raise ValueError(
+                f"Indicator matrix shape {len(self.active_indices_)} "
+                f"does not match number of samples {n_samples}"
+            )
 
         # Call parent _fit method
         return super()._fit(X, y, max_samples, sample_weight)
