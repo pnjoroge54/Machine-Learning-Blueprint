@@ -3,7 +3,6 @@ Implementation of Sequentially Bootstrapped Bagging Classifier using sklearn's l
 """
 
 import numbers
-import sys
 from abc import ABCMeta, abstractmethod
 from warnings import warn
 
@@ -13,7 +12,7 @@ from sklearn.base import ClassifierMixin, RegressorMixin
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 from sklearn.ensemble._bagging import BaseBagging
 from sklearn.ensemble._base import _partition_estimators
-from sklearn.metrics import accuracy_score, log_loss, r2_score
+from sklearn.metrics import accuracy_score, r2_score
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.utils import (
     check_array,
@@ -24,7 +23,6 @@ from sklearn.utils import (
 from sklearn.utils.random import sample_without_replacement
 from sklearn.utils.validation import has_fit_parameter
 
-from ..cross_validation.scoring import probability_weighted_accuracy
 from ..sampling.bootstrapping import get_active_indices, seq_bootstrap
 from ..util.misc import indices_to_mask
 
@@ -244,7 +242,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     ...     n_estimators=50,
     ...     max_samples=0.5,
     ...     replacement=True,
-    ...     bootstrap_features=True,
+    ...     bootstrap_features=False,
     ...     max_features=0.3,
     ...     oob_score=False,
     ...     random_state=42,
@@ -262,7 +260,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         n_estimators=10,
         max_samples=1.0,
         max_features=1.0,
-        bootstrap_features=True,
+        bootstrap_features=False,
         oob_score=False,
         warm_start=False,
         n_jobs=None,
@@ -560,7 +558,7 @@ class SequentiallyBootstrappedBaggingClassifier(
                 max_depth=6,
             )
         )
-        
+
     def _fit(self, X, y, max_samples=None, sample_weight=None):
         """
         Build a Sequentially Bootstrapped Bagging ensemble...
@@ -569,41 +567,41 @@ class SequentiallyBootstrappedBaggingClassifier(
         if hasattr(self, "classes_") and not hasattr(self, "n_classes_"):
             self.classes_ = np.unique(y)
             self.n_classes_ = len(self.classes_)
-    
+
         # Validate parameters
         random_state = check_random_state(self.random_state)
-    
+
         # Generate random seeds
         self._seeds = random_state.randint(np.iinfo(np.int32).max, size=self.n_estimators)
-    
+
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
         n_samples = X.shape[0]
-    
+
         # Check sample weight
         if sample_weight is not None:
             sample_weight = check_array(sample_weight, ensure_2d=False)
             check_consistent_length(y, sample_weight)
-    
+
         # Remap output for continuous or binary classification
         self._validate_estimator()
-    
+
         # Validate max_samples
         if max_samples is None:
             max_samples = self.max_samples
-    
+
         if not isinstance(max_samples, (numbers.Integral, numbers.Real)):
             raise ValueError("max_samples must be int or float, got %s" % type(max_samples))
-    
+
         if isinstance(max_samples, numbers.Integral):
             max_samples = min(max_samples, n_samples)
         else:  # float
             if not (0.0 < max_samples <= 1.0):
                 raise ValueError("max_samples must be in (0, 1], got %r" % max_samples)
             max_samples = int(round(max_samples * n_samples))
-    
+
         self._max_samples = max_samples
-    
+
         # Compute indicator matrix for sequential bootstrap
         if self.active_indices_ is None:
             # Check if required data is provided
@@ -612,10 +610,8 @@ class SequentiallyBootstrappedBaggingClassifier(
                     "samples_info_sets and price_bars_index must be provided "
                     "either in __init__ or by setting them as attributes before calling fit()"
                 )
-                self.active_indices_ = get_active_indices(
-                self.samples_info_sets, self.price_bars_index
-                )
-    
+            self.active_indices_ = get_active_indices(self.samples_info_sets, self.price_bars_index)
+
         # Check if indicator matrix matches data shape
         if len(self.active_indices_) != n_samples:
             raise ValueError(
@@ -769,7 +765,7 @@ class SequentiallyBootstrappedBaggingRegressor(
 
     def _validate_estimator(self):
         """Check the estimator and set the estimator_ attribute."""
-        super()._validate_estimator(default=DecisionTreeRegressor(max_features=1 / 3))
+        super()._validate_estimator(default=DecisionTreeRegressor(max_features=0.33))
 
     def _set_oob_score(self, X, y):
         """Compute out-of-bag score"""
