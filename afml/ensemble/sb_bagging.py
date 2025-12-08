@@ -527,7 +527,7 @@ class SequentiallyBootstrappedBaggingClassifier(
         n_estimators=10,
         max_samples=1.0,
         max_features=1.0,
-        bootstrap_features=True,
+        bootstrap_features=False,
         oob_score=False,
         warm_start=False,
         n_jobs=-1,
@@ -646,7 +646,7 @@ class SequentiallyBootstrappedBaggingRegressor(
     :param max_features: (int or float), optional (default=1.0)
         The number of features to draw from X to train each base estimator.
         If int, then draw `max_features` features. If float, then draw `max_features * X.shape[1]` features.
-    :param bootstrap_features: (bool), optional (default=True)
+    :param bootstrap_features: (bool), optional (default=False)
         Whether features are drawn with replacement.
     :param oob_score: (bool)
         Whether to use out-of-bag samples to estimate
@@ -691,7 +691,7 @@ class SequentiallyBootstrappedBaggingRegressor(
         n_estimators=10,
         max_samples=1.0,
         max_features=1.0,
-        bootstrap_features=True,
+        bootstrap_features=False,
         oob_score=False,
         warm_start=False,
         n_jobs=None,
