@@ -540,9 +540,8 @@ class UnifiedCacheMonitor:
             if computation_time < 60:
                 log_msg += f" ({computation_time:.2f}s)"
             else:
-                log_msg += f" ({pd.Timedelta(seconds=computation_time).round('1s')})".replace(
-                    "0 days ", ""
-                )
+                td = pd.Timedelta(seconds=computation_time).round("1s")
+                log_msg += f" ({td})".replace("0 days 00:", "").replace("0 days ", "")
         logger.debug(log_msg)
 
 

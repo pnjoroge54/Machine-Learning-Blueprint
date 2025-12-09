@@ -1,4 +1,4 @@
-from pprint import pprint
+from pprint import pformat, pprint
 from typing import Dict, List, Tuple, Union
 
 import numpy as np
@@ -38,6 +38,23 @@ from ..strategies.signal_processing import get_entries
 from ..strategies.signals import BaseStrategy
 from ..util.misc import value_counts_data
 from ..util.volatility import get_daily_vol
+
+
+# Define a sink that uses tqdm.write
+def tqdm_sink(msg):
+    tqdm.write(msg, end="")  # end="" avoids double newlines
+
+
+# Remove default handler and add our custom one
+logger.remove()
+logger.add(
+    tqdm_sink,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+    "<level>{level: <8}</level> | "
+    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+    "<level>{message}</level>",
+    colorize=True,
+)
 
 
 class TickDataLoader:
@@ -235,8 +252,8 @@ def create_feature_engineering_pipeline(data: pd.DataFrame, config: Dict) -> pd.
 @cacheable(time_aware=True)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
-    target_lookback: int,
     strategy: BaseStrategy,
+    target_lookback: int,
     profit_target: float = 1,
     stop_loss: float = 1,
     max_holding_period: Dict[str, int] = dict(days=1),
@@ -251,10 +268,10 @@ def generate_events_triple_barrier(
     ----------
     data : pd.DataFrame
         Price bars with 'close' column.
-    target_lookback : int
-        Lookback window for volatility estimation.
     strategy : BaseStrategy
         Strategy instance implementing `generate_signals()`.
+    target_lookback : int
+        Lookback window for volatility estimation.
     profit_target : float, default=1
         Profit-taking threshold multiplier.
     stop_loss : float, default=1
@@ -304,6 +321,26 @@ def generate_events_triple_barrier(
     return events
 
 
+@cacheable()
+def get_best_weighting_scheme(
+    classifier, X, y, cv_gen, sample_weight, scheme, best_scheme, best_score
+):
+    cv_scores = ml_cross_val_score(
+        classifier,
+        X,
+        y,
+        cv_gen,
+        sample_weight_train=sample_weight,
+        sample_weight_score=sample_weight,
+        scoring="f1",
+    )
+    score = cv_scores.mean()
+    best_score = max(score, best_score)
+    if best_scheme is None or score == best_score:
+        best_scheme = scheme
+    return best_scheme, best_score
+
+
 @cacheable(time_aware=True)
 def get_best_sample_weight(
     data: pd.DataFrame,
@@ -342,37 +379,22 @@ def get_best_sample_weight(
         criterion="entropy",
         class_weight="balanced_subsample",
         max_samples=cont["tW"].mean(),
-        max_depth=4,
+        max_depth=6,
         min_weight_fraction_leaf=0.05,
         random_state=42,
         n_jobs=-1,
     )
-
-    def get_best_weighting_scheme(weight, scheme, best_scheme, best_score):
-        cv_scores = ml_cross_val_score(
-            classifier,
-            X,
-            y,
-            cv_gen,
-            sample_weight_train=weight,
-            sample_weight_score=weight,
-            scoring="f1",
-        )
-        score = cv_scores.mean()
-        best_score = max(score, best_score)
-        if best_scheme is None or score == best_score:
-            best_scheme = scheme
-        return best_scheme, best_score
 
     best_scheme = None
     best_score = 0
     for scheme, weight in tqdm(
         weighting_schemes.items(),
         desc=f"Computing best weighting scheme from {list(weighting_schemes.keys())}",
-        leave=False,
         total=len(weighting_schemes),
     ):
-        best_scheme, best_score = get_best_weighting_scheme(weight, scheme, best_scheme, best_score)
+        best_scheme, best_score = get_best_weighting_scheme(
+            classifier, X, y, cv_gen, weight, scheme, best_scheme, best_score
+        )
 
     decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
     best_weighting_scheme = best_scheme
@@ -380,7 +402,6 @@ def get_best_sample_weight(
     for time_decay in tqdm(
         reversed(decay_factors),
         desc=f"{best_weighting_scheme} time-decay for decay factors in {decay_factors}",
-        leave=False,
         total=len(decay_factors),
     ):
         for linear in (0, 1):
@@ -396,7 +417,7 @@ def get_best_sample_weight(
             scheme = f"{best_weighting_scheme}_{decay_method}_decay_{time_decay}"
             weighting_schemes[scheme] = weight
             best_scheme, best_score = get_best_weighting_scheme(
-                weight, scheme, best_scheme, best_score
+                classifier, X, y, cv_gen, weight, scheme, best_scheme, best_score
             )
 
     logger.info(f"\nBest Weighting Scheme: {' '.join(best_scheme.split('_')).title()}")
@@ -551,14 +572,12 @@ def train_model_with_cv(
     y = cont["bin"]
     t1 = cont["t1"]
     w = sample_weight.loc[valid_index]
-    av_uniqueness = cont["tW"].mean().round(1)
 
     # Set max_samples distribution in param_grid from average uniqueness to 1
-    if rnd_search_iter == 0:
-        max_samples_disn = np.arange(av_uniqueness, 1.1, 0.1).tolist()
-    else:
-        max_samples_disn = uniform(loc=av_uniqueness, scale=1 - av_uniqueness)
-    param_grid["clf__max_samples"] = max_samples_disn
+    if hasattr(pipe_clf.named_steps["clf"], "max_samples"):
+        if rnd_search_iter > 0:
+            av_uniqueness = cont["tW"].mean()
+            param_grid["clf__max_samples"] = uniform(loc=av_uniqueness, scale=1 - av_uniqueness)
 
     best_model, cv_results = clf_hyper_fit_cached(
         X,
@@ -583,215 +602,192 @@ def train_model_with_cv(
 
 def make_custom_pipeline(classifier):
     if not isinstance(classifier, MyPipeline):
-        if hasattr(classifier, "steps"):
-            pipe = MyPipeline(classifier.steps)
-        else:
-            pipe = MyPipeline([("clf", classifier)])
-        return pipe
-    else:
-        return classifier
+        if isinstance(classifier, Pipeline):
+            return MyPipeline(classifier.steps)
+        return MyPipeline([("clf", classifier)])
+    return classifier
 
 
-class MetaModelTraining:
-    def __init__(
-        self,
-        symbol: str,
-        train_start: str,
-        train_end: str,
-        strategy: BaseStrategy,
-        data_config: Dict,
-        feature_config: Dict,
-        label_config: Dict,
-        model_params: Dict,
-        reports: bool = False,
-    ) -> Tuple[RandomForestClassifier, List[str], Dict]:
-        """
-        End-to-end production model development pipeline with aggressive caching.
+def develop_production_model(
+    symbol: str,
+    train_start: str,
+    train_end: str,
+    strategy: BaseStrategy,
+    data_config: Dict,
+    feature_config: Dict,
+    label_config: Dict,
+    model_params: Dict,
+    cache_reports: bool = False,
+) -> Tuple[RandomForestClassifier, List[str], Dict]:
+    """
+    End-to-end production model development pipeline with aggressive caching.
 
-        Parameters
-        ----------
-        symbol : str
-            Trading instrument symbol.
-        train_start : str
-            Training start date ('YYYY-MM-DD').
-        train_end : str
-            Training end date ('YYYY-MM-DD').
-        strategy: BaseStrategy
-            signal generating strategy
-        data_config : dict
-            Bar construction config. Keys:
-            - bar_type : str ('tick', 'volume', 'time')
-            - bar_size : int or str
-            - price : str ('bid', 'ask', 'mid')
-        feature_config : dict
-            Feature engineering config. Keys:
-            - func : callable
-            - params : dict
-        label_config : dict
-            Triple-barrier labeling config. Keys:
-            - target_lookback : int
-            - strategy : BaseStrategy
-            - profit_target : float
-            - stop_loss : float
-            - max_holding_period : dict
-            - min_ret : float
-            - vertical_barrier_zero : bool
-            - filter_as_series : bool
-        model_params : dict
-            Configuration for model training and cross-validation.
-            Expected keys:
-            - pipe_clf : sklearn.Pipeline
-                Pipeline including classifier named as "clf", e.g., Pipeline([("clf", RandomForestClassifier)]).
-            - param_grid : dict
-                Hyperparameter grid for search.
-            - cv_splits : int, optional (default=5)
-                Number of CV splits.
-            - bagging_n_estimators : int, optional (default=0)
-                Number of bagging estimators.
-            - bagging_max_samples : float, optional (default=1.0)
-                Max samples for bagging.
-            - bagging_max_features : float, optional (default=1.0)
-                Max features for bagging.
-            - rnd_search_iter : int, optional (default=0)
-                Randomized search iterations.
-            - n_jobs : int, optional (default=-1)
-                Parallel jobs.
-            - pct_embargo : float, optional (default=0.01)
-                Embargo percentage for purging CV splits.
-            - random_state : int, optional
-                Random seed.
-            - verbose : bool, optional (default=False)
-                Verbosity flag.
+    Parameters
+    ----------
+    symbol : str
+        Trading instrument symbol.
+    train_start : str
+        Training start date ('YYYY-MM-DD').
+    train_end : str
+        Training end date ('YYYY-MM-DD').
+    strategy: BaseStrategy
+        signal generating strategy
+    data_config : dict
+        Bar construction config. Keys:
+        - bar_type : str ('tick', 'volume', 'time')
+        - bar_size : int or str
+        - price : str ('bid', 'ask', 'mid')
+    feature_config : dict
+        Feature engineering config. Keys:
+        - func : callable
+        - params : dict
+    label_config : dict
+        Triple-barrier labeling config. Keys:
+        - target_lookback : int
+        - strategy : BaseStrategy
+        - profit_target : float
+        - stop_loss : float
+        - max_holding_period : dict
+        - min_ret : float
+        - vertical_barrier_zero : bool
+        - filter_as_series : bool
+    model_params : dict
+        Configuration for model training and cross-validation.
+        Expected keys:
+        - pipe_clf : sklearn.Pipeline
+            Pipeline including classifier named as "clf", e.g., Pipeline([("clf", RandomForestClassifier)]).
+        - param_grid : dict
+            Hyperparameter grid for search.
+        - cv_splits : int, optional (default=5)
+            Number of CV splits.
+        - bagging_n_estimators : int, optional (default=0)
+            Number of bagging estimators.
+        - bagging_max_samples : float, optional (default=1.0)
+            Max samples for bagging.
+        - bagging_max_features : float, optional (default=1.0)
+            Max features for bagging.
+        - rnd_search_iter : int, optional (default=0)
+            Randomized search iterations.
+        - n_jobs : int, optional (default=-1)
+            Parallel jobs.
+        - pct_embargo : float, optional (default=0.01)
+            Embargo percentage for purging CV splits.
+        - random_state : int, optional
+            Random seed.
+        - cache_reports : bool, optional (default=False)
+            Verbosity flag.
 
-        Returns
-        -------
-        model : RandomForestClassifier
-            Trained best model.
-        features : list of str
-            Names of engineered features.
-        metrics : dict
-            Dictionary containing:
-            - 'cv_results' : cross-validation results
-            - 'feature_importance' : ranked feature importance DataFrame
-            - 'training_samples' : number of samples used
-            - 'feature_count' : number of features generated
+    Returns
+    -------
+    model : RandomForestClassifier
+        Trained best model.
+    features : list of str
+        Names of engineered features.
+    metrics : dict
+        Dictionary containing:
+        - 'cv_results' : cross-validation results
+        - 'feature_importance' : ranked feature importance DataFrame
+        - 'training_samples' : number of samples used
+        - 'feature_count' : number of features generated
 
-        Notes
-        -----
-        Config dictionaries must include the following keys:
+    Notes
+    -----
+    Config dictionaries must include the following keys:
 
-        - data_config : {'bar_type', 'bar_size', 'price'}
-        - feature_config : {'func', 'params'}
-        - label_config : {'target_lookback', 'strategy', 'profit_target', 'stop_loss', ...}
-        - model_params : {'pipe_clf', 'param_grid', 'cv_splits', ...}
+    - data_config : {'bar_type', 'bar_size', 'price'}
+    - feature_config : {'func', 'params'}
+    - label_config : {'target_lookback', 'strategy', 'profit_target', 'stop_loss', ...}
+    - model_params : {'pipe_clf', 'param_grid', 'cv_splits', ...}
 
-        See individual function docstrings for detailed argument descriptions.
-        """
-        self.symbol = symbol
-        self.train_start = train_start
-        self.train_end = train_end
-        self.strategy = strategy
-        self.data_config = data_config
-        self.feature_config = feature_config
-        self.label_config = label_config
-        self.label_config["strategy"] = strategy
-        self.model_params = model_params
-        self.reports = reports
+    See individual function docstrings for detailed argument descriptions.
+    """
 
-    def run(self):
+    print("\n" + "=" * 70)
+    print("PRODUCTION MODEL DEVELOPMENT PIPELINE")
+    print("=" * 70)
+
+    print("\nConfiguration")
+    print("-" * 50)
+    config = {"strategy": strategy.get_strategy_name()}
+    config.update(data_config)
+    config.update(label_config)
+    print(pd.Series(config).to_string())
+
+    # Step 1: Load data (tracked for contamination)
+    print("\n[Step 1/7] Loading training data...")
+    data = load_and_prepare_training_data(symbol, train_start, train_end, **data_config)
+    print(f"✓ Loaded {len(data):,} samples from {train_start} to {train_end}")
+
+    # Step 2: Feature engineering  (cached)
+    print("\n[Step 2/7] Computing features...")
+    features = create_feature_engineering_pipeline(data, feature_config)
+    print(f"✓ Generated {len(features.columns)} features")
+
+    # Step 3: Label generation (cached)
+    print("\n[Step 3/7] Generating events...")
+    events = generate_events_triple_barrier(data, strategy, **label_config)
+    print(f"✓ Generated events: \n{value_counts_data(events['bin'])}")
+    print(f"\nAverage Uniqueness: {events['tW'].mean():.4f}")
+
+    # Step 4: Sample weights (cached)
+    print("\n[Step 4/7] Computing sample weights...")
+    sample_weight, best_weighting_scheme, weighting_schemes = get_best_sample_weight(
+        data, events, features
+    )
+
+    # Step 5: Rolling meta-label features (cached)
+    print("\n[Step 5/7] Computing rolling meta-label features...")
+    meta_features = calculate_rolling_metrics(events, sample_weight)
+    features = features.join(meta_features, how="inner")
+    events = events.reindex(features.index)  # Align indices
+    print(f"✓ Computed rolling meta-label features")
+
+    # Step 6: Model training with CV (cached)
+    print("\n[Step 6/7] Training model with cross-validation...")
+
+    # Ensure SequentiallyBootstrappedBaggingClassifier is properly initialized
+    pipe = make_custom_pipeline(model_params["pipe_clf"])
+    model_params["pipe_clf"] = pipe
+
+    best_model, cv_results = train_model_with_cv(features, events, sample_weight, **model_params)
+    print(f"✓ Best CV score: {cv_results['best_score']:.4f}")
+    print(f"✓ Best params: {cv_results['best_params']}")
+
+    # Step 6: Feature importance analysis
+    print("\n[Step 7/7] Analyzing feature importance...")
+    features_columns = (
+        best_model[:-1].get_feature_names_out() if len(best_model) > 1 else features.columns
+    )
+    feature_importance = pd.DataFrame(
+        {
+            "feature": features_columns,
+            "importance": best_model.named_steps["clf"].feature_importances_,
+        }
+    ).sort_values("importance", ascending=False)
+    print("\nTop 10 Features:")
+    print(feature_importance.head(10).to_string(index=False))
+
+    if cache_reports:
+        # Cache performance report
         print("\n" + "=" * 70)
-        print("PRODUCTION MODEL DEVELOPMENT PIPELINE")
+        print("CACHE PERFORMANCE REPORT")
         print("=" * 70)
+        monitor = get_cache_monitor()
+        monitor.print_health_report()
 
-        # Step 1: Load data (tracked for contamination)
-        print("\n[Step 1/7] Loading training data...")
-        data = load_and_prepare_training_data(
-            self.symbol, self.train_start, self.train_end, **self.data_config
-        )
-        print(f"✓ Loaded {len(data):,} samples from {self.train_start} to {self.train_end}")
+        # Data contamination check
+        print("\n" + "=" * 70)
+        print("DATA CONTAMINATION CHECK")
+        print("=" * 70)
+        print_contamination_report()
 
-        # Step 2: Feature engineering  (cached)
-        print("\n[Step 2/7] Computing features...")
-        features = create_feature_engineering_pipeline(data, self.feature_config)
-        print(f"✓ Generated {len(features.columns)} features")
+    metrics = {
+        "cv_results": cv_results,
+        "feature_importance": feature_importance,
+        "training_samples": len(data),
+        "feature_count": len(features_columns),
+        "best_weighting_scheme": best_weighting_scheme,
+        "weighting_schemes": weighting_schemes,
+    }
 
-        # Step 3: Label generation (cached)
-        print("\n[Step 3/7] Generating events...")
-        events = generate_events_triple_barrier(data, **self.label_config)
-        print(f"✓ Generated events: \n{value_counts_data(events['bin'])}")
-        print(f"\nAverage Uniqueness: {events['tW'].mean():.4f}")
-
-        # Step 4: Sample weights (cached)
-        print("\n[Step 4/7] Computing sample weights...")
-        features = features.join(events["side"], how="inner")
-        sample_weight, self.best_weighting_scheme, weighting_schemes = get_best_sample_weight(
-            data, events, features
-        )
-
-        # Step 5: Rolling meta-label features (cached)
-        print("\n[Step 5/7] Computing rolling meta-label features...")
-        meta_features = calculate_rolling_metrics(events, sample_weight)
-
-        # Align indices
-        features = features.join(meta_features, how="inner")
-        events = events.reindex(features.index)
-        sample_weight = sample_weight.reindex(features.index)
-        self.weighting_schemes = {
-            k: v.reindex(features.index) for k, v in weighting_schemes.items()
-        }
-        print(f"✓ Computed rolling meta-label features")
-
-        # Step 6: Model training with CV (cached)
-        print("\n[Step 6/7] Training model with cross-validation...")
-
-        # Ensure SequentiallyBootstrappedBaggingClassifier is properly initialized
-        pipe = make_custom_pipeline(self.model_params["pipe_clf"])
-        self.model_params["pipe_clf"] = pipe
-
-        best_model, cv_results = train_model_with_cv(
-            features, events, sample_weight, **self.model_params
-        )
-
-        # Create attributes
-        self.features = features
-        self.events = events
-        self.sample_weight = sample_weight
-
-        print(f"✓ Best CV score: {cv_results['best_score']:.4f}")
-        print(f"✓ Best params: {cv_results['best_params']}")
-
-        # Step 6: Feature importance analysis
-        print("\n[Step 7/7] Analyzing feature importance...")
-        feature_columns = best_model[:-1].get_feature_names_out()
-        feature_importance = pd.DataFrame(
-            {
-                "feature": feature_columns,
-                "importance": best_model.named_steps["clf"].feature_importances_,
-            }
-        ).sort_values("importance", ascending=False)
-
-        print("\nTop 10 Features:")
-        print(feature_importance.head(10).to_string(index=False))
-
-        if self.reports:
-            # Cache performance report
-            print("\n" + "=" * 70)
-            print("CACHE PERFORMANCE REPORT")
-            print("=" * 70)
-            monitor = get_cache_monitor()
-            monitor.print_health_report()
-
-            # Data contamination check
-            print("\n" + "=" * 70)
-            print("DATA CONTAMINATION CHECK")
-            print("=" * 70)
-            print_contamination_report()
-
-        metrics = {
-            "cv_results": cv_results,
-            "feature_importance": feature_importance,
-            "training_samples": len(data),
-            "feature_count": len(feature_columns),
-        }
-
-        return best_model, feature_columns, metrics
+    return best_model, features_columns, metrics, config

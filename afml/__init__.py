@@ -117,6 +117,7 @@ try:
         features,
         labeling,
         mt5,
+        production,
         sample_weights,
         sampling,
         util,
@@ -340,6 +341,7 @@ __all__ = [
     "signals",
     "filters",
     "mt5",
+    "production",
     # Heavy modules (lazy loaded)
     "ensemble",
     "clustering",

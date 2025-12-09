@@ -576,6 +576,7 @@ def evaluate_meta_labeling_performance(
         trading_days_per_year: The number of trading days in a year.
         trading_hours_per_day: The number of trading hours per day.
         strategy_name: The name of the strategy for reporting.
+        kwargs: Bet-sizing method arguments that do not relate to events data.
 
     Returns:
         A dictionary containing the performance metrics for both strategies,
@@ -599,19 +600,18 @@ def evaluate_meta_labeling_performance(
 
     # --- Bet Sizing Logic ---
     if bet_sizing is None:
-
-        meta_bets = meta_events["side"].copy()
+        bets = meta_events["side"].copy()
         bet_sizing = "none"
     elif bet_sizing == "probability":
-        meta_bets = bet_size_probability(
+        bets = bet_size_probability(
             meta_events, meta_prob, num_classes=2, pred=meta_events["side"], **kwargs
         )
     elif bet_sizing == "budget":
-        meta_bets = bet_size_budget(meta_events["t1"], meta_events["side"])
-        meta_bets = meta_bets["bet_size"]
+        bets = bet_size_budget(meta_events["t1"], meta_events["side"])
+        bets = bets["bet_size"]
     elif bet_sizing == "reserve":
-        meta_bets = bet_size_reserve(meta_events["t1"], meta_events["side"], **kwargs)
-        meta_bets = meta_bets["bet_size"]
+        bets = bet_size_reserve(meta_events["t1"], meta_events["side"], **kwargs)
+        bets = bets["bet_size"]
 
     msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
     msg = msg + f"\n{kwargs}" if kwargs else msg
