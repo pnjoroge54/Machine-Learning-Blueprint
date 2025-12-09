@@ -51,7 +51,7 @@ def tqdm_sink(msg):
 logger.remove()
 logger.add(
     tqdm_sink,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+    format="<green>{time:YYYY-MM-DD HH:mm:ss:ms}</green> | "
     "<level>{level: <8}</level> | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
     "<level>{message}</level>",
@@ -755,11 +755,13 @@ def get_best_sample_weight(
     best_weight = weighting_schemes[best_scheme]
     for time_decay in tqdm(
         reversed(decay_factors),
-        desc=f"{best_weighting_scheme} time-decay for decay {decay_factors}",
         total=len(decay_factors),
         position=0,
     ):
         for linear in tqdm((0, 1), total=2, position=1):
+            decay_method = "linear" if linear else "exponential"
+            scheme = f"{best_weighting_scheme}_{decay_method}_decay_{time_decay}"
+            logger.debug(scheme)
             decay_w = get_weights_by_time_decay_optimized(
                 triple_barrier_events=events.loc[valid_index],
                 close_index=data.index,
@@ -768,8 +770,6 @@ def get_best_sample_weight(
                 av_uniqueness=cont["tW"],
             )
             weight = best_weight * decay_w
-            decay_method = "linear" if linear else "exponential"
-            scheme = f"{best_weighting_scheme}_{decay_method}_decay_{time_decay}"
             weighting_schemes[scheme] = weight
             best_scheme, best_score = get_best_weighting_scheme(
                 clone(classifier), X, y, cv_gen, weight, scheme, best_scheme, best_score
@@ -853,13 +853,7 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
 
 def is_tree(estimator):
     "Checks if classfication model is tree based"
-    return isinstance(
-        estimator,
-        (
-            RandomForestClassifier,
-            DecisionTreeClassifier,
-        ),
-    )
+    return isinstance(estimator, (RandomForestClassifier, DecisionTreeClassifier))
 
 
 def train_model_with_cv(
@@ -956,12 +950,11 @@ def train_model_with_cv(
     return best_model, cv_results
 
 
-def make_custom_pipeline(classifier):
-    if not isinstance(classifier, MyPipeline):
-        if isinstance(classifier, Pipeline):
-            return MyPipeline(classifier.steps)
-        return MyPipeline([("clf", classifier)])
-    return classifier
+def make_custom_pipeline(pipe_clf):
+    if not isinstance(pipe_clf, Pipeline):
+        return MyPipeline([("clf", pipe_clf)])
+    else:
+        return pipe_clf
 
 
 def develop_production_model(
@@ -1109,13 +1102,16 @@ def develop_production_model(
     model_params["pipe_clf"] = make_custom_pipeline(pipe)
 
     best_model, cv_results = train_model_with_cv(features, events, sample_weight, **model_params)
+    best_model.named_steps["clf"].set_params(n_jobs=-1)
     print(f"✓ Best CV score: {cv_results['best_score']:.4f}")
     print(f"✓ Best params: {cv_results['best_params']}")
 
     # Step 6: Feature importance analysis
     print("\n[Step 7/7] Analyzing feature importance...")
     features_columns = (
-        best_model[:-1].get_feature_names_out() if len(best_model) > 1 else features.columns
+        best_model[:-1].get_feature_names_out()
+        if len(best_model) > 1
+        else features.columns.tolist()
     )
     feature_importance = pd.DataFrame(
         {
