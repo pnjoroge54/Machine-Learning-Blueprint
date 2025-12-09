@@ -169,8 +169,8 @@ def get_time_features(
 
     # Bar duration features for non-time bars
     if bar_type != "time":
-        durations = df.index.to_series("bar_duration").diff().dt.total_seconds()
-        duration_accel = durations.diff().rename("bar_duration_accel") # bar duration acceleration
+        durations = df.index.to_series(name="bar_duration").diff().dt.total_seconds()
+        duration_accel = durations.diff().rename("bar_duration_accel")  # bar duration acceleration
         features += [durations, duration_accel]
 
     # Frequency-based feature optimization
@@ -197,5 +197,9 @@ def get_time_features(
         session_feat = pd.DataFrame()
 
     features += [cyclical_feat, session_feat]
-    
-    return pd.concat(features, axis=1)
+    features = pd.concat(features, axis=1)
+    if timeframe not in ("D1", "MN"):
+        features.drop(
+            columns=["quarter_end", "month_end", "sunday_open", "friday_ny_close"], inplace=True
+        )
+    return features
