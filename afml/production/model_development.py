@@ -4,9 +4,11 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
 from loguru import logger
 from numba import njit, prange
 from scipy.stats import uniform
+from sklearn import preprocessing
 from sklearn.base import ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
@@ -601,7 +603,7 @@ def create_feature_engineering_pipeline(
     time_feat = get_time_features(
         data, timeframe=data_config["bar_size"], bar_type=data_config["bar_type"]
     )
-    return features.join(time_feat)
+    return features.join(time_feat).dropna()
 
 
 @cacheable(time_aware=True)
@@ -756,9 +758,8 @@ def get_best_sample_weight(
     for time_decay in tqdm(
         reversed(decay_factors),
         total=len(decay_factors),
-        position=0,
     ):
-        for linear in tqdm((0, 1), total=2, position=1):
+        for linear in (0, 1):
             decay_method = "linear" if linear else "exponential"
             scheme = f"{best_weighting_scheme}_{decay_method}_decay_{time_decay}"
             logger.debug(scheme)
@@ -1087,7 +1088,14 @@ def develop_production_model(
     # Step 5: Rolling meta-label features (cached)
     print("\n[Step 5/7] Computing rolling meta-label features...")
     meta_features = calculate_rolling_metrics(events, sample_weight)
-    features = features.join(meta_features, how="inner")
+    features = features.join(meta_features, how="inner").dropna()
+    preprocessor = Pipeline(
+        [
+            ("dcf", DropConstantFeatures()),
+            ("ddf", DropDuplicateFeatures()),
+        ]
+    )
+    features = preprocessor.fit_transform(features)
     events = events.reindex(features.index)  # Align indices
     print(f"✓ Computed rolling meta-label features")
 
