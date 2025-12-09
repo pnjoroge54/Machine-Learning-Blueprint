@@ -3,12 +3,13 @@ from typing import Union
 
 import matplotlib.lines as mlines
 import mplfinance as mpf
+import numpy as np
 import pandas as pd
 
 from ..features.moving_averages import calculate_ma_differences, get_ma_crossovers
 from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
-from ..util.volatility import get_garman_klass_vol, get_period_vol
+from ..util.volatility import get_garman_klass_vol, get_parkinson_vol, get_period_vol
 from .signal_processing import get_entries
 from .signals import BollingerStrategy
 
@@ -22,8 +23,8 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 1. Returns Features ---
     # Garman Volatility
-    features["vol"] = get_garman_klass_vol(
-        df["open"], df["high"], df["low"], df["close"], window=bb_period
+    features[f"parkinson_vol_{bb_period}"] = get_parkinson_vol(
+        df["high"], df["low"], window=bb_period
     )
 
     # Hourly EWM(num_hours) Volatility
@@ -35,7 +36,9 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # Lagged returns normalized by volatility
     lagged_ret = get_lagged_returns(df["close"], lags=[1, 5, 10], nperiods=3)
-    features = features.join(lagged_ret.div(features["vol"], axis=0))  # Normalize returns
+    features = features.join(
+        lagged_ret.div(features[f"parkinson_vol_{bb_period}"], axis=0)
+    )  # Normalize returns
 
     # Distribution
     features["returns_skew"] = features["returns"].rolling(bb_period).skew()
@@ -68,12 +71,20 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
     ta_features = [bbands, tr, atr, rsi, stochrsi, adx, macd]
     features = features.join(ta_features)
 
-    # --- 3. Moving Average Features ---
-    windows = (10, 20, 50, 100, 200)
-    ma_diffs = calculate_ma_differences(df["close"], windows, drop=False)
-    ma_diffs = ma_diffs.div(atr, axis=0)  # Normalize by ATR
-    ma_crossovers = get_ma_crossovers(df["close"], windows, drop=False)
-    features = features.join([ma_diffs, ma_crossovers])
+    # --- 3. Advanced Bollinger Features ---
+    # Normalize Bollinger Bands
+    bb_bandwidth = bbands.filter(regex="BBB")
+
+    # Add momentum features
+    features["bb_bandwidth_diff"] = bb_bandwidth.diff()  # Momentum
+    features["bb_bandwidth_ma"] = bb_bandwidth.rolling(5).mean()  # Smoothing
+    features["bb_bw_mom"] = bb_bandwidth.pct_change(3)
+    features["bb_bw_regime"] = (bb_bandwidth > bb_bandwidth.quantile(0.75)).astype(int)
+
+    # Calculate oscillators and volatility measures
+    bb_bandwidth_diff = features["bb_bandwidth_diff"].apply(np.sign).fillna(0)  # Bandwidth change
+    features["is_widening_bb"] = bb_bandwidth_diff.replace({-1: 0}).astype("int8")
+    features["is_shrinking_bb"] = bb_bandwidth_diff.replace({1: 0}).astype("int8")
 
     # --- 4. Add side prediction ---
     # Previous because we shift after
@@ -378,7 +389,7 @@ def plot_bbands_dual_bbp_bw(
 
 #     # Normalize Bollinger Bands
 #     df["bb_upper_dev"] = (df["bb_upper"] / df["close"] - 1) * 100
-#     df["bb_lower_dev"] = (1 - df["bb_lower"] / df["close"]) * 100
+#     df["bb_lower_dev"] = (1 - bb_lower / df["close"]) * 100
 
 #     # Add proper relative features
 #     std_dev = (df["bb_upper"] - df["bb_mid"]) / bb_dev
