@@ -1,7 +1,6 @@
-from copy import deepcopy
-
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.ensemble import BaggingClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
@@ -57,12 +56,12 @@ def clf_hyper_fit(
         Information range for each record, used for purged cross-validation.
         Index: Time when information extraction started.
         Values: Time when information extraction ended.
-    pipe_clf : sklearn.pipeline.Pipeline
+    pipe_clf : sklearn.pipeline.Pipeline or MyPipeline
         Pipeline containing preprocessing and classification steps.
     param_grid : dict or list of dicts
         Hyperparameter grid for search. Keys should include pipeline step
         names as prefixes (e.g., 'classifier__max_depth').
-    cv : int, default=3
+    cv : int, default=5
         Number of folds for purged k-fold cross-validation.
     bagging_n_estimators : int, default=0
         Number of base estimators in bagging ensemble. If 0, no bagging
@@ -70,8 +69,7 @@ def clf_hyper_fit(
         returns a BaggingClassifier fitted on the full dataset.
     bagging_max_samples : float or int, default=1.0
         For bagging: fraction (if float in (0, 1]) or number (if int) of
-        samples to draw for each base estimator. Set to average uniqueness
-        from sequential bootstrapping to account for sample overlap.
+        samples to draw for each base estimator.
     bagging_max_features : float or int, default=1.0
         For bagging: fraction (if float in (0, 1]) or number (if int) of
         features to draw for each base estimator.
@@ -79,175 +77,130 @@ def clf_hyper_fit(
         If 0, uses GridSearchCV (exhaustive search). If > 0, uses
         RandomizedSearchCV with this many iterations.
     n_jobs : int, default=-1
-        Number of parallel jobs. -1 uses all available cores. The function
-        handles nested parallelism automatically to prevent oversubscription.
+        Number of parallel jobs. -1 uses all available cores.
     pct_embargo : float, default=0
         Percentage of samples to embargo in test folds to prevent leakage
         from serially correlated labels. Range: [0, 1).
     random_state : int, RandomState instance or None, default=None
-        Random state for reproducibility in RandomizedSearchCV and
-        BaggingClassifier.
+        Random state for reproducibility.
     verbose : int, default=0
-        Controls verbosity of GridSearchCV/RandomizedSearchCV output.
-        0: silent, 1: print fold scores, 2: print fold scores and timing,
-        3+: print more detailed information.
+        Controls verbosity of output.
     **fit_params : dict
-        Additional parameters passed to the fit method. Use format
-        'step_name__parameter' for pipeline parameters (e.g.,
-        'classifier__sample_weight' for sample weights).
+        Additional parameters passed to the fit method.
 
     Returns
     -------
     estimator : Pipeline or BaggingClassifier
-        If bagging_n_estimators == 0: Returns the best_estimator_ Pipeline
-        from hyperparameter search, fitted on full data.
-        If bagging_n_estimators > 0: Returns a BaggingClassifier with the
-        best estimator as base, fitted on full data.
+        The trained model.
     cv_results : Dict
-        Results of best_estimator_ Pipeline, gs, in the format below:
-        cv_results = {
-            "best_params": gs.best_params_,
-            "best_score": gs.best_score_,
-            "cv_results": pd.DataFrame(gs.cv_results_),
-            "scoring": scoring,
-        }
-
-
-    Notes
-    -----
-    - Scoring metric is automatically selected: 'f1' for binary {0, 1}
-      labels (meta-labeling), 'neg_log_loss' otherwise.
-    - When bagging is enabled, it's recommended to set bagging_max_samples
-      to the average uniqueness from sequential bootstrapping to account
-      for overlapping samples in financial time series.
-    - The function automatically prevents nested parallelism by setting
-      inner estimator n_jobs=1 when outer search uses parallel jobs.
-
-    Examples
-    --------
-    >>> from sklearn.ensemble import RandomForestClassifier
-    >>> from sklearn.preprocessing import StandardScaler
-    >>> pipe = Pipeline([
-    ...     ('scaler', StandardScaler()),
-    ...     ('clf', RandomForestClassifier(random_state=42))
-    ... ])
-    >>> param_grid = {
-    ...     'clf__n_estimators': [100, 200],
-    ...     'clf__max_depth': [5, 10, None]
-    ... }
-    >>> # Without bagging
-    >>> model = clf_hyper_fit(
-    ...     features=X, labels=y, t1=t1,
-    ...     pipe_clf=pipe, param_grid=param_grid,
-    ...     cv=5, n_jobs=-1
-    ... )
-    >>> # With bagging (using average uniqueness from sequential bootstrap)
-    >>> avg_uniqueness = 0.65  # calculated from your data
-    >>> model = clf_hyper_fit(
-    ...     features=X, labels=y, t1=t1,
-    ...     pipe_clf=pipe, param_grid=param_grid,
-    ...     cv=5, bagging_n_estimators=100,
-    ...     bagging_max_samples=avg_uniqueness,
-    ...     n_jobs=-1
-    ... )
+        Cross-validation results including best parameters and scores.
     """
-    if set(labels.values) == {0, 1}:
+
+    # Clone the pipeline to avoid modifying the original
+    pipe_clf = clone(pipe_clf)
+
+    # Determine scoring metric
+    if set(labels.unique()) == {0, 1}:
         scoring = "f1"  # f1 for meta-labeling
     else:
-        scoring = "neg_log_loss"  # symmetric towards all cases
+        scoring = "neg_log_loss"
 
-    # hyperparameter search, on train data
+    # Create purged K-Fold
     inner_cv = PurgedKFold(n_splits=cv, t1=t1, pct_embargo=pct_embargo)
 
-    # Normalize outer n_jobs
-    outer_n_jobs = 1 if n_jobs is None else n_jobs
+    # Perform hyperparameter search
+    if rnd_search_iter == 0:
+        gs = GridSearchCV(
+            estimator=pipe_clf,
+            param_grid=param_grid,
+            scoring=scoring,
+            cv=inner_cv,
+            n_jobs=n_jobs,
+            verbose=verbose,
+            refit=True,
+        )
+    else:
+        gs = RandomizedSearchCV(
+            estimator=pipe_clf,
+            param_distributions=param_grid,
+            scoring=scoring,
+            cv=inner_cv,
+            n_jobs=n_jobs,
+            n_iter=rnd_search_iter,
+            random_state=random_state,
+            verbose=verbose,
+            refit=True,
+        )
 
-    # Save original n_jobs from pipeline estimators
-    orig_n_jobs = {}
-    n_jobs_steps = []
+    # Fit the grid search
+    gs.fit(features, labels, **fit_params)
 
-    for name, est in pipe_clf.named_steps.items():
-        if hasattr(est, "n_jobs"):
-            n_jobs_steps.append(name)
-            orig_n_jobs[name] = deepcopy(getattr(est, "n_jobs"))
+    # Extract results
+    cv_results = {
+        "best_params": gs.best_params_,
+        "best_score": gs.best_score_,
+        "cv_results": pd.DataFrame(gs.cv_results_),
+        "scoring": scoring,
+    }
 
-    # Avoid nested parallelism: if outer search is parallel, make inner estimators sequential
-    try:
-        if outer_n_jobs != 1 and n_jobs_steps:
-            set_params = {f"{name}__n_jobs": 1 for name in n_jobs_steps}
-            pipe_clf.set_params(**set_params)
+    best_estimator = gs.best_estimator_
 
-        if rnd_search_iter == 0:
-            gs = GridSearchCV(
-                estimator=pipe_clf,
-                param_grid=param_grid,
-                scoring=scoring,
-                cv=inner_cv,
-                n_jobs=outer_n_jobs,
-                verbose=verbose,
-                refit=True,
-            )
+    # Handle bagging if requested
+    if bagging_n_estimators > 0:
+        # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
+        base_estimator = clone(best_estimator)
+
+        # Create and fit bagging classifier
+        bag = BaggingClassifier(
+            estimator=base_estimator,
+            n_estimators=int(bagging_n_estimators),
+            max_samples=bagging_max_samples,
+            max_features=bagging_max_features,
+            n_jobs=n_jobs,
+            random_state=random_state,
+        )
+
+        # Fit bagging classifier with sample_weight if provided
+        if "sample_weight" in fit_params:
+            bag.fit(features, labels, sample_weight=fit_params["sample_weight"])
         else:
-            gs = RandomizedSearchCV(
-                estimator=pipe_clf,
-                param_distributions=param_grid,
-                scoring=scoring,
-                cv=inner_cv,
-                n_jobs=outer_n_jobs,
-                n_iter=rnd_search_iter,
-                random_state=random_state,
-                verbose=verbose,
-                refit=True,
-            )
+            bag.fit(features, labels)
 
-        gs = gs.fit(features, labels, **fit_params)
-        cv_results = {
-            "best_params": gs.best_params_,
-            "best_score": gs.best_score_,
-            "cv_results": pd.DataFrame(gs.cv_results_),
-            "scoring": scoring,
-        }
-        gs = gs.best_estimator_
-
-        # fit validated model on the entirety of the data
-        if bagging_n_estimators > 0:
-            # Create base pipeline with single-threaded estimators to avoid nested parallelism
-            base_pipe = MyPipeline(gs.steps)
-            for name in n_jobs_steps:
-                if hasattr(base_pipe.named_steps.get(name), "n_jobs"):
-                    base_pipe.set_params(**{f"{name}__n_jobs": 1})
-
-            bag = BaggingClassifier(
-                estimator=base_pipe,
-                n_estimators=int(bagging_n_estimators),
-                max_samples=bagging_max_samples,
-                max_features=bagging_max_features,
-                n_jobs=outer_n_jobs,
-                random_state=random_state,
-            )
-
-            # Safely extract sample_weight if it exists
-            sample_weight_key = base_pipe.steps[-1][0] + "__sample_weight"
-            bag_fit_params = {}
-            if sample_weight_key in fit_params:
-                bag_fit_params["sample_weight"] = fit_params[sample_weight_key]
-
-            bag = bag.fit(features, labels, **bag_fit_params)
-            return bag, cv_results  # Return BaggingClassifier directly
-
-        return gs, cv_results
-
-    finally:
-        # Restore original n_jobs to avoid side effects
-        if orig_n_jobs:
-            restore_params = {f"{name}__n_jobs": orig_n_jobs[name] for name in orig_n_jobs}
-            try:
-                pipe_clf.set_params(**restore_params)
-            except Exception:
-                pass  # Best effort restore
+        return bag, cv_results
+    else:
+        return best_estimator, cv_results
 
 
-@cacheable(auto_versioning=False)
+# Helper function to safely handle n_jobs in pipelines
+def set_pipeline_n_jobs(pipeline, n_jobs_value=1):
+    """
+    Safely set n_jobs for all estimators in a pipeline.
+
+    Parameters
+    ----------
+    pipeline : sklearn.pipeline.Pipeline
+        The pipeline to modify.
+    n_jobs_value : int
+        Value to set for n_jobs.
+
+    Returns
+    -------
+    pipeline : sklearn.pipeline.Pipeline
+        Modified pipeline.
+    """
+    for step_name, estimator in pipeline.named_steps.items():
+        param_key = f"{step_name}__n_jobs"
+        try:
+            # Check if this parameter exists in the pipeline
+            current_params = pipeline.get_params()
+            if param_key in current_params:
+                pipeline.set_params(**{param_key: n_jobs_value})
+        except:
+            pass
+    return pipeline
+
+
+@cacheable()
 def clf_hyper_fit_internal(
     features,
     labels,
@@ -393,4 +346,5 @@ def param_grid_size(param_grid: dict):
     from functools import reduce
     from operator import mul
 
+    return reduce(mul, [len(v) for v in param_grid.values()])
     return reduce(mul, [len(v) for v in param_grid.values()])
