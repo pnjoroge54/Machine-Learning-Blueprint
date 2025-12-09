@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import numpy as np
 import onnx
 import onnxruntime
+import pandas as pd
 import sklearn
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
@@ -64,7 +65,10 @@ def export_model_to_onnx(
 
         # Convert
         onnx_model = convert_sklearn(
-            model, initial_types=initial_type, target_opset=12  # MQL5 supports opset 12
+            model,
+            initial_types=initial_type,
+            target_opset=12,  # MQL5 supports opset 12
+            options={"zipmap": False},  # Get probabilities as array
         )
 
         # Embed metadata in doc_string
@@ -143,11 +147,38 @@ def validate_onnx_predictions(
     print("Computing ONNX predictions...")
     session = onnxruntime.InferenceSession(onnx_path)
     input_name = session.get_inputs()[0].name
-    onnx_preds = session.run(None, {input_name: X_test})[0]
 
-    # If model outputs probabilities, extract positive class
-    if onnx_preds.ndim > 1 and onnx_preds.shape[1] == 2:
-        onnx_preds = onnx_preds[:, 1]
+    # Get ALL outputs from ONNX model
+    onnx_outputs = session.run(None, {input_name: X_test})
+
+    # Debug: print what we got
+    print(f"\n✓ ONNX returned {len(onnx_outputs)} output(s)")
+    for i, output in enumerate(onnx_outputs):
+        print(f"  Output {i}: shape={output.shape}, dtype={output.dtype}")
+        if len(output) > 0:
+            print(f"    Sample values: {output[0]}")
+
+    # Extract probabilities (usually the second output for classifiers)
+    if len(onnx_outputs) > 1:
+        # Second output contains probabilities
+        onnx_probs = onnx_outputs[1]
+        print(f"\n✓ Using output 1 (probabilities)")
+    else:
+        # Only one output - assume it's probabilities
+        onnx_probs = onnx_outputs[0]
+        print(f"\n✓ Using output 0")
+
+    # If probabilities are 2D [n_samples, n_classes], extract positive class
+    if onnx_probs.ndim > 1 and onnx_probs.shape[1] == 2:
+        onnx_preds = onnx_probs[:, 1]
+        print(f"✓ Extracted positive class probabilities from shape {onnx_probs.shape}")
+    elif onnx_probs.ndim > 1:
+        # Multiple classes, take the last column
+        onnx_preds = onnx_probs[:, -1]
+        print(f"✓ Extracted last column from shape {onnx_probs.shape}")
+    else:
+        onnx_preds = onnx_probs
+        print(f"✓ Using 1D predictions of shape {onnx_probs.shape}")
 
     # Compare predictions
     max_diff = np.max(np.abs(python_preds - onnx_preds))
