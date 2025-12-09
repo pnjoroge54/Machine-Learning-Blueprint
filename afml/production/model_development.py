@@ -1,18 +1,20 @@
+from datetime import datetime, timedelta
 from pprint import pformat, pprint
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 from numba import njit, prange
 from scipy.stats import uniform
-from sklearn.base import ClassifierMixin
+from sklearn.base import ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
 from afml.ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from afml.features.time import get_time_features
 
 from ..cache import (
     cacheable,
@@ -45,7 +47,7 @@ def tqdm_sink(msg):
     tqdm.write(msg, end="")  # end="" avoids double newlines
 
 
-# Remove default handler and add our custom one
+# Remove default handler and add our custom one to prevent logger interfering with tqdm
 logger.remove()
 logger.add(
     tqdm_sink,
@@ -58,6 +60,354 @@ logger.add(
 
 
 class TickDataLoader:
+    """
+    Loader for tick-level bid/ask data with intelligent local caching.
+
+    Features:
+    1. Smart caching that checks if requested date range is within cached ranges
+    2. Handles partial overlaps by reusing available cached data
+    3. Memory management with cache size limits
+    4. Cache statistics tracking
+
+    Notes
+    -----
+    - Typical performance: ~0.5s for cached retrieval
+    - Memory usage: ~100MB per 1M ticks
+    """
+
+    def __init__(self, max_cache_size_mb: int = 500, max_cached_symbols: int = 20):
+        """
+        Initialize the tick data loader.
+
+        Parameters
+        ----------
+        max_cache_size_mb : int, optional
+            Maximum cache size in MB (default: 500MB)
+        max_cached_symbols : int, optional
+            Maximum number of symbols to keep in cache (default: 20)
+        """
+        self._cache: Dict[Tuple[str, str], pd.DataFrame] = {}  # (symbol, account_name) -> DataFrame
+        self._cache_metadata: Dict[Tuple[str, str], Dict] = {}  # (symbol, account_name) -> metadata
+        self.max_cache_size_mb = max_cache_size_mb
+        self.max_cached_symbols = max_cached_symbols
+        self.cache_stats = {"hits": 0, "misses": 0, "partial_hits": 0, "total_loaded": 0}
+
+    def get_tick_data(
+        self, symbol: str, start_date: str, end_date: str, account_name: str
+    ) -> pd.DataFrame:
+        """
+        Retrieve tick-level bid/ask data with intelligent caching.
+
+        Parameters
+        ----------
+        symbol : str
+            Trading instrument symbol (e.g., 'EURUSD')
+        start_date : str
+            Start date in 'YYYY-MM-DD' format
+        end_date : str
+            End date in 'YYYY-MM-DD' format
+        account_name : str
+            MT5 account identifier for data retrieval
+
+        Returns
+        -------
+        pd.DataFrame
+            Tick data with columns ['bid', 'ask'] indexed by timestamp
+
+        Notes
+        -----
+        - Checks if cached data fully covers requested date range
+        - If partial coverage exists, loads only missing data
+        - Merges cached and newly loaded data seamlessly
+        """
+        cache_key = (symbol, account_name)
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+
+        # Check if we have cached data for this symbol/account
+        if cache_key in self._cache:
+            cached_df = self._cache[cache_key]
+            metadata = self._cache_metadata[cache_key]
+            cached_start = metadata["start_date"]
+            cached_end = metadata["end_date"]
+
+            # Check if cached data fully covers requested range
+            if cached_start <= start_dt and cached_end >= end_dt:
+                self.cache_stats["hits"] += 1
+                logger.debug(f"Cache hit for {symbol} {start_date} to {end_date}")
+
+                # Return subset of cached data
+                mask = (cached_df.index >= start_dt) & (cached_df.index <= end_dt)
+                return cached_df[mask].copy()
+
+            # Check if there's partial overlap
+            if cached_end >= start_dt and cached_start <= end_dt:
+                self.cache_stats["partial_hits"] += 1
+                logger.debug(f"Partial cache hit for {symbol}")
+                return self._load_with_partial_cache(
+                    symbol, start_date, end_date, account_name, cache_key
+                )
+
+        # No cache hit, load all data
+        self.cache_stats["misses"] += 1
+        logger.debug(f"Cache miss for {symbol} {start_date} to {end_date}")
+        return self._load_and_cache_data(symbol, start_date, end_date, account_name, cache_key)
+
+    def _load_with_partial_cache(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        account_name: str,
+        cache_key: Tuple[str, str],
+    ) -> pd.DataFrame:
+        """
+        Load data when we have partial cache coverage.
+
+        Strategy:
+        1. Identify what parts of the requested range are already cached
+        2. Load only the missing date ranges
+        3. Merge cached and new data
+        4. Update cache with extended range
+        """
+        cached_df = self._cache[cache_key]
+        cached_start = self._cache_metadata[cache_key]["start_date"]
+        cached_end = self._cache_metadata[cache_key]["end_date"]
+
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+
+        # Determine what we need to load
+        load_ranges = []
+
+        # Check if we need data before cached range
+        if start_dt < cached_start:
+            load_ranges.append(
+                (start_date, (cached_start - timedelta(days=1)).strftime("%Y-%m-%d"))
+            )
+
+        # Check if we need data after cached range
+        if end_dt > cached_end:
+            load_ranges.append(((cached_end + timedelta(days=1)).strftime("%Y-%m-%d"), end_date))
+
+        # Load missing data ranges
+        new_data = []
+        for load_start, load_end in load_ranges:
+            logger.info(f"Loading additional data for {symbol}: {load_start} to {load_end}")
+            df_part = self._load_data(symbol, load_start, load_end, account_name)
+            if not df_part.empty:
+                new_data.append(df_part)
+
+        # Combine all data
+        if new_data:
+            all_new_data = pd.concat(new_data) if len(new_data) > 1 else new_data[0]
+            combined_data = pd.concat([cached_df, all_new_data])
+            combined_data = combined_data.sort_index()
+
+            # Update cache with extended range
+            new_start = min(start_dt, cached_start)
+            new_end = max(end_dt, cached_end)
+            self._cache[cache_key] = combined_data
+            self._cache_metadata[cache_key] = {
+                "start_date": new_start,
+                "end_date": new_end,
+                "last_accessed": datetime.now(),
+                "size_mb": combined_data.memory_usage(deep=True).sum() / (1024**2),
+            }
+
+            # Clean cache if needed
+            self._clean_cache()
+
+            # Return requested subset
+            mask = (combined_data.index >= start_dt) & (combined_data.index <= end_dt)
+            return combined_data[mask].copy()
+        else:
+            # Shouldn't happen, but return cached subset
+            mask = (cached_df.index >= start_dt) & (cached_df.index <= end_dt)
+            return cached_df[mask].copy()
+
+    def _load_and_cache_data(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        account_name: str,
+        cache_key: Tuple[str, str],
+    ) -> pd.DataFrame:
+        """
+        Load data from source and cache it.
+        """
+        logger.info(f"Loading data for {symbol} from {start_date} to {end_date}")
+        df = self._load_data(symbol, start_date, end_date, account_name)
+
+        if not df.empty:
+            # Cache the data
+            self._cache[cache_key] = df
+            self._cache_metadata[cache_key] = {
+                "start_date": pd.to_datetime(start_date),
+                "end_date": pd.to_datetime(end_date),
+                "last_accessed": datetime.now(),
+                "size_mb": df.memory_usage(deep=True).sum() / (1024**2),
+            }
+
+            # Clean cache if needed
+            self._clean_cache()
+
+            self.cache_stats["total_loaded"] += 1
+
+        return df
+
+    def _load_data(
+        self, symbol: str, start_date: str, end_date: str, account_name: str
+    ) -> pd.DataFrame:
+        """
+        Load data from parquet file or MT5.
+        """
+        tick_params = dict(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            account_name=account_name,
+            columns=["bid", "ask"],
+            verbose=False,
+        )
+
+        df = load_tick_data(**tick_params)
+
+        if df.empty:
+            logger.info("Data not found on drive, fetching from MT5...")
+            save_data_to_parquet(symbol, start_date, end_date, account_name)
+            df = load_tick_data(**tick_params)
+
+        return df
+
+    def _clean_cache(self):
+        """
+        Clean cache based on size and LRU policy.
+        """
+        # Check if we have too many symbols
+        if len(self._cache) > self.max_cached_symbols:
+            # Remove least recently used
+            lru_items = sorted(self._cache_metadata.items(), key=lambda x: x[1]["last_accessed"])
+
+            for key, _ in lru_items[: len(self._cache) - self.max_cached_symbols]:
+                del self._cache[key]
+                del self._cache_metadata[key]
+                logger.debug(f"Removed {key} from cache (LRU policy)")
+
+        # Check total cache size
+        total_size = sum(meta["size_mb"] for meta in self._cache_metadata.values())
+
+        if total_size > self.max_cache_size_mb:
+            # Remove largest items until under limit
+            items_by_size = sorted(
+                self._cache_metadata.items(), key=lambda x: x[1]["size_mb"], reverse=True
+            )
+
+            removed_size = 0
+            for key, meta in items_by_size:
+                if total_size - removed_size <= self.max_cache_size_mb:
+                    break
+
+                removed_size += meta["size_mb"]
+                del self._cache[key]
+                del self._cache_metadata[key]
+                logger.debug(f"Removed {key} from cache (size: {meta['size_mb']:.2f}MB)")
+
+    def clear_cache(self, symbol: Optional[str] = None, account_name: Optional[str] = None):
+        """
+        Clear cache for specific symbol/account or all cache.
+
+        Parameters
+        ----------
+        symbol : str, optional
+            Symbol to clear cache for
+        account_name : str, optional
+            Account name to clear cache for
+        """
+        if symbol is None and account_name is None:
+            self._cache.clear()
+            self._cache_metadata.clear()
+            logger.info("Cleared all cache")
+        else:
+            keys_to_remove = []
+            for key in self._cache.keys():
+                sym, acc = key
+                if (symbol is None or sym == symbol) and (
+                    account_name is None or acc == account_name
+                ):
+                    keys_to_remove.append(key)
+
+            for key in keys_to_remove:
+                del self._cache[key]
+                del self._cache_metadata[key]
+
+            logger.info(f"Cleared cache for {len(keys_to_remove)} items")
+
+    def get_cache_info(self) -> Dict:
+        """
+        Get cache statistics and information.
+
+        Returns
+        -------
+        Dict
+            Cache information including:
+            - total_cached_symbols: Number of symbols in cache
+            - total_cache_size_mb: Total cache size in MB
+            - cache_hits: Number of cache hits
+            - cache_misses: Number of cache misses
+            - hit_rate: Cache hit rate percentage
+            - cached_symbols: List of cached symbols with date ranges
+        """
+        total_size = sum(meta["size_mb"] for meta in self._cache_metadata.values())
+        total_requests = self.cache_stats["hits"] + self.cache_stats["misses"]
+        hit_rate = (self.cache_stats["hits"] / total_requests * 100) if total_requests > 0 else 0
+
+        cached_symbols_info = []
+        for (symbol, account), meta in self._cache_metadata.items():
+            cached_symbols_info.append(
+                {
+                    "symbol": symbol,
+                    "account": account,
+                    "date_range": f"{meta['start_date'].date()} to {meta['end_date'].date()}",
+                    "size_mb": meta["size_mb"],
+                    "last_accessed": meta["last_accessed"],
+                }
+            )
+
+        return {
+            "total_cached_symbols": len(self._cache),
+            "total_cache_size_mb": total_size,
+            "cache_hits": self.cache_stats["hits"],
+            "cache_misses": self.cache_stats["misses"],
+            "partial_hits": self.cache_stats["partial_hits"],
+            "hit_rate": hit_rate,
+            "cached_symbols": cached_symbols_info,
+        }
+
+    def preload_data(self, symbols: List[str], start_date: str, end_date: str, account_name: str):
+        """
+        Preload data for multiple symbols into cache.
+
+        Parameters
+        ----------
+        symbols : List[str]
+            List of symbols to preload
+        start_date : str
+            Start date in 'YYYY-MM-DD' format
+        end_date : str
+            End date in 'YYYY-MM-DD' format
+        account_name : str
+            MT5 account identifier
+        """
+        logger.info(f"Preloading data for {len(symbols)} symbols")
+        for symbol in symbols:
+            try:
+                self.get_tick_data(symbol, start_date, end_date, account_name)
+                logger.debug(f"Preloaded {symbol}")
+            except Exception as e:
+                logger.warning(f"Failed to preload {symbol}: {e}")
+
     """
     Loader for tick-level bid/ask data with local caching.
 
@@ -219,7 +569,9 @@ def load_and_prepare_training_data(
 
 
 @cacheable(time_aware=True)
-def create_feature_engineering_pipeline(data: pd.DataFrame, config: Dict) -> pd.DataFrame:
+def create_feature_engineering_pipeline(
+    data: pd.DataFrame, feature_config: Dict, data_config: Dict
+) -> pd.DataFrame:
     """
     Compute engineered features with caching.
 
@@ -227,7 +579,7 @@ def create_feature_engineering_pipeline(data: pd.DataFrame, config: Dict) -> pd.
     ----------
     data : pd.DataFrame
         Input bar data.
-    config : dict
+    feature_config : dict
         Feature configuration.
         Expected keys:
         - func : callable
@@ -244,9 +596,12 @@ def create_feature_engineering_pipeline(data: pd.DataFrame, config: Dict) -> pd.
     -----
     - Prevents data leakage via time-aware caching.
     """
-    func = config["func"]
-    features = func(data, **config["params"])
-    return features
+    func = feature_config["func"]
+    features = func(data, **feature_config["params"])
+    time_feat = get_time_features(
+        data, timeframe=data_config["bar_size"], bar_type=data_config["bar_type"]
+    )
+    return features.join(time_feat)
 
 
 @cacheable(time_aware=True)
@@ -341,7 +696,6 @@ def get_best_weighting_scheme(
     return best_scheme, best_score
 
 
-@cacheable(time_aware=True)
 def get_best_sample_weight(
     data: pd.DataFrame,
     events: pd.DataFrame,
@@ -378,11 +732,11 @@ def get_best_sample_weight(
     classifier = RandomForestClassifier(
         criterion="entropy",
         class_weight="balanced_subsample",
-        max_samples=cont["tW"].mean(),
+        max_samples=cont["tW"].mean().round(2),
         max_depth=6,
         min_weight_fraction_leaf=0.05,
-        random_state=42,
         n_jobs=-1,
+        random_state=7,
     )
 
     best_scheme = None
@@ -393,7 +747,7 @@ def get_best_sample_weight(
         total=len(weighting_schemes),
     ):
         best_scheme, best_score = get_best_weighting_scheme(
-            classifier, X, y, cv_gen, weight, scheme, best_scheme, best_score
+            clone(classifier), X, y, cv_gen, weight, scheme, best_scheme, best_score
         )
 
     decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
@@ -401,10 +755,11 @@ def get_best_sample_weight(
     best_weight = weighting_schemes[best_scheme]
     for time_decay in tqdm(
         reversed(decay_factors),
-        desc=f"{best_weighting_scheme} time-decay for decay factors in {decay_factors}",
+        desc=f"{best_weighting_scheme} time-decay for decay {decay_factors}",
         total=len(decay_factors),
+        position=0,
     ):
-        for linear in (0, 1):
+        for linear in tqdm((0, 1), total=2, position=1):
             decay_w = get_weights_by_time_decay_optimized(
                 triple_barrier_events=events.loc[valid_index],
                 close_index=data.index,
@@ -417,7 +772,7 @@ def get_best_sample_weight(
             scheme = f"{best_weighting_scheme}_{decay_method}_decay_{time_decay}"
             weighting_schemes[scheme] = weight
             best_scheme, best_score = get_best_weighting_scheme(
-                classifier, X, y, cv_gen, weight, scheme, best_scheme, best_score
+                clone(classifier), X, y, cv_gen, weight, scheme, best_scheme, best_score
             )
 
     logger.info(f"\nBest Weighting Scheme: {' '.join(best_scheme.split('_')).title()}")
@@ -502,7 +857,6 @@ def is_tree(estimator):
         estimator,
         (
             RandomForestClassifier,
-            SequentiallyBootstrappedBaggingClassifier,
             DecisionTreeClassifier,
         ),
     )
@@ -574,10 +928,12 @@ def train_model_with_cv(
     w = sample_weight.loc[valid_index]
 
     # Set max_samples distribution in param_grid from average uniqueness to 1
-    if hasattr(pipe_clf.named_steps["clf"], "max_samples"):
+    if isinstance(pipe_clf.named_steps["clf"], SequentiallyBootstrappedBaggingClassifier):
+        av_uniqueness = cont["tW"].mean()
         if rnd_search_iter > 0:
-            av_uniqueness = cont["tW"].mean()
             param_grid["clf__max_samples"] = uniform(loc=av_uniqueness, scale=1 - av_uniqueness)
+        else:
+            param_grid["clf__max_samples"] = np.linspace(av_uniqueness, 1, 3).tolist()
 
     best_model, cv_results = clf_hyper_fit_cached(
         X,
@@ -708,7 +1064,7 @@ def develop_production_model(
 
     print("\nConfiguration")
     print("-" * 50)
-    config = {"strategy": strategy.get_strategy_name()}
+    config = {"strategy": strategy.get_strategy_name(), "symbol": symbol}
     config.update(data_config)
     config.update(label_config)
     print(pd.Series(config).to_string())
@@ -720,7 +1076,7 @@ def develop_production_model(
 
     # Step 2: Feature engineering  (cached)
     print("\n[Step 2/7] Computing features...")
-    features = create_feature_engineering_pipeline(data, feature_config)
+    features = create_feature_engineering_pipeline(data, feature_config, data_config)
     print(f"✓ Generated {len(features.columns)} features")
 
     # Step 3: Label generation (cached)
@@ -745,9 +1101,12 @@ def develop_production_model(
     # Step 6: Model training with CV (cached)
     print("\n[Step 6/7] Training model with cross-validation...")
 
-    # Ensure SequentiallyBootstrappedBaggingClassifier is properly initialized
-    pipe = make_custom_pipeline(model_params["pipe_clf"])
-    model_params["pipe_clf"] = pipe
+    # Set max_samples to average uniqueness for tree-based classifiers
+    pipe = model_params["pipe_clf"]
+    if is_tree(pipe):
+        av_uniqueness = events["tW"].mean().round(4)
+        pipe.set_params(max_samples=av_uniqueness)
+    model_params["pipe_clf"] = make_custom_pipeline(pipe)
 
     best_model, cv_results = train_model_with_cv(features, events, sample_weight, **model_params)
     print(f"✓ Best CV score: {cv_results['best_score']:.4f}")
