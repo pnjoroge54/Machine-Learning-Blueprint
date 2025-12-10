@@ -8,8 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-plt.style.use("dark_background")
-
 
 def analyze_hyperparameter_results(
     cv_results: pd.DataFrame,
