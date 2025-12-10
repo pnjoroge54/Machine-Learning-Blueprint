@@ -448,6 +448,7 @@ def calculate_performance_metrics(
 
     # --- Trade Stats (if positions are provided) ---
     total_periods = len(data_index)
+    trade_stats = _calculate_trade_stats(returns, periods_per_year, total_periods)
 
     if positions is not None:
         hp = average_holding_period(positions)
@@ -459,14 +460,12 @@ def calculate_performance_metrics(
         metrics["bets_per_year"] = int(
             bet_frequency * (periods_per_year / total_periods) if total_periods > 0 else 0
         )
+        side = positions.loc[returns.index]
+        longs = (side > 0).sum()
+        shorts = (side < 0).sum()
+        trade_stats["ratio_of_longs"] = longs / (longs + shorts)
 
-    trade_stats = _calculate_trade_stats(returns, periods_per_year, total_periods)
-    side = positions.loc[returns.index]
-    longs = (side > 0).sum()
-    shorts = (side < 0).sum()
-    trade_stats["ratio_of_longs"] = longs / (longs + shorts)
     metrics.update(trade_stats)
-
     return metrics
 
 
@@ -651,9 +650,6 @@ def evaluate_meta_labeling_performance(
     )
     meta_metrics["confidence_threshold"] = confidence_threshold
 
-    # Information Ratio
-    excess_returns = meta_returns - primary_returns.reindex(meta_returns.index, fill_value=0)
-
     if len(meta_returns) > 1:
         duration_days = (meta_returns.index[-1] - meta_returns.index[0]).days
         actual_trades_per_year = (
@@ -662,9 +658,6 @@ def evaluate_meta_labeling_performance(
     else:
         actual_trades_per_year = 1
 
-    meta_metrics["information_ratio"] = information_ratio(
-        returns=excess_returns, benchmark=0, entries_per_year=int(actual_trades_per_year)
-    )
     meta_metrics["actual_trades_per_year"] = int(actual_trades_per_year)
 
     return {
