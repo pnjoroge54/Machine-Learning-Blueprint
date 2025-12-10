@@ -54,7 +54,7 @@ def get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd.
 
     Returns:
         A tuple containing two lists:
-        - A list of compounded returns for each closed trade.
+        - A series of compounded returns for each closed trade.
         - A series of durations (as Timedelta objects) for each closed trade.
     """
     if positions.empty or returns.empty:
@@ -538,8 +538,8 @@ def get_positions_from_events(
     pd.Series
         Series containing the target positions for data_index.
     """
-    end_times = pd.Index(events_t1).difference(events_t1.index)
     positions = sides.reindex(data_index)
+    end_times = pd.Index(events_t1).difference(events_t1.index)
     positions.loc[end_times] = 0  # End of trade
     positions = positions.ffill().fillna(0)
     return positions
@@ -556,111 +556,116 @@ def evaluate_meta_labeling_performance(
     bet_sizing: str = None,
     **kwargs,
 ) -> dict:
-    """
-    Evaluates and compares the performance of a primary strategy against a
-    meta-labeled version of that strategy.
-
-    This function simulates two strategies:
-    1.  The primary strategy, which takes all signals.
-    2.  The meta-labeled strategy, which filters trades based on a confidence
-        threshold and sizes them according to the meta-model's probability.
-
-    Args:
-        events: A DataFrame of trade events that contains at least the columns 't1' and 'side'.
-            - index: Event start times
-            - t1: Event end times, i.e., the time of first barrier touch
-            - side: Trade direction
-        meta_probabilities: A Series or array of probabilities from the meta-model.
-        close: A Series of prices that cover the period encapsulated in events.
-        confidence_threshold: The minimum probability required to take a trade.
-        trading_days_per_year: The number of trading days in a year.
-        trading_hours_per_day: The number of trading hours per day.
-        strategy_name: The name of the strategy for reporting.
-        kwargs: Bet-sizing method arguments that do not relate to events data.
-
-    Returns:
-        A dictionary containing the performance metrics for both strategies,
-        their return series, and other comparison metadata.
-    """
-    data_index = close.index
-
-    # Calculate returns
+    # Calculate base returns (price changes without side)
     events = events.dropna(subset=["t1"])
-    all_dates = events.index.union(other=events["t1"].array).drop_duplicates()
+    t1 = events["t1"]
+    side = events["side"]
+    all_dates = events.index.union(other=t1.array).drop_duplicates()
     prices = close.reindex(all_dates, method="bfill")
-    returns = prices.loc[events["t1"].array].array / prices.loc[events.index] - 1
-    primary_returns = returns * events["side"]
-    primary_positions = get_positions_from_events(data_index, events["t1"], events["side"])
 
-    # Filter trades: Set position to 0 for trades below the confidence threshold.
+    # Base returns (price movements)
+    base_returns = prices.loc[t1.array].array / prices.loc[events.index] - 1
+
+    # Primary strategy: apply side to get directional returns
+    primary_returns = pd.Series(base_returns * side.values, index=events.index)
+    data_index = close.loc[: t1.iloc[-1]].index
+
+    # Filter trades based on confidence threshold
     aligned_probs = meta_probabilities.reindex(events.index, fill_value=0.5)
     confident_trades = aligned_probs > confidence_threshold
     meta_prob = aligned_probs[confident_trades]
     meta_events = events[confident_trades]
+    meta_side = meta_events["side"]
+    meta_t1 = meta_events["t1"]
 
     # --- Bet Sizing Logic ---
     if bet_sizing is None:
-        bets = meta_events["side"].copy()
+        bets = meta_side.copy()
         bet_sizing = "none"
     elif bet_sizing == "probability":
-        bets = bet_size_probability(
-            meta_events, meta_prob, num_classes=2, pred=meta_events["side"], **kwargs
-        )
+        bets = bet_size_probability(meta_events, meta_prob, num_classes=2, pred=meta_side, **kwargs)
     elif bet_sizing == "budget":
-        bets = bet_size_budget(meta_events["t1"], meta_events["side"])
-        bets = bets["bet_size"]
+        result = bet_size_budget(meta_t1, meta_side)
+        bets = result["bet_size"]
     elif bet_sizing == "reserve":
-        bets = bet_size_reserve(meta_events["t1"], meta_events["side"], **kwargs)
-        bets = bets["bet_size"]
+        result = bet_size_reserve(meta_t1, meta_side, **kwargs)
+        bets = result["bet_size"]
+    else:
+        raise ValueError(f"Unknown bet_sizing method: {bet_sizing}")
 
     msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
     msg = msg + f"\n{kwargs}" if kwargs else msg
     print(msg)
 
-    # Apply the calculated bet size to the signals that were not filtered out.
-    meta_positions = get_positions_from_events(data_index, meta_events["t1"], bets)
-    meta_returns = (returns.reindex(meta_events.index) * meta_positions).dropna()
+    # Apply bet sizes to base returns for filtered trades
+    meta_base_returns = base_returns[confident_trades]
+
+    meta_returns = (meta_base_returns * bets).dropna()
 
     # --- Performance Calculation ---
-    data_index = close.index
-    primary_positions = get_positions_from_events(data_index, events["t1"], events["side"])
-    meta_positions = get_positions_from_events(data_index, meta_events["t1"], bets)
-
+    # Don't pass positions - calculate trade stats separately for events
     primary_metrics = calculate_performance_metrics(
         primary_returns,
         data_index,
-        primary_positions,
-        trading_days_per_year,
-        trading_hours_per_day,
+        positions=None,  # Don't pass positions for event-based data
+        trading_days_per_year=trading_days_per_year,
+        trading_hours_per_day=trading_hours_per_day,
     )
+
     meta_metrics = calculate_performance_metrics(
         meta_returns,
         data_index,
-        meta_positions,
-        trading_days_per_year,
-        trading_hours_per_day,
+        positions=None,  # Don't pass positions for event-based data
+        trading_days_per_year=trading_days_per_year,
+        trading_hours_per_day=trading_hours_per_day,
+    )
+
+    # --- Add Event-Specific Metrics Manually ---
+    # Calculate trade duration directly from events
+    primary_durations = (events["t1"] - events.index).dt.total_seconds() / 86400  # days
+    meta_durations = (meta_events["t1"] - meta_events.index).dt.total_seconds() / 86400
+
+    primary_metrics["avg_trade_duration"] = pd.Timedelta(days=primary_durations.mean()).round("1s")
+    meta_metrics["avg_trade_duration"] = pd.Timedelta(days=meta_durations.mean()).round("1s")
+
+    # Calculate bet frequency
+    primary_metrics["bet_frequency"] = len(events)
+    meta_metrics["bet_frequency"] = len(meta_events)
+
+    total_periods = len(data_index)
+    periods_per_year = trading_days_per_year  # Simplified
+
+    primary_metrics["bets_per_year"] = int(
+        len(events) * (periods_per_year / total_periods) if total_periods > 0 else 0
+    )
+    meta_metrics["bets_per_year"] = int(
+        len(meta_events) * (periods_per_year / total_periods) if total_periods > 0 else 0
     )
 
     # --- Meta-Specific Metrics ---
     total_signals = len(events)
     filtered_signals = len(meta_events)
 
-    # The percentage of trades that were filtered out by the meta-model.
     meta_metrics["signal_filter_rate"] = (
         1 - (filtered_signals / total_signals) if total_signals > 0 else 0
     )
     meta_metrics["confidence_threshold"] = confidence_threshold
 
-    # Information Ratio: Measures the meta-model's ability to generate excess return per unit of tracking error.
+    # Information Ratio
     excess_returns = meta_returns - primary_returns.reindex(meta_returns.index, fill_value=0)
-    _, periods_per_year = get_annualization_factors(
-        data_index=data_index,
-        trading_days_per_year=trading_days_per_year,
-        trading_hours_per_day=trading_hours_per_day,
-    )
+
+    if len(meta_returns) > 1:
+        duration_days = (meta_returns.index[-1] - meta_returns.index[0]).days
+        actual_trades_per_year = (
+            len(meta_returns) * (365.25 / duration_days) if duration_days > 0 else len(meta_returns)
+        )
+    else:
+        actual_trades_per_year = 1
+
     meta_metrics["information_ratio"] = information_ratio(
-        returns=excess_returns, benchmark=0, entries_per_year=periods_per_year
+        returns=excess_returns, benchmark=0, entries_per_year=int(actual_trades_per_year)
     )
+    meta_metrics["actual_trades_per_year"] = int(actual_trades_per_year)
 
     return {
         "strategy_name": strategy_name,
