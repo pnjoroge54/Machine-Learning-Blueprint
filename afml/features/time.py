@@ -192,13 +192,15 @@ def get_time_features(
             session_mask = session_feat[session] == 1
             if session_mask.sum() > 0:
                 session_vol = returns[session_mask].rolling(20, min_periods=1).std()
-                session_feat[f"{session}_vol"] = session_vol.reindex(df.index, method="ffill")
+                session_feat[f"{session}_vol"] = session_vol.reindex(
+                    df.index, method="ffill"
+                ).shift(1)
     else:
         session_feat = pd.DataFrame()
 
     features += [cyclical_feat, session_feat]
-    features = pd.concat(features, axis=1)
-    if timeframe not in ("D1", "MN"):
+    features = pd.concat(features, axis=1, join="inner")
+    if not timeframe.startswith(("D", "W", "MN")):
         features.drop(
             columns=["quarter_end", "month_end", "sunday_open", "friday_ny_close"], inplace=True
         )
