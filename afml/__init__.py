@@ -10,6 +10,7 @@ from typing import Dict, List
 
 import numpy as np
 from loguru import logger
+from sklearn import set_config
 
 from .cache import (
     CacheAnalyzer,
@@ -28,6 +29,9 @@ from .cache import (
     setup_production_cache,
     time_aware_cacheable,
 )
+
+set_config(enable_metadata_routing=True)
+
 
 # =============================================================================
 # IMPORT CACHE SYSTEM - Updated with new features
