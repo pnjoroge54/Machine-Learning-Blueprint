@@ -1,16 +1,18 @@
 from datetime import datetime, timedelta
-from pprint import pformat, pprint
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+import joblib
 import numpy as np
 import pandas as pd
+import torch
 from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
 from loguru import logger
 from numba import njit, prange
 from scipy.stats import uniform
-from sklearn import preprocessing
-from sklearn.base import ClassifierMixin, clone
+from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
@@ -780,6 +782,48 @@ def get_best_sample_weight(
 
     return weighting_schemes[best_scheme], best_scheme, weighting_schemes
 
+    valid_index = features.index.intersection(events.index)
+    cont = events.loc[valid_index]
+    classifier = RandomForestClassifier(
+        criterion="entropy",
+        class_weight="balanced_subsample",
+        max_samples=cont["tW"].mean().round(4),
+        max_depth=6,
+        min_weight_fraction_leaf=0.05,
+        n_jobs=-1,
+        random_state=7,
+    )
+    est = weighted_estimator(classifier, cont, data_index)
+    param_distributions = {
+        "scheme": ["unweighted", "return", "uniqueness"],
+        "decay": [1.0, uniform(0, 1)],  # decay factor between 0 and 1 inclusive
+        "linear": [True, False],
+    }
+    X = features.loc[valid_index]
+    y = cont["bin"]
+    cv = PurgedKFold(n_splits=4, t1=cont["t1"])
+    search = RandomizedSearchCV(est, param_distributions, n_iter=20, cv=3, random_state=42)
+    search.fit(X, y)
+    params = search.best_params_
+    scheme = params["scheme"]
+
+    decay_vec = get_weights_by_time_decay_optimized(
+        triple_barrier_events=cont,
+        close_index=data_index,
+        last_weight=params["decay"],
+        linear=params["linear"],
+        av_uniqueness=cont["tW"],
+    )
+
+    if scheme == "uniqueness":
+        weights = cont["tW"] * decay_vec
+    elif scheme == "return":
+        weights = cont["w"] * decay_vec
+    else:
+        weights = decay_vec
+
+    return weights
+
 
 @njit(parallel=True, fastmath=True, cache=True)
 def _rolling_metrics_numba(y_true, y_pred, weights, window):
@@ -958,6 +1002,16 @@ def make_custom_pipeline(pipe_clf):
         return pipe_clf
 
 
+def generate_metadata(config, metrics, features_columns):
+    """Metadata for saved model"""
+
+    metadata = {}
+    metadata.update(config)
+    metadata.update(metrics)
+    metadata["features_columns"] = features_columns
+    return metadata
+
+
 def develop_production_model(
     symbol: str,
     train_start: str,
@@ -968,6 +1022,7 @@ def develop_production_model(
     label_config: Dict,
     model_params: Dict,
     cache_reports: bool = False,
+    save: bool = True,
 ) -> Tuple[RandomForestClassifier, List[str], Dict]:
     """
     End-to-end production model development pipeline with aggressive caching.
@@ -1024,8 +1079,10 @@ def develop_production_model(
             Embargo percentage for purging CV splits.
         - random_state : int, optional
             Random seed.
-        - cache_reports : bool, optional (default=False)
-            Verbosity flag.
+    cache_reports : bool, optional (default=False)
+        Display cache reports.
+    save : bool, optional (default=True)
+        Save model and metadata.
 
     Returns
     -------
@@ -1107,6 +1164,10 @@ def develop_production_model(
     if is_tree(pipe):
         av_uniqueness = events["tW"].mean().round(4)
         pipe.set_params(max_samples=av_uniqueness)
+
+    if isinstance(pipe, SequentiallyBootstrappedBaggingClassifier):
+        pipe.set_params(samples_info_sets=events["t1"], price_bars_index=data.index)
+
     model_params["pipe_clf"] = make_custom_pipeline(pipe)
 
     best_model, cv_results = train_model_with_cv(features, events, sample_weight, **model_params)
@@ -1119,7 +1180,7 @@ def develop_production_model(
     features_columns = (
         best_model[:-1].get_feature_names_out()
         if len(best_model) > 1
-        else features.columns.tolist()
+        else features.columns.to_list()
     )
     feature_importance = pd.DataFrame(
         {
@@ -1152,5 +1213,116 @@ def develop_production_model(
         "best_weighting_scheme": best_weighting_scheme,
         "weighting_schemes": weighting_schemes,
     }
+    if save:
+        save_path = (
+            Path.home() / "Models" / symbol / data_config["bar_type"] / data_config["bar_size"]
+        )
+        metadata = generate_metadata(config, metrics, features_columns)
+        _ = save_model(best_model, metadata, save_path)
 
     return best_model, features_columns, metrics, config
+
+
+def save_model(model, metadata=None, path="models"):
+    """
+    Save a trained model with reproducible metadata using pathlib.
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        name = type(model.steps[-1][1]).__name__
+        framework = type(model.steps[-1][1]).__module__.split(".")[0].lower()
+    except:
+        name = type(model).__name__
+        framework = type(model).__module__.split(".")[0].lower()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{name}_{framework}_{timestamp}"
+
+    if framework == "sklearn":
+        filepath = path / f"{filename}.pkl"
+        joblib.dump({"model": model, "metadata": metadata}, filepath)
+    elif framework == "pytorch":
+        filepath = path / f"{filename}.pth"
+        torch.save({"state_dict": model.state_dict(), "metadata": metadata}, filepath)
+    elif framework == "keras":
+        filepath = path / f"{filename}.keras"
+        model.save(filepath)
+        if metadata:
+            meta_path = path / f"{filename}_meta.pkl"
+            joblib.dump(metadata, meta_path)
+    else:
+        raise ValueError("Unsupported framework")
+
+    logger.success(f"Saved model to {filepath}")
+    return filepath
+
+
+def load_model(filepath, model_class=None):
+    """
+    Load a previously saved machine learning model using pathlib.
+
+    This function infers the framework (scikit-learn, PyTorch, or Keras)
+    from the filename convention (e.g., "name_framework_timestamp.ext"),
+    then loads the corresponding model and any associated metadata.
+
+    Parameters
+    ----------
+    filepath : str or pathlib.Path
+        Path to the saved model file. The filename must follow the convention
+        "<name>_<framework>_<timestamp>.<ext>", where <framework> is one of
+        {"sklearn", "pytorch", "keras"}.
+    model_class : callable, optional
+        Required only for PyTorch models. A class or factory function that
+        instantiates the model architecture before loading weights.
+
+    Returns
+    -------
+    tuple
+        (model, metadata) where:
+        - model : the loaded model object (scikit-learn estimator,
+          PyTorch nn.Module, or Keras Model).
+        - metadata : dict or None, containing any auxiliary information
+          saved alongside the model (e.g., hyperparameters, dataset version).
+
+    Raises
+    ------
+    ValueError
+        If the framework cannot be determined or is unsupported.
+    RuntimeError
+        If loading a Keras model fails; the original exception is chained.
+
+    Notes
+    -----
+    - Scikit-learn models are loaded via joblib and include metadata inline.
+    - PyTorch models require `model_class` to reconstruct the architecture
+      before loading the saved state_dict.
+    - Keras models are loaded via `keras.models.load_model`; metadata is
+      stored separately in a "<stem>_meta.pkl" file if present.
+    - For reproducibility, ensure filenames are generated consistently
+      during saving (see `save_model` helper).
+    """
+    framework = str(filepath).split("_")[1]
+    filepath = Path(filepath)
+
+    if framework == "sklearn":
+        obj = joblib.load(filepath)
+        return obj["model"], obj.get("metadata")
+    elif framework == "pytorch":
+        checkpoint = torch.load(filepath)
+        model = model_class()
+        model.load_state_dict(checkpoint["state_dict"])
+        return model, checkpoint.get("metadata")
+    elif framework == "keras":
+        try:
+            from tensorflow import keras
+
+            model = keras.models.load_model(filepath)
+            meta_path = filepath.with_name(filepath.stem + "_meta.pkl")
+            metadata = joblib.load(meta_path) if meta_path.exists() else None
+            return model, metadata
+        except Exception as e:
+            raise RuntimeError("Pipeline failed") from e
+    else:
+        raise ValueError("Unsupported framework")
