@@ -8,7 +8,7 @@ from .performance_analysis import (
     get_annualization_factors,
     get_positions_from_events,
 )
-from .statistics import (
+from .perfomance_statistics import (
     all_bets_concentration,
     average_holding_period,
     bets_concentration,
