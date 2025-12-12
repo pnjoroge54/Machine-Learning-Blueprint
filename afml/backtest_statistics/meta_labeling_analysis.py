@@ -80,7 +80,7 @@ def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
         print(f"Signal Filtering:")
         print(f"  Total Signals:     {results['total_primary_signals']:,}")
         print(f"  Filtered Signals:  {results['filtered_signals']:,}")
-        print(f"  Filter Rate:       {meta['signal_filter_rate']:.1%}")
+        print(f"  Filter Rate:       {meta['signal_filter_rate']:,.1%}")
         print(f"  Confidence Thresh: {meta['confidence_threshold']:.2f}\n")
 
         print(comparison.to_string())
@@ -451,7 +451,7 @@ def generate_summary_report(results: dict) -> str:
     report.append(f"Total Primary Signals:    {results['total_primary_signals']:,}")
     report.append(f"Accepted by Meta Model:   {results['filtered_signals']:,}")
     report.append(f"Rejected by Meta Model:   {signal_analysis['rejected_signals']:,}")
-    report.append(f"Filter Rate:              {signal_analysis['filter_rate']:.1%}")
+    report.append(f"Filter Rate:              {signal_analysis['filter_rate']:,.1%}")
     report.append(f"Confidence Threshold:     {meta['confidence_threshold']:.2f}")
     report.append("")
 
@@ -467,7 +467,7 @@ def generate_summary_report(results: dict) -> str:
         ("Calmar Ratio", "calmar_ratio", "{:.2f}"),
         ("Max Drawdown", "max_drawdown", "{:.2%}"),
         ("Volatility", "volatility", "{:.2%}"),
-        ("Win Rate", "win_rate", "{:.1%}"),
+        ("Win Rate", "win_rate", "{:,.1%}"),
         ("Profit Factor", "profit_factor", "{:.2f}"),
         ("Kelly Criterion", "kelly_criterion", "{:.2%}"),
     ]
@@ -496,10 +496,10 @@ def generate_summary_report(results: dict) -> str:
     # Signal Quality
     report.append("SIGNAL QUALITY ANALYSIS")
     report.append("-" * 40)
-    report.append(f"Accepted Signal Win Rate: {signal_analysis['accepted_win_rate']:.1%}")
-    report.append(f"Rejected Signal Win Rate: {signal_analysis['rejected_win_rate']:.1%}")
-    report.append(f"Filter Precision:         {signal_analysis['precision']:.1%}")
-    report.append(f"Avoided Losses:           {signal_analysis['avoided_losses']:.1%}")
+    report.append(f"Accepted Signal Win Rate: {signal_analysis['accepted_win_rate']:,.1%}")
+    report.append(f"Rejected Signal Win Rate: {signal_analysis['rejected_win_rate']:,.1%}")
+    report.append(f"Filter Precision:         {signal_analysis['precision']:,.1%}")
+    report.append(f"Avoided Losses:           {signal_analysis['avoided_losses']:,.1%}")
 
     if not np.isnan(signal_analysis["ttest_pvalue"]):
         report.append(f"T-Test P-Value:           {signal_analysis['ttest_pvalue']:.4f}")
@@ -548,25 +548,25 @@ def generate_summary_report(results: dict) -> str:
     # Check if meta-labeling improved performance
     if meta["sharpe_ratio"] > primary["sharpe_ratio"]:
         improvement = (meta["sharpe_ratio"] / primary["sharpe_ratio"] - 1) * 100
-        insights.append(f"✅ Meta-labeling improved Sharpe ratio by {improvement:.1f}%")
+        insights.append(f"✅ Meta-labeling improved Sharpe ratio by {improvement:,.1f}%")
     else:
         decline = (meta["sharpe_ratio"] / primary["sharpe_ratio"] - 1) * 100
-        insights.append(f"❌ Meta-labeling decreased Sharpe ratio by {abs(decline):.1f}%")
+        insights.append(f"❌ Meta-labeling decreased Sharpe ratio by {abs(decline):,.1f}%")
 
     # Check drawdown reduction
     if meta["max_drawdown"] < primary["max_drawdown"]:
         reduction = (1 - meta["max_drawdown"] / primary["max_drawdown"]) * 100
-        insights.append(f"✅ Reduced maximum drawdown by {reduction:.1f}%")
+        insights.append(f"✅ Reduced maximum drawdown by {reduction:,.1f}%")
 
     # Check win rate improvement
     if meta["win_rate"] > primary["win_rate"]:
         improvement = (meta["win_rate"] - primary["win_rate"]) * 100
-        insights.append(f"✅ Improved win rate by {improvement:.1f} percentage points")
+        insights.append(f"✅ Improved win rate by {improvement:,.1f} percentage points")
 
     # Check if filtering is effective
     if signal_analysis["avoided_losses"] > 0.6:
         insights.append(
-            f"✅ Effectively avoiding losses ({signal_analysis['avoided_losses']:.1%} of rejected signals)"
+            f"✅ Effectively avoiding losses ({signal_analysis['avoided_losses']:,.1%} of rejected signals)"
         )
 
     # Check information ratio
@@ -750,12 +750,12 @@ def generate_meta_labeling_markdown_report(
 
         md_content.append(f"**Best Performing Bar Type**: `{best_bar_type}`  ")
         md_content.append(f"  • Sharpe Ratio: `{comparison_df.iloc[0]['Meta Sharpe']:.2f}`  ")
-        md_content.append(f"  • Annual Return: `{comparison_df.iloc[0]['Meta Return %']:.1f}%`  ")
+        md_content.append(f"  • Annual Return: `{comparison_df.iloc[0]['Meta Return %']:,.1f}%`  ")
         md_content.append("")
 
         md_content.append(f"**Worst Performing Bar Type**: `{worst_bar_type}`  ")
         md_content.append(f"  • Sharpe Ratio: `{comparison_df.iloc[-1]['Meta Sharpe']:.2f}`  ")
-        md_content.append(f"  • Annual Return: `{comparison_df.iloc[-1]['Meta Return %']:.1f}%`  ")
+        md_content.append(f"  • Annual Return: `{comparison_df.iloc[-1]['Meta Return %']:,.1f}%`  ")
         md_content.append("")
 
         # Add improvement statistics if primary metrics available
@@ -1123,11 +1123,11 @@ def generate_meta_labeling_markdown_report(
 
             if signal_analysis.get("accepted_win_rate", 0) > 0.6:
                 recommendations.append(
-                    f"✅ `{bar_type}`: High accepted win rate ({signal_analysis['accepted_win_rate']:.1%}) - Consider increasing position size"
+                    f"✅ `{bar_type}`: High accepted win rate ({signal_analysis['accepted_win_rate']:,.1%}) - Consider increasing position size"
                 )
             elif signal_analysis.get("accepted_win_rate", 0) < 0.45:
                 recommendations.append(
-                    f"⚠️ `{bar_type}`: Low accepted win rate ({signal_analysis['accepted_win_rate']:.1%}) - Consider adjusting confidence threshold"
+                    f"⚠️ `{bar_type}`: Low accepted win rate ({signal_analysis['accepted_win_rate']:,.1%}) - Consider adjusting confidence threshold"
                 )
 
             if meta_metrics.get("profit_factor", 0) > 2.0:
@@ -1528,7 +1528,7 @@ def generate_complete_meta_labeling_report(
         Path to the generated markdown report
     """
     # Create output directory
-    output_dir.mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     plot_dir = output_dir / "plots"
 
     # Define report path
@@ -1571,7 +1571,7 @@ def generate_complete_meta_labeling_report(
 # Example usage
 if __name__ == "__main__":
     # Example with simulated data
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     # Create sample results for different bar types
     np.random.seed(42)
