@@ -1341,12 +1341,12 @@ class ModelDevelopmentPipeline:
         symbol: str,
         train_start: str,
         train_end: str,
-        strategy: BaseStrategy,
-        data_config: Dict,
-        feature_config: Dict,
-        label_config: Dict,
-        model_params: Dict,
-        account_name: str = "default",
+        strategy,
+        data_config: dict,
+        feature_config: dict,
+        label_config: dict,
+        model_params: dict,
+        base_dir: str = "Models",
     ):
         """
         Initialize the pipeline with configuration parameters.
@@ -1372,7 +1372,7 @@ class ModelDevelopmentPipeline:
         account_name : str, optional
             MT5 account identifier (default: "default").
         """
-        # Configuration parameters
+        # Configuration
         self.symbol = symbol
         self.train_start = train_start
         self.train_end = train_end
@@ -1381,16 +1381,23 @@ class ModelDevelopmentPipeline:
         self.feature_config = feature_config
         self.label_config = label_config
         self.model_params = model_params
-        self.account_name = account_name
-        self.cv_splits = model_params["cv_splits"]
 
-        # Ensure we don't overfit by performing CV on the same data
-        if self.cv_splits > 3:
-            self.cv_splits_weights = self.cv_splits + 1
-            self.cv_splits_calibration = self.cv_splits - 1
-        else:
-            self.cv_splits_weights = self.cv_splits + 2
-            self.cv_splits_calibration = self.cv_splits + 1
+        # File management
+        self.file_manager = ModelFileManager(base_dir)
+
+        # Build complete config
+        self.config = {
+            "strategy": strategy.get_strategy_name(),
+            "symbol": symbol,
+            "training_start": train_start,
+            "training_end": train_end,
+            "account_name": data_config.get("account_name", "default"),
+        }
+        self.config.update(data_config)
+        self.config.update(label_config)
+
+        # Set up directory structure
+        self.file_paths = self.file_manager.setup_model_directory(self.config)
 
         # Storage for intermediate results
         self.tick_data = None
@@ -1399,13 +1406,13 @@ class ModelDevelopmentPipeline:
         self.events = None
         self.sample_weight = None
         self.best_weighting_scheme = None
+        self.weighting_schemes = None
         self.meta_features = None
         self.preprocessed_features = None
         self.best_model = None
         self.cv_results = None
         self.feature_importance = None
         self.metrics = None
-        self.config_summary = None
         self.training_metadata = None
 
         # Status tracking
@@ -1419,8 +1426,39 @@ class ModelDevelopmentPipeline:
             "analysis": False,
         }
 
+        # Log file
+        self.log_file = self.file_paths["logs"] / "pipeline.log"
+        self._setup_logging()
+
+        # Ensure CV is not done on the same splits to prevent overfitting
+        self.cv_splits = model_params["cv_splits"]
+
+        # Ensure we don't overfit by performing CV on the same data
+        if self.cv_splits > 3:
+            self.cv_splits_weights = self.cv_splits + 1
+            self.cv_splits_calibration = self.cv_splits - 1
+        else:
+            self.cv_splits_weights = self.cv_splits + 2
+            self.cv_splits_calibration = self.cv_splits + 1
+
+    def _setup_logging(self):
+        """Set up logging to file."""
+        import logging
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[logging.FileHandler(self.log_file), logging.StreamHandler()],
+        )
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+        # Log configuration
+        self.logger.info(f"Starting pipeline for {self.symbol}")
+        self.logger.info(f"Training period: {self.train_start} to {self.train_end}")
+        self.logger.info(f"Output directory: {self.file_paths['base_dir']}")
+
     def run_full_pipeline(
-        self, cache_reports: bool = False, save_model: bool = True, verbose: bool = True
+        self, cache_reports: bool = False, save_artifacts: bool = True, verbose: bool = True
     ) -> Tuple[RandomForestClassifier, List[str], Dict]:
         """
         Run the complete model development pipeline.
@@ -1429,7 +1467,7 @@ class ModelDevelopmentPipeline:
         ----------
         cache_reports : bool, optional
             Display cache reports (default: False).
-        save_model : bool, optional
+        save_artifacts : bool, optional
             Save model and metadata (default: True).
         verbose : bool, optional
             Print progress information (default: True).
@@ -1437,7 +1475,7 @@ class ModelDevelopmentPipeline:
         Returns
         -------
         tuple
-            (best_model, features_columns, metrics, config_summary)
+            (best_model, features_columns, metrics, config)
         """
         if verbose:
             print("\n" + "=" * 70)
@@ -1447,18 +1485,18 @@ class ModelDevelopmentPipeline:
             print("-" * 50)
 
         # Create configuration summary
-        self.config_summary = {
+        self.config = {
             "strategy": self.strategy.get_strategy_name(),
             "symbol": self.symbol,
             "account_name": self.account_name,
             "train_start": self.train_start,
             "train_end": self.train_end,
         }
-        self.config_summary.update(self.data_config)
-        self.config_summary.update(self.label_config)
+        self.config.update(self.data_config)
+        self.config.update(self.label_config)
 
         if verbose:
-            print(pd.Series(self.config_summary).to_string())
+            print(pd.Series(self.config).to_string())
 
         # Step 1: Load data
         if verbose:
@@ -1523,10 +1561,6 @@ class ModelDevelopmentPipeline:
         # Compile metrics
         self._compile_metrics()
 
-        # Save model if requested
-        if save_model:
-            self._save_model()
-
         if save_artifacts and self.best_model is not None:
             # Save model
             metadata = {
@@ -1567,10 +1601,11 @@ class ModelDevelopmentPipeline:
             symbol=self.symbol,
             start_date=self.train_start,
             end_date=self.train_end,
-            account_name=self.account_name,
-            bar_type=self.data_config["bar_type"],
-            bar_size=self.data_config["bar_size"],
-            price=self.data_config["price"],
+            **self.data_config,
+            # account_name=self.account_name,
+            # bar_type=self.data_config["bar_type"],
+            # bar_size=self.data_config["bar_size"],
+            # price=self.data_config["price"],
         )
         self.completed_steps["data_loading"] = True
 
@@ -1724,17 +1759,17 @@ class ModelDevelopmentPipeline:
             return
 
         # Create metadata
-        metadata = generate_metadata(self.config_summary, self.metrics, self._get_feature_names())
+        metadata = generate_metadata(self.config, self.metrics, self._get_feature_names())
 
         # Determine save path
         root = Path.home()
         save_path = (
             root
             / "Models"
-            / self.config_summary["strategy"]
+            / self.config["strategy"]
             / self.symbol
-            / self.config_summary["bar_type"]
-            / self.config_summary["bar_size"]
+            / self.config["bar_type"]
+            / self.config["bar_size"]
         )
 
         # Save model
@@ -1869,7 +1904,7 @@ class ModelDevelopmentPipeline:
         import json
 
         with open(export_dir / "config.json", "w") as f:
-            json.dump(self.config_summary, f, indent=2, default=str)
+            json.dump(self.config, f, indent=2, default=str)
 
         with open(export_dir / "metrics.json", "w") as f:
             # Convert non-serializable objects
@@ -2008,3 +2043,701 @@ class ModelDevelopmentCache:
                 similar.append((key, similarity, self._pipelines[key]))
 
         return sorted(similar, key=lambda x: x[1], reverse=True)
+
+
+class ConfigPathGenerator:
+    """
+    Generates filenames and directory structures based on configuration parameters.
+    Creates human-readable, navigable paths for model storage and analysis.
+    """
+
+    def __init__(self, base_dir: str = "Models"):
+        """
+        Initialize the path generator.
+
+        Parameters
+        ----------
+        base_dir : str, optional
+            Base directory for all models (default: "Models").
+        """
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    def sanitize_filename(self, text: str) -> str:
+        """
+        Sanitize text to be safe for filenames.
+
+        Parameters
+        ----------
+        text : str
+            Text to sanitize.
+
+        Returns
+        -------
+        str
+            Sanitized filename-safe string.
+        """
+        # Replace problematic characters
+        replacements = {
+            "/": "_",
+            "\\": "_",
+            ":": "-",
+            "*": "",
+            "?": "",
+            '"': "",
+            "<": "",
+            ">": "",
+            "|": "",
+            " ": "_",
+            ".": "_",
+        }
+
+        result = str(text)
+        for old, new in replacements.items():
+            result = result.replace(old, new)
+
+        # Limit length
+        if len(result) > 100:
+            result = result[:100]
+
+        return result
+
+    def create_config_hash(self, config: dict) -> str:
+        """
+        Create a short hash from configuration for unique identification.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary.
+
+        Returns
+        -------
+        str
+            8-character hash string.
+        """
+        config_str = json.dumps(config, sort_keys=True, default=str)
+        return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
+    def format_date_range(self, start_date: str, end_date: str) -> str:
+        """
+        Format date range for directory names.
+
+        Parameters
+        ----------
+        start_date : str
+            Start date in 'YYYY-MM-DD' format.
+        end_date : str
+            End date in 'YYYY-MM-DD' format.
+
+        Returns
+        -------
+        str
+            Formatted date range string.
+        """
+        # Convert to YYYYMMDD format
+        start_clean = start_date.replace("-", "")
+        end_clean = end_date.replace("-", "")
+        return f"{start_clean}_{end_clean}"
+
+    def create_directory_structure(self, config: dict) -> Path:
+        """
+        Create directory structure based on configuration.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary. Expected keys:
+            - strategy : str (strategy name)
+            - symbol : str (trading symbol)
+            - bar_type : str (bar type)
+            - bar_size : str or int (bar size)
+            - training_start : str (start date)
+            - training_end : str (end date)
+            - [optional] account_name : str
+            - [optional] price : str
+            - [optional] target_lookback : int
+            - [optional] profit_target : float
+            - [optional] stop_loss : float
+
+        Returns
+        -------
+        Path
+            Path object for the created directory.
+        """
+        # Extract key parameters
+        strategy = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
+        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
+        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
+        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
+        account_name = self.sanitize_filename(config.get("account_name", "default"))
+
+        # Create date range string
+        date_range = self.format_date_range(
+            config.get("training_start", "UnknownStart"), config.get("training_end", "UnknownEnd")
+        )
+
+        # Create config hash for uniqueness
+        config_hash = self.create_config_hash(config)
+
+        # Build directory path
+        dir_path = (
+            self.base_dir
+            / strategy
+            / symbol
+            / account_name
+            / bar_type
+            / bar_size
+            / date_range
+            / config_hash
+        )
+
+        # Create directory
+        dir_path.mkdir(parents=True, exist_ok=True)
+
+        return dir_path
+
+    def generate_filename(
+        self,
+        config: dict,
+        file_type: str,
+        include_timestamp: bool = True,
+        include_config_summary: bool = True,
+    ) -> str:
+        """
+        Generate descriptive filename based on configuration.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary.
+        file_type : str
+            Type of file (e.g., 'model', 'features', 'events', 'metrics', 'config').
+        include_timestamp : bool, optional
+            Include timestamp in filename (default: True).
+        include_config_summary : bool, optional
+            Include config summary in filename (default: True).
+
+        Returns
+        -------
+        str
+            Generated filename.
+        """
+        # Extract key parameters
+        strategy = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
+        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
+        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
+        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
+
+        # Create config summary if requested
+        if include_config_summary:
+            # Include key parameters in filename
+            summary_parts = [
+                f"sym-{symbol}",
+                f"bar-{bar_type}-{bar_size}",
+            ]
+
+            # Add optional parameters if they exist
+            optional_params = ["price", "target_lookback", "profit_target", "stop_loss"]
+            for param in optional_params:
+                if param in config:
+                    value = self.sanitize_filename(str(config[param]))
+                    summary_parts.append(f"{param}-{value}")
+
+            summary = "_".join(summary_parts)
+        else:
+            summary = f"{strategy}_{symbol}"
+
+        # Add timestamp if requested
+        if include_timestamp:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{file_type}_{summary}_{timestamp}"
+        else:
+            filename = f"{file_type}_{summary}"
+
+        # Add appropriate extension
+        extensions = {
+            "model": ".pkl",
+            "features": ".parquet",
+            "events": ".parquet",
+            "metrics": ".json",
+            "config": ".json",
+            "feature_importance": ".csv",
+            "weights": ".parquet",
+            "plot": ".png",
+            "report": ".html",
+            "log": ".log",
+        }
+
+        extension = extensions.get(file_type, ".dat")
+        return filename + extension
+
+    def create_model_filename(self, config: dict, model_type: str = "rf") -> str:
+        """
+        Create filename for model files.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary.
+        model_type : str, optional
+            Type of model (default: "rf" for RandomForest).
+
+        Returns
+        -------
+        str
+            Model filename.
+        """
+        # Create comprehensive model filename
+        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
+        strategy = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
+        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
+        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
+
+        # Date range
+        date_range = self.format_date_range(
+            config.get("training_start", "UnknownStart"), config.get("training_end", "UnknownEnd")
+        )
+
+        # Optional parameters
+        param_parts = []
+        optional_params = ["profit_target", "stop_loss", "target_lookback"]
+        for param in optional_params:
+            if param in config:
+                value = self.sanitize_filename(str(config[param]))
+                param_parts.append(f"{param[0:2]}-{value}")
+
+        params_str = "_".join(param_parts) if param_parts else "default"
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        filename = f"{model_type}_{strategy}_{symbol}_{bar_type}_{bar_size}_{date_range}_{params_str}_{timestamp}.pkl"
+
+        return filename
+
+    def create_summary_filename(self, config: dict, analysis_type: str = "summary") -> str:
+        """
+        Create filename for summary/analysis files.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary.
+        analysis_type : str, optional
+            Type of analysis (default: "summary").
+
+        Returns
+        -------
+        str
+            Summary filename.
+        """
+        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
+        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
+        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
+
+        date_range = self.format_date_range(
+            config.get("training_start", "UnknownStart"), config.get("training_end", "UnknownEnd")
+        )
+
+        timestamp = datetime.now().strftime("%Y%m%d")
+
+        return f"{analysis_type}_{symbol}_{bar_type}_{bar_size}_{date_range}_{timestamp}.html"
+
+    def get_standard_file_paths(self, config: dict) -> dict:
+        """
+        Get standard file paths for all model artifacts.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary.
+
+        Returns
+        -------
+        dict
+            Dictionary with standard file paths.
+        """
+        # Create directory structure
+        base_dir = self.create_directory_structure(config)
+
+        # Generate filenames
+        model_filename = self.create_model_filename(config)
+        config_filename = self.generate_filename(config, "config", include_timestamp=False)
+        metrics_filename = self.generate_filename(config, "metrics")
+        features_filename = self.generate_filename(config, "features")
+        events_filename = self.generate_filename(config, "events")
+        feature_importance_filename = self.generate_filename(config, "feature_importance")
+        weights_filename = self.generate_filename(config, "weights")
+
+        return {
+            "base_dir": base_dir,
+            "model": base_dir / model_filename,
+            "config": base_dir / config_filename,
+            "metrics": base_dir / metrics_filename,
+            "features": base_dir / features_filename,
+            "events": base_dir / events_filename,
+            "feature_importance": base_dir / feature_importance_filename,
+            "weights": base_dir / weights_filename,
+            "logs": base_dir / "logs",
+            "plots": base_dir / "plots",
+            "reports": base_dir / "reports",
+        }
+
+    def create_navigation_index(self, config: dict, file_paths: dict = None) -> str:
+        """
+        Create HTML navigation index for easy browsing of model artifacts.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary.
+        file_paths : dict, optional
+            Dictionary of file paths.
+
+        Returns
+        -------
+        str
+            HTML index content.
+        """
+        if file_paths is None:
+            file_paths = self.get_standard_file_paths(config)
+
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Model Artifacts - {config.get('symbol', 'Unknown')}</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                .header {{ background-color: #f4f4f4; padding: 20px; border-radius: 5px; }}
+                .config {{ background-color: #e8f4f8; padding: 15px; border-radius: 5px; margin: 20px 0; }}
+                .files {{ background-color: #f9f9f9; padding: 15px; border-radius: 5px; }}
+                .file-item {{ margin: 10px 0; padding: 10px; border-left: 4px solid #007bff; }}
+                h1 {{ color: #333; }}
+                h2 {{ color: #555; }}
+                pre {{ background-color: #f8f9fa; padding: 10px; border-radius: 3px; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>Model Artifacts</h1>
+                <p>Generated on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+            </div>
+            
+            <div class="config">
+                <h2>Configuration</h2>
+                <pre>{json.dumps(config, indent=2, default=str)}</pre>
+            </div>
+            
+            <div class="files">
+                <h2>Files</h2>
+        """
+
+        # Add file links
+        for file_type, file_path in file_paths.items():
+            if isinstance(file_path, Path):
+                if file_path.is_dir():
+                    html += f'<div class="file-item"><strong>{file_type}:</strong> {file_path.name}/ (directory)</div>'
+                else:
+                    html += f'<div class="file-item"><strong>{file_type}:</strong> <a href="{file_path.name}">{file_path.name}</a></div>'
+
+        html += """
+            </div>
+        </body>
+        </html>
+        """
+
+        # Save HTML index
+        index_path = file_paths["base_dir"] / "index.html"
+        index_path.write_text(html)
+
+        return html
+
+
+class ModelFileManager:
+    """
+    Manages file operations for model development with organized structure.
+    """
+
+    def __init__(self, base_dir: str = "Models"):
+        """
+        Initialize file manager.
+
+        Parameters
+        ----------
+        base_dir : str, optional
+            Base directory for all models (default: "Models").
+        """
+        self.path_generator = ConfigPathGenerator(base_dir)
+        self.current_paths = None
+
+    def setup_model_directory(self, config: dict) -> dict:
+        """
+        Set up directory structure for a model.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary.
+
+        Returns
+        -------
+        dict
+            Dictionary of file paths.
+        """
+        self.current_paths = self.path_generator.get_standard_file_paths(config)
+
+        # Create subdirectories
+        for subdir in ["logs", "plots", "reports"]:
+            self.current_paths[subdir].mkdir(exist_ok=True)
+
+        # Save configuration
+        self.save_config(config)
+
+        # Create navigation index
+        self.path_generator.create_navigation_index(config, self.current_paths)
+
+        return self.current_paths
+
+    def save_config(self, config: dict):
+        """Save configuration to file."""
+        if self.current_paths:
+            config_path = self.current_paths["config"]
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2, default=str)
+
+    def save_model(self, model, metadata: dict = None):
+        """Save model with metadata."""
+        if self.current_paths:
+            import joblib
+
+            save_data = {
+                "model": model,
+                "metadata": metadata or {},
+                "save_timestamp": datetime.now().isoformat(),
+                "config_path": str(self.current_paths["config"]),
+            }
+
+            joblib.dump(save_data, self.current_paths["model"])
+
+    def save_metrics(self, metrics: dict):
+        """Save metrics to file."""
+        if self.current_paths:
+            import json
+
+            with open(self.current_paths["metrics"], "w") as f:
+                json.dump(metrics, f, indent=2, default=str)
+
+    def save_dataframe(self, df, name: str):
+        """Save DataFrame to appropriate format."""
+        if self.current_paths and name in self.current_paths:
+            df.to_parquet(self.current_paths[name])
+
+    def get_model_info(self, model_path: Path) -> dict:
+        """
+        Get information about a saved model.
+
+        Parameters
+        ----------
+        model_path : Path
+            Path to model file.
+
+        Returns
+        -------
+        dict
+            Model information.
+        """
+        # Extract info from filename and directory structure
+        parts = model_path.parts
+
+        info = {
+            "file_path": str(model_path),
+            "file_name": model_path.name,
+            "strategy": parts[-7] if len(parts) >= 7 else "Unknown",
+            "symbol": parts[-6] if len(parts) >= 6 else "Unknown",
+            "account": parts[-5] if len(parts) >= 5 else "Unknown",
+            "bar_type": parts[-4] if len(parts) >= 4 else "Unknown",
+            "bar_size": parts[-3] if len(parts) >= 3 else "Unknown",
+            "date_range": parts[-2] if len(parts) >= 2 else "Unknown",
+            "config_hash": parts[-1] if len(parts) >= 1 else "Unknown",
+        }
+
+        # Parse filename for more details
+        filename_parts = model_path.stem.split("_")
+        if len(filename_parts) >= 6:
+            info.update(
+                {
+                    "model_type": filename_parts[0],
+                    "strategy_from_file": filename_parts[1],
+                    "symbol_from_file": filename_parts[2],
+                    "bar_type_from_file": filename_parts[3],
+                    "bar_size_from_file": filename_parts[4],
+                    "date_range_from_file": filename_parts[5],
+                }
+            )
+
+        return info
+
+    def find_models(self, search_criteria: dict = None, base_dir: str = None) -> list:
+        """
+        Find models matching search criteria.
+
+        Parameters
+        ----------
+        search_criteria : dict, optional
+            Dictionary of search criteria.
+        base_dir : str, optional
+            Base directory to search (default: configured base_dir).
+
+        Returns
+        -------
+        list
+            List of matching model files with their info.
+        """
+        if base_dir is None:
+            base_dir = self.path_generator.base_dir
+
+        search_dir = Path(base_dir)
+        model_files = list(search_dir.rglob("*.pkl"))
+
+        results = []
+        for model_file in model_files:
+            info = self.get_model_info(model_file)
+
+            # Apply search criteria if provided
+            if search_criteria:
+                match = True
+                for key, value in search_criteria.items():
+                    if key in info and info[key] != value:
+                        match = False
+                        break
+                if not match:
+                    continue
+
+            results.append(info)
+
+        return results
+
+
+# Updated ModelDevelopmentPipeline with integrated file management
+class ModelDevelopmentPipeline:
+    """
+    Enhanced pipeline with integrated file management.
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        train_start: str,
+        train_end: str,
+        strategy,
+        data_config: dict,
+        feature_config: dict,
+        label_config: dict,
+        model_params: dict,
+        base_dir: str = "Models",
+    ):
+        """
+        Initialize pipeline with configuration and file management.
+        """
+        # Configuration
+        self.symbol = symbol
+        self.train_start = train_start
+        self.train_end = train_end
+        self.strategy = strategy
+        self.data_config = data_config
+        self.feature_config = feature_config
+        self.label_config = label_config
+        self.model_params = model_params
+
+        # File management
+        self.file_manager = ModelFileManager(base_dir)
+
+        # Build complete config
+        self.config = {
+            "strategy": strategy.get_strategy_name(),
+            "symbol": symbol,
+            "training_start": train_start,
+            "training_end": train_end,
+            "account_name": data_config.get("account_name", "default"),
+        }
+        self.config.update(data_config)
+        self.config.update(label_config)
+
+        # Set up directory structure
+        self.file_paths = self.file_manager.setup_model_directory(self.config)
+
+        # Storage for intermediate results
+        self.tick_data = None
+        self.bar_data = None
+        self.features = None
+        self.events = None
+        self.sample_weight = None
+        self.best_weighting_scheme = None
+        self.weighting_schemes = None
+        self.meta_features = None
+        self.preprocessed_features = None
+        self.best_model = None
+        self.cv_results = None
+        self.feature_importance = None
+        self.metrics = None
+
+        # Log file
+        self.log_file = self.file_paths["logs"] / "pipeline.log"
+        self._setup_logging()
+
+    def _setup_logging(self):
+        """Set up logging to file."""
+        import logging
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[logging.FileHandler(self.log_file), logging.StreamHandler()],
+        )
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+        # Log configuration
+        self.logger.info(f"Starting pipeline for {self.symbol}")
+        self.logger.info(f"Training period: {self.train_start} to {self.train_end}")
+        self.logger.info(f"Output directory: {self.file_paths['base_dir']}")
+
+    def run_full_pipeline(
+        self, cache_reports: bool = False, save_artifacts: bool = True, verbose: bool = True
+    ) -> tuple:
+        """
+        Run the complete model development pipeline.
+        """
+        # Your existing pipeline code here...
+        # (Same as before, but using self.file_manager for saving)
+
+        # Example of saving artifacts:
+        if save_artifacts and self.best_model is not None:
+            # Save model
+            metadata = {
+                "cv_results": self.cv_results,
+                "feature_importance": self.feature_importance.to_dict("records"),
+                "training_samples": len(self.bar_data) if self.bar_data is not None else 0,
+                "best_weighting_scheme": self.best_weighting_scheme,
+                "pipeline_version": "1.0",
+            }
+
+            self.file_manager.save_model(self.best_model, metadata)
+
+            # Save metrics
+            if self.metrics:
+                self.file_manager.save_metrics(self.metrics)
+
+            # Save dataframes
+            if self.features is not None:
+                self.features.to_parquet(self.file_paths["features"])
+
+            if self.events is not None:
+                self.events.to_parquet(self.file_paths["events"])
+
+            if self.feature_importance is not None:
+                self.feature_importance.to_csv(self.file_paths["feature_importance"], index=False)
+
+            self.logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
+
+        return (self.best_model, self._get_feature_names(), self.metrics, self.config)
