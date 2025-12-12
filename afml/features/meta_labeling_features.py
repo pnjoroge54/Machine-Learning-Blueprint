@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 from numba import njit, prange
 
-from .time import get_time_features
+from afml.cache.unified_cache_system import cacheable
+from afml.time import get_time_features
 
 
 @njit(parallel=True, fastmath=True, cache=True)
