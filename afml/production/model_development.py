@@ -17,9 +17,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from afml.ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
-from afml.features.time import get_time_features
-
 from ..cache import (
     cacheable,
     get_cache_monitor,
@@ -33,6 +30,9 @@ from ..cross_validation import (
     ml_cross_val_score,
 )
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
+from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from ..features.meta_labeling_features import add_meta_label_features
+from ..features.time import get_time_features
 from ..labeling.triple_barrier import (
     add_vertical_barrier,
     get_event_weights,
@@ -44,23 +44,6 @@ from ..strategies.signal_processing import get_entries
 from ..strategies.signals import BaseStrategy
 from ..util.misc import value_counts_data
 from ..util.volatility import get_daily_vol
-
-
-# Define a sink that uses tqdm.write
-def tqdm_sink(msg):
-    tqdm.write(msg, end="")  # end="" avoids double newlines
-
-
-# Remove default handler and add our custom one to prevent logger interfering with tqdm
-logger.remove()
-logger.add(
-    tqdm_sink,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss:ms}</green> | "
-    "<level>{level: <8}</level> | "
-    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
-    "<level>{message}</level>",
-    colorize=True,
-)
 
 
 class TickDataLoader:
@@ -680,6 +663,64 @@ def generate_events_triple_barrier(
     return events
 
 
+def weighted_estimator(base_estimator, events, data_index):
+    class EstimatorWithWeights(BaseEstimator, ClassifierMixin):
+        def __init__(self, scheme="unweighted", decay=1.0, linear=True, **params):
+            self.scheme = scheme
+            self.decay = decay
+            self.linear = linear
+            self.events = events
+            self.data_index = data_index
+            self.base_estimator = clone(base_estimator)
+            self.base_estimator.set_params(**params)
+
+        def fit(self, X, y):
+            n = len(X)
+            if self.scheme == "uniqueness":
+                weights = self.events["tW"].copy()
+            elif self.scheme == "return":
+                weights = self.events["w"].copy()
+            else:
+                weights = pd.Series(np.ones(n), index=self.events.index)
+
+            valid = X.index.intersection(y.index)
+            X, y, weights = X.reindex(valid), y.reindex(valid), weights.reindex(valid)
+
+            # Apply decay factor
+            if self.decay != 1.0:
+                decay_vec = get_weights_by_time_decay_optimized(
+                    triple_barrier_events=self.events,
+                    close_index=self.data_index,
+                    last_weight=self.decay,
+                    linear=self.linear,
+                    av_uniqueness=self.events.loc[X.index, "tW"],
+                )
+                weights *= decay_vec
+
+            self.base_estimator.fit(X, y, sample_weight=weights)
+            return self
+
+        def predict(self, X):
+            return self.base_estimator.predict(X)
+
+        def get_params(self, deep=True):
+            return {
+                "scheme": self.scheme,
+                "decay": self.decay,
+                "linear": self.linear,
+                **self.base_estimator.get_params(deep=deep),
+            }
+
+        def set_params(self, **params):
+            for key in ["scheme", "decay", "linear"]:
+                if key in params:
+                    setattr(self, key, params.pop(key))
+            self.base_estimator.set_params(**params)
+            return self
+
+    return EstimatorWithWeights()
+
+
 @cacheable()
 def get_best_weighting_scheme(
     classifier, X, y, cv_gen, sample_weight, scheme, best_scheme, best_score
@@ -700,22 +741,27 @@ def get_best_weighting_scheme(
     return best_scheme, best_score
 
 
+# Use the weighted estimator to perform a RandomizedSearchCV
+@cacheable(time_aware=True)
 def get_best_sample_weight(
-    data: pd.DataFrame,
+    data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
     features: pd.DataFrame,
+    cv_splits: int,
 ) -> pd.Series:
     """
     Compute best sample weight with time decay.
 
     Parameters
     ----------
-    data: pd.DataFrame
-        Price data.
+    data_index: pd.DatetimeIndex
+        Price data index.
     events : pd.DataFrame
         Event labels with uniqueness weights.
     features: pd.DataFrame
         Training features
+    cv_splits: int
+        Cross-validation splits
 
     Returns
     -------
@@ -725,93 +771,49 @@ def get_best_sample_weight(
     """
     valid_index = features.index.intersection(events.index)
     cont = events.loc[valid_index]
-    weighting_schemes = {
-        "unweighted": pd.Series(1.0, index=valid_index),
-        "uniqueness": cont["tW"],
-        "return": cont["w"],
-    }
+
     X = features.loc[valid_index]
     y = cont["bin"]
-    cv_gen = PurgedKFold(n_splits=5, t1=cont["t1"], pct_embargo=0.01)
+
     classifier = RandomForestClassifier(
         criterion="entropy",
         class_weight="balanced_subsample",
-        max_samples=cont["tW"].mean().round(2),
+        max_samples=cont["tW"].mean().round(6),
         max_depth=6,
         min_weight_fraction_leaf=0.05,
-        n_jobs=-1,
         random_state=7,
     )
 
-    best_scheme = None
-    best_score = 0
-    for scheme, weight in tqdm(
-        weighting_schemes.items(),
-        desc=f"Computing best weighting scheme from {list(weighting_schemes.keys())}",
-        total=len(weighting_schemes),
-    ):
-        best_scheme, best_score = get_best_weighting_scheme(
-            clone(classifier), X, y, cv_gen, weight, scheme, best_scheme, best_score
-        )
-
-    decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
-    best_weighting_scheme = best_scheme
-    best_weight = weighting_schemes[best_scheme]
-    for time_decay in tqdm(
-        reversed(decay_factors),
-        total=len(decay_factors),
-    ):
-        for linear in (0, 1):
-            decay_method = "linear" if linear else "exponential"
-            scheme = f"{best_weighting_scheme}_{decay_method}_decay_{time_decay}"
-            logger.debug(scheme)
-            decay_w = get_weights_by_time_decay_optimized(
-                triple_barrier_events=events.loc[valid_index],
-                close_index=data.index,
-                last_weight=time_decay,
-                linear=linear,
-                av_uniqueness=cont["tW"],
-            )
-            weight = best_weight * decay_w
-            weighting_schemes[scheme] = weight
-            best_scheme, best_score = get_best_weighting_scheme(
-                clone(classifier), X, y, cv_gen, weight, scheme, best_scheme, best_score
-            )
-
-    logger.info(f"\nBest Weighting Scheme: {' '.join(best_scheme.split('_')).title()}")
-
-    return weighting_schemes[best_scheme], best_scheme, weighting_schemes
-
-    valid_index = features.index.intersection(events.index)
-    cont = events.loc[valid_index]
-    classifier = RandomForestClassifier(
-        criterion="entropy",
-        class_weight="balanced_subsample",
-        max_samples=cont["tW"].mean().round(4),
-        max_depth=6,
-        min_weight_fraction_leaf=0.05,
-        n_jobs=-1,
-        random_state=7,
-    )
     est = weighted_estimator(classifier, cont, data_index)
     param_distributions = {
         "scheme": ["unweighted", "return", "uniqueness"],
-        "decay": [1.0, uniform(0, 1)],  # decay factor between 0 and 1 inclusive
+        "decay": uniform(0, 1),  # decay factor between 0 and 1 inclusive
         "linear": [True, False],
     }
-    X = features.loc[valid_index]
-    y = cont["bin"]
-    cv = PurgedKFold(n_splits=4, t1=cont["t1"])
-    search = RandomizedSearchCV(est, param_distributions, n_iter=20, cv=3, random_state=42)
+    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+    # cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
+    search = RandomizedSearchCV(
+        est,
+        param_distributions,
+        n_iter=20,
+        cv=cv_splits,  # The overhead isn't worth purging the data
+        random_state=42,
+        scoring=scoring,
+        n_jobs=-1,
+    )
     search.fit(X, y)
     params = search.best_params_
     scheme = params["scheme"]
+    decay = params["decay"]
+    linear = params["linear"]
+    best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay:.6f}"
+    logger.info(f"Best Weighting Scheme: {' '.join(best_scheme.split('_')).title()}")
 
     decay_vec = get_weights_by_time_decay_optimized(
         triple_barrier_events=cont,
         close_index=data_index,
-        last_weight=params["decay"],
-        linear=params["linear"],
+        last_weight=decay,
+        linear=linear,
         av_uniqueness=cont["tW"],
     )
 
@@ -822,7 +824,7 @@ def get_best_sample_weight(
     else:
         weights = decay_vec
 
-    return weights
+    return weights, best_scheme
 
 
 @njit(parallel=True, fastmath=True, cache=True)
@@ -966,14 +968,6 @@ def train_model_with_cv(
     t1 = cont["t1"]
     w = sample_weight.loc[valid_index]
 
-    # Set max_samples distribution in param_grid from average uniqueness to 1
-    if isinstance(pipe_clf.named_steps["clf"], SequentiallyBootstrappedBaggingClassifier):
-        av_uniqueness = cont["tW"].mean()
-        if rnd_search_iter > 0:
-            param_grid["clf__max_samples"] = uniform(loc=av_uniqueness, scale=1 - av_uniqueness)
-        else:
-            param_grid["clf__max_samples"] = np.linspace(av_uniqueness, 1, 3).tolist()
-
     best_model, cv_results = clf_hyper_fit_cached(
         X,
         y,
@@ -998,6 +992,8 @@ def train_model_with_cv(
 def make_custom_pipeline(pipe_clf):
     if not isinstance(pipe_clf, Pipeline):
         return MyPipeline([("clf", pipe_clf)])
+    elif isinstance(pipe_clf, Pipeline):
+        return MyPipeline(pipe_clf.steps)
     else:
         return pipe_clf
 
@@ -1115,7 +1111,13 @@ def develop_production_model(
 
     print("\nConfiguration")
     print("-" * 50)
-    config = {"strategy": strategy.get_strategy_name(), "symbol": symbol}
+    config = {
+        "strategy": strategy,
+        "strategy_name": strategy.get_strategy_name(),
+        "symbol": symbol,
+        "train_start": train_start,
+        "train_end": train_end,
+    }
     config.update(data_config)
     config.update(label_config)
     print(pd.Series(config).to_string())
@@ -1138,9 +1140,7 @@ def develop_production_model(
 
     # Step 4: Sample weights (cached)
     print("\n[Step 4/7] Computing sample weights...")
-    sample_weight, best_weighting_scheme, weighting_schemes = get_best_sample_weight(
-        data, events, features
-    )
+    sample_weight, best_weighting_scheme = get_best_sample_weight(data, events, features)
 
     # Step 5: Rolling meta-label features (cached)
     print("\n[Step 5/7] Computing rolling meta-label features...")
@@ -1161,8 +1161,10 @@ def develop_production_model(
 
     # Set max_samples to average uniqueness for tree-based classifiers
     pipe = model_params["pipe_clf"]
-    if is_tree(pipe):
-        av_uniqueness = events["tW"].mean().round(4)
+    av_uniqueness = events["tW"].mean().round(6)
+    if isinstance(pipe, Pipeline) and is_tree(pipe):
+        pipe.set_params(**{f"{pipe.steps[-1][0]}_max_samples": av_uniqueness})
+    elif is_tree(pipe):
         pipe.set_params(max_samples=av_uniqueness)
 
     if isinstance(pipe, SequentiallyBootstrappedBaggingClassifier):
@@ -1171,7 +1173,7 @@ def develop_production_model(
     model_params["pipe_clf"] = make_custom_pipeline(pipe)
 
     best_model, cv_results = train_model_with_cv(features, events, sample_weight, **model_params)
-    best_model.named_steps["clf"].set_params(n_jobs=-1)
+    best_model.steps[-1][1].set_params(n_jobs=-1)
     print(f"✓ Best CV score: {cv_results['best_score']:.4f}")
     print(f"✓ Best params: {cv_results['best_params']}")
 
@@ -1185,7 +1187,7 @@ def develop_production_model(
     feature_importance = pd.DataFrame(
         {
             "feature": features_columns,
-            "importance": best_model.named_steps["clf"].feature_importances_,
+            "importance": best_model.steps[-1][1].feature_importances_,
         }
     ).sort_values("importance", ascending=False)
     print("\nTop 10 Features:")
@@ -1211,14 +1213,14 @@ def develop_production_model(
         "training_samples": len(data),
         "feature_count": len(features_columns),
         "best_weighting_scheme": best_weighting_scheme,
-        "weighting_schemes": weighting_schemes,
     }
     if save:
+        root = Path.home()
         save_path = (
-            Path.home() / "Models" / symbol / data_config["bar_type"] / data_config["bar_size"]
+            root / "Models" / config["strategy"] / symbol / config["bar_type"] / config["bar_size"]
         )
         metadata = generate_metadata(config, metrics, features_columns)
-        _ = save_model(best_model, metadata, save_path)
+        save_model(best_model, metadata, save_path)
 
     return best_model, features_columns, metrics, config
 
@@ -1326,3 +1328,683 @@ def load_model(filepath, model_class=None):
             raise RuntimeError("Pipeline failed") from e
     else:
         raise ValueError("Unsupported framework")
+
+
+class ModelDevelopmentPipeline:
+    """
+    Encapsulates the entire production model development pipeline,
+    storing all intermediate data and results as attributes for analysis.
+    """
+
+    def __init__(
+        self,
+        symbol: str,
+        train_start: str,
+        train_end: str,
+        strategy: BaseStrategy,
+        data_config: Dict,
+        feature_config: Dict,
+        label_config: Dict,
+        model_params: Dict,
+        account_name: str = "default",
+    ):
+        """
+        Initialize the pipeline with configuration parameters.
+
+        Parameters
+        ----------
+        symbol : str
+            Trading instrument symbol.
+        train_start : str
+            Training start date ('YYYY-MM-DD').
+        train_end : str
+            Training end date ('YYYY-MM-DD').
+        strategy : BaseStrategy
+            Signal generating strategy.
+        data_config : dict
+            Bar construction configuration.
+        feature_config : dict
+            Feature engineering configuration.
+        label_config : dict
+            Triple-barrier labeling configuration.
+        model_params : dict
+            Model training configuration.
+        account_name : str, optional
+            MT5 account identifier (default: "default").
+        """
+        # Configuration parameters
+        self.symbol = symbol
+        self.train_start = train_start
+        self.train_end = train_end
+        self.strategy = strategy
+        self.data_config = data_config
+        self.feature_config = feature_config
+        self.label_config = label_config
+        self.model_params = model_params
+        self.account_name = account_name
+        self.cv_splits = model_params["cv_splits"]
+
+        # Ensure we don't overfit by performing CV on the same data
+        if self.cv_splits > 3:
+            self.cv_splits_weights = self.cv_splits + 1
+            self.cv_splits_calibration = self.cv_splits - 1
+        else:
+            self.cv_splits_weights = self.cv_splits + 2
+            self.cv_splits_calibration = self.cv_splits + 1
+
+        # Storage for intermediate results
+        self.tick_data = None
+        self.bar_data = None
+        self.features = None
+        self.events = None
+        self.sample_weight = None
+        self.best_weighting_scheme = None
+        self.meta_features = None
+        self.preprocessed_features = None
+        self.best_model = None
+        self.cv_results = None
+        self.feature_importance = None
+        self.metrics = None
+        self.config_summary = None
+        self.training_metadata = None
+
+        # Status tracking
+        self.completed_steps = {
+            "data_loading": False,
+            "feature_engineering": False,
+            "label_generation": False,
+            "weight_computation": False,
+            "meta_features": False,
+            "model_training": False,
+            "analysis": False,
+        }
+
+    def run_full_pipeline(
+        self, cache_reports: bool = False, save_model: bool = True, verbose: bool = True
+    ) -> Tuple[RandomForestClassifier, List[str], Dict]:
+        """
+        Run the complete model development pipeline.
+
+        Parameters
+        ----------
+        cache_reports : bool, optional
+            Display cache reports (default: False).
+        save_model : bool, optional
+            Save model and metadata (default: True).
+        verbose : bool, optional
+            Print progress information (default: True).
+
+        Returns
+        -------
+        tuple
+            (best_model, features_columns, metrics, config_summary)
+        """
+        if verbose:
+            print("\n" + "=" * 70)
+            print("PRODUCTION MODEL DEVELOPMENT PIPELINE")
+            print("=" * 70)
+            print(f"\nConfiguration")
+            print("-" * 50)
+
+        # Create configuration summary
+        self.config_summary = {
+            "strategy": self.strategy.get_strategy_name(),
+            "symbol": self.symbol,
+            "account_name": self.account_name,
+            "train_start": self.train_start,
+            "train_end": self.train_end,
+        }
+        self.config_summary.update(self.data_config)
+        self.config_summary.update(self.label_config)
+
+        if verbose:
+            print(pd.Series(self.config_summary).to_string())
+
+        # Step 1: Load data
+        if verbose:
+            print("\n[Step 1/7] Loading training data...")
+        self.load_training_data()
+        if verbose:
+            print(
+                f"✓ Loaded {len(self.bar_data):,} samples from {self.train_start} to {self.train_end}"
+            )
+
+        # Step 2: Feature engineering
+        if verbose:
+            print("\n[Step 2/7] Computing features...")
+        self.engineer_features()
+        if verbose:
+            print(f"✓ Generated {len(self.features.columns)} features")
+
+        # Step 3: Label generation
+        if verbose:
+            print("\n[Step 3/7] Generating events...")
+        self.generate_labels()
+        if verbose:
+            print(f"✓ Generated events: \n{value_counts_data(self.events['bin'])}")
+            print(f"\nAverage Uniqueness: {self.events['tW'].mean():.4f}")
+
+        # Step 4: Sample weights
+        if verbose:
+            print("\n[Step 4/7] Computing sample weights...")
+        self.compute_sample_weights()
+
+        # Step 5: Rolling meta-label features
+        if verbose:
+            print("\n[Step 5/7] Computing rolling meta-label features...")
+        self.add_meta_features()
+        self.preprocess_features()
+        if verbose:
+            print(f"✓ Computed rolling meta-label features")
+            print(
+                f"✓ Preprocessed features: {len(self.preprocessed_features.columns)} features retained"
+            )
+
+        # Step 6: Model training
+        if verbose:
+            print("\n[Step 6/7] Training model with cross-validation...")
+        self.train_model()
+        if verbose:
+            print(f"✓ Best CV score: {self.cv_results['best_score']:.4f}")
+            print(f"✓ Best params: {self.cv_results['best_params']}")
+
+        # Step 7: Feature importance analysis
+        if verbose:
+            print("\n[Step 7/7] Analyzing feature importance...")
+        self.analyze_features()
+        if verbose:
+            print("\nTop 10 Features:")
+            print(self.feature_importance.head(10).to_string(index=False))
+
+        # Cache reports
+        if cache_reports:
+            self._display_cache_reports()
+
+        # Compile metrics
+        self._compile_metrics()
+
+        # Save model if requested
+        if save_model:
+            self._save_model()
+
+        if save_artifacts and self.best_model is not None:
+            # Save model
+            metadata = {
+                "cv_results": self.cv_results,
+                "feature_importance": self.feature_importance.to_dict("records"),
+                "training_samples": len(self.bar_data) if self.bar_data is not None else 0,
+                "best_weighting_scheme": self.best_weighting_scheme,
+                "pipeline_version": "1.0",
+            }
+
+            self.file_manager.save_model(self.best_model, metadata)
+
+            # Save metrics
+            if self.metrics:
+                self.file_manager.save_metrics(self.metrics)
+
+            # Save dataframes
+            if self.features is not None:
+                self.features.to_parquet(self.file_paths["features"])
+
+            if self.events is not None:
+                self.events.to_parquet(self.file_paths["events"])
+
+            if self.feature_importance is not None:
+                self.feature_importance.to_csv(self.file_paths["feature_importance"], index=False)
+
+            self.logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
+
+        return (self.best_model, self._get_feature_names(), self.metrics, self.config)
+
+    def load_training_data(self):
+        """Step 1: Load tick data and construct bars."""
+        self.tick_data = loader.get_tick_data(
+            self.symbol, self.train_start, self.train_end, self.account_name
+        )
+
+        self.bar_data = load_and_prepare_training_data(
+            symbol=self.symbol,
+            start_date=self.train_start,
+            end_date=self.train_end,
+            account_name=self.account_name,
+            bar_type=self.data_config["bar_type"],
+            bar_size=self.data_config["bar_size"],
+            price=self.data_config["price"],
+        )
+        self.completed_steps["data_loading"] = True
+
+    def engineer_features(self):
+        """Step 2: Feature engineering."""
+        self.features = create_feature_engineering_pipeline(
+            self.bar_data, self.feature_config, self.data_config
+        )
+        self.completed_steps["feature_engineering"] = True
+
+    def generate_labels(self):
+        """Step 3: Generate triple-barrier labels."""
+        self.events = generate_events_triple_barrier(
+            self.bar_data, self.strategy, **self.label_config
+        )
+        self.completed_steps["label_generation"] = True
+
+    def compute_sample_weights(self):
+        """Step 4: Compute optimal sample weights."""
+        self.sample_weight, self.best_weighting_scheme = get_best_sample_weight(
+            self.bar_data.index, self.events, self.features, self.cv_splits_weights
+        )
+        self.completed_steps["weight_computation"] = True
+
+    def add_meta_features(self):
+        """Step 5: Add rolling performance metrics as features."""
+        self.meta_features = calculate_rolling_metrics(self.events, self.sample_weight)
+        self.completed_steps["meta_features"] = True
+
+    def preprocess_features(self):
+        """Step 5b: Preprocess features (drop constant/duplicate)."""
+        # Join meta-features
+        enhanced_features = self.features.join(self.meta_features, how="inner").dropna()
+
+        # Apply preprocessing
+        preprocessor = Pipeline(
+            [
+                ("dcf", DropConstantFeatures()),
+                ("ddf", DropDuplicateFeatures()),
+            ]
+        )
+        self.preprocessed_features = preprocessor.fit_transform(enhanced_features)
+
+        # Align events with preprocessed features
+        self.events = self.events.reindex(self.preprocessed_features.index)
+
+    def train_model(self):
+        """Step 6: Train model with cross-validation."""
+        # Configure pipeline
+        pipe = self.model_params["pipe_clf"]
+
+        if is_tree(pipe):
+            av_uniqueness = self.events["tW"].mean().round(4)
+            pipe.set_params(max_samples=av_uniqueness)
+
+        if isinstance(pipe, SequentiallyBootstrappedBaggingClassifier):
+            pipe.set_params(
+                samples_info_sets=self.events["t1"], price_bars_index=self.bar_data.index
+            )
+
+        # Set max_samples distribution in param_grid from average uniqueness to 1
+        elif isinstance(pipe, Pipeline) and isinstance(
+            pipe.steps[-1][1], SequentiallyBootstrappedBaggingClassifier
+        ):
+            name = pipe.steps[-1][0]
+            pipe.set_params(
+                **{
+                    f"{name}__samples_info_sets": self.events["t1"],
+                    f"{name}__price_bars_index": self.bar_data.index,
+                }
+            )
+
+            # if self.model_params["rnd_search_iter"] > 0:
+            #     self.model_params["param_grid"][f"{name}__max_samples"] = uniform(loc=av_uniqueness, scale=1 - av_uniqueness)
+            # else:
+            #     self.model_params["param_grid"][f"{name}__max_samples"] = np.linspace(av_uniqueness, 1, 3).tolist()
+
+        self.model_params["pipe_clf"] = make_custom_pipeline(pipe)
+
+        # Train model
+        self.best_model, self.cv_results = train_model_with_cv(
+            self.preprocessed_features, self.events, self.sample_weight, **self.model_params
+        )
+
+        # Set n_jobs for production use
+        self.best_model.steps[-1][1].set_params(n_jobs=-1)
+        self.completed_steps["model_training"] = True
+
+    def analyze_features(self):
+        """Step 7: Analyze feature importance."""
+        features_columns = (
+            self.best_model[:-1].get_feature_names_out()
+            if len(self.best_model) > 1
+            else self.preprocessed_features.columns.to_list()
+        )
+
+        self.feature_importance = pd.DataFrame(
+            {
+                "feature": features_columns,
+                "importance": self.best_model.steps[-1][1].feature_importances_,
+            }
+        ).sort_values("importance", ascending=False)
+
+        self.completed_steps["analysis"] = True
+
+    def _compile_metrics(self):
+        """Compile all metrics into a single dictionary."""
+        self.metrics = {
+            "cv_results": self.cv_results,
+            "feature_importance": self.feature_importance,
+            "training_samples": len(self.bar_data),
+            "feature_count": len(self._get_feature_names()),
+            "best_weighting_scheme": self.best_weighting_scheme,
+            "label_distribution": value_counts_data(self.events["bin"]),
+            "average_uniqueness": self.events["tW"].mean(),
+            "sample_weight_stats": (
+                self.sample_weight.describe().to_dict() if self.sample_weight is not None else None
+            ),
+            "events_count": len(self.events),
+            "features_shape": self.preprocessed_features.shape,
+            "completed_steps": self.completed_steps,
+        }
+
+    def _get_feature_names(self):
+        """Get feature names from the trained model."""
+        if self.best_model is None:
+            return []
+
+        if len(self.best_model) > 1:
+            return self.best_model[:-1].get_feature_names_out().tolist()
+        else:
+            return self.preprocessed_features.columns.tolist()
+
+    def _display_cache_reports(self):
+        """Display cache performance and contamination reports."""
+        print("\n" + "=" * 70)
+        print("CACHE PERFORMANCE REPORT")
+        print("=" * 70)
+        monitor = get_cache_monitor()
+        monitor.print_health_report()
+
+        print("\n" + "=" * 70)
+        print("DATA CONTAMINATION CHECK")
+        print("=" * 70)
+        print_contamination_report()
+
+    def _save_model(self):
+        """Save the trained model and metadata."""
+        if self.best_model is None:
+            logger.warning("No model to save. Run the pipeline first.")
+            return
+
+        # Create metadata
+        metadata = generate_metadata(self.config_summary, self.metrics, self._get_feature_names())
+
+        # Determine save path
+        root = Path.home()
+        save_path = (
+            root
+            / "Models"
+            / self.config_summary["strategy"]
+            / self.symbol
+            / self.config_summary["bar_type"]
+            / self.config_summary["bar_size"]
+        )
+
+        # Save model
+        save_model(self.best_model, metadata, save_path)
+
+    def get_data_summary(self) -> pd.DataFrame:
+        """
+        Get a summary of all stored data.
+
+        Returns
+        -------
+        pd.DataFrame
+            Summary of data dimensions and types.
+        """
+        summary_data = []
+
+        # Add each data component
+        components = [
+            ("tick_data", self.tick_data),
+            ("bar_data", self.bar_data),
+            ("features", self.features),
+            ("preprocessed_features", self.preprocessed_features),
+            ("events", self.events),
+            ("meta_features", self.meta_features),
+            ("sample_weight", self.sample_weight),
+        ]
+
+        for name, data in components:
+            if data is not None:
+                if isinstance(data, pd.DataFrame):
+                    shape = data.shape
+                    dtype = "DataFrame"
+                    columns = f"{len(data.columns)} cols"
+                elif isinstance(data, pd.Series):
+                    shape = (len(data),)
+                    dtype = "Series"
+                    columns = "N/A"
+                else:
+                    shape = "N/A"
+                    dtype = type(data).__name__
+                    columns = "N/A"
+
+                summary_data.append(
+                    {
+                        "Component": name,
+                        "Type": dtype,
+                        "Rows": shape[0] if isinstance(shape, tuple) else shape,
+                        "Columns": (
+                            shape[1] if isinstance(shape, tuple) and len(shape) > 1 else columns
+                        ),
+                        "Memory (MB)": (
+                            data.memory_usage(deep=True).sum() / (1024**2)
+                            if hasattr(data, "memory_usage")
+                            else "N/A"
+                        ),
+                    }
+                )
+
+        return pd.DataFrame(summary_data)
+
+    def get_performance_metrics(self) -> Dict:
+        """
+        Get comprehensive performance metrics.
+
+        Returns
+        -------
+        dict
+            Dictionary containing all performance metrics.
+        """
+        return {
+            "model_performance": self.cv_results,
+            "feature_analysis": self.feature_importance.to_dict(orient="records"),
+            "data_statistics": {
+                "training_samples": len(self.bar_data),
+                "feature_count": len(self._get_feature_names()),
+                "event_distribution": dict(value_counts_data(self.events["bin"])),
+                "average_uniqueness": float(self.events["tW"].mean()),
+            },
+            "weighting_scheme": self.best_weighting_scheme,
+        }
+
+    def plot_feature_importance(self, top_n: int = 20):
+        """
+        Plot feature importance.
+
+        Parameters
+        ----------
+        top_n : int, optional
+            Number of top features to plot (default: 20).
+        """
+        if self.feature_importance is None:
+            raise ValueError("Feature importance not computed. Run the pipeline first.")
+
+        import matplotlib.pyplot as plt
+
+        top_features = self.feature_importance.head(top_n)
+
+        plt.figure(figsize=(12, 8))
+        plt.barh(range(len(top_features)), top_features["importance"][::-1])
+        plt.yticks(range(len(top_features)), top_features["feature"][::-1])
+        plt.xlabel("Importance")
+        plt.title(f"Top {top_n} Feature Importance - {self.symbol}")
+        plt.tight_layout()
+        plt.show()
+
+    def export_results(self, export_dir: Union[str, Path]):
+        """
+        Export all pipeline results to files.
+
+        Parameters
+        ----------
+        export_dir : str or Path
+            Directory to export results to.
+        """
+        export_dir = Path(export_dir)
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Export data
+        if self.bar_data is not None:
+            self.bar_data.to_parquet(export_dir / "bar_data.parquet")
+
+        if self.features is not None:
+            self.features.to_parquet(export_dir / "features.parquet")
+
+        if self.preprocessed_features is not None:
+            self.preprocessed_features.to_parquet(export_dir / "preprocessed_features.parquet")
+
+        if self.events is not None:
+            self.events.to_parquet(export_dir / "events.parquet")
+
+        # Export metadata
+        import json
+
+        with open(export_dir / "config.json", "w") as f:
+            json.dump(self.config_summary, f, indent=2, default=str)
+
+        with open(export_dir / "metrics.json", "w") as f:
+            # Convert non-serializable objects
+            metrics_serializable = {}
+            for key, value in self.metrics.items():
+                if isinstance(value, pd.DataFrame):
+                    metrics_serializable[key] = value.to_dict(orient="records")
+                elif hasattr(value, "__dict__"):
+                    metrics_serializable[key] = str(value)
+                else:
+                    metrics_serializable[key] = value
+            json.dump(metrics_serializable, f, indent=2, default=str)
+
+        # Export feature importance
+        if self.feature_importance is not None:
+            self.feature_importance.to_csv(export_dir / "feature_importance.csv", index=False)
+
+        logger.success(f"Exported all results to {export_dir}")
+
+
+# Example usage:
+def develop_production_model_with_class(
+    symbol: str,
+    train_start: str,
+    train_end: str,
+    strategy: BaseStrategy,
+    data_config: Dict,
+    feature_config: Dict,
+    label_config: Dict,
+    model_params: Dict,
+    cache_reports: bool = False,
+    save: bool = True,
+    account_name: str = "default",
+) -> Tuple[RandomForestClassifier, List[str], Dict]:
+    """
+    Wrapper function for backward compatibility.
+
+    Uses the ModelDevelopmentPipeline class internally.
+    """
+    pipeline = ModelDevelopmentPipeline(
+        symbol=symbol,
+        train_start=train_start,
+        train_end=train_end,
+        strategy=strategy,
+        data_config=data_config,
+        feature_config=feature_config,
+        label_config=label_config,
+        model_params=model_params,
+        account_name=account_name,
+    )
+
+    return pipeline.run_full_pipeline(cache_reports=cache_reports, save_model=save, verbose=True)
+
+
+class ModelDevelopmentCache:
+    """
+    Cache for model development pipeline with dictionary-based keys.
+    """
+
+    def __init__(self):
+        self._pipelines = {}  # config key -> ModelDevelopmentPipeline
+        self._results = {}  # config key -> results
+
+    @staticmethod
+    def create_config_key(base_config, param_grid):
+        """
+        Create a hashable key from configuration.
+
+        Parameters
+        ----------
+        base_config : dict
+            Base configuration dictionary
+        param_grid : dict
+            Parameter grid with lists of values
+
+        Returns
+        -------
+        tuple
+            Hashable key
+        """
+        import json
+
+        def normalize_value(v):
+            """Normalize values for hashing."""
+            if isinstance(v, (list, tuple)):
+                return tuple(normalize_value(x) for x in v)
+            elif isinstance(v, dict):
+                return tuple(sorted((k, normalize_value(v2)) for k, v2 in v.items()))
+            elif hasattr(v, "__dict__"):
+                # For objects, use class name and string representation
+                return (type(v).__name__, str(v))
+            else:
+                return v
+
+        # Normalize both dictionaries
+        normalized_base = normalize_value(base_config)
+        normalized_grid = normalize_value(param_grid)
+
+        # Create tuple key
+        return (normalized_base, normalized_grid)
+
+    def store_pipeline(self, base_config, param_grid, pipeline):
+        """Store a pipeline in cache."""
+        key = self.create_config_key(base_config, param_grid)
+        self._pipelines[key] = pipeline
+
+    def get_pipeline(self, base_config, param_grid):
+        """Retrieve pipeline from cache."""
+        key = self.create_config_key(base_config, param_grid)
+        return self._pipelines.get(key)
+
+    def store_results(self, base_config, param_grid, results):
+        """Store results in cache."""
+        key = self.create_config_key(base_config, param_grid)
+        self._results[key] = results
+
+    def get_results(self, base_config, param_grid):
+        """Retrieve results from cache."""
+        key = self.create_config_key(base_config, param_grid)
+        return self._results.get(key)
+
+    def find_similar_configs(self, base_config, param_grid, threshold=0.8):
+        """
+        Find configurations similar to the given one.
+        Useful for parameter analysis.
+        """
+        from difflib import SequenceMatcher
+
+        current_key_str = str(self.create_config_key(base_config, param_grid))
+        similar = []
+
+        for key in self._pipelines.keys():
+            key_str = str(key)
+            similarity = SequenceMatcher(None, current_key_str, key_str).ratio()
+            if similarity >= threshold:
+                similar.append((key, similarity, self._pipelines[key]))
+
+        return sorted(similar, key=lambda x: x[1], reverse=True)

@@ -925,6 +925,7 @@ def generate_complete_hyperparameter_report(
     """
 
     # Create output directory
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Define report path
