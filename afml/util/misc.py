@@ -654,6 +654,9 @@ def get_folder_size(path: str) -> float:
     return total_size / (1024**2)  # MB
 
 
+# --- Dictionary helpers ---
+
+
 def expand_params(params: dict) -> list[dict]:
     """
     Expands a dictionary of parameters with list values into a list of all combinations.
@@ -664,3 +667,60 @@ def expand_params(params: dict) -> list[dict]:
     values = [params[k] for k in keys]
     combos = product(*values)
     return [dict(zip(keys, combo)) for combo in combos]
+
+
+def dict_to_key(strategy="json"):
+    """
+    Returns a closure that converts dicts into hashable keys.
+
+    Parameters
+    ----------
+    strategy : str
+        "frozenset" -> unordered, hashable
+        "tuple"     -> ordered, deterministic
+        "json"      -> string serialization
+
+    Returns
+    -------
+    converter : function
+        A function that takes a dict and returns a hashable key.
+
+    Usage
+    -----
+    # Create a converter using the recommended 'tuple' strategy
+    keyify = dict_to_key("tuple")
+
+    # Example dictionary
+    inner = {"a": 1, "b": 2}
+
+    # Use the converted dict as a key in another dictionary
+    outer = {keyify(inner): "stored value"}
+
+    # Equivalent dicts (different insertion order) resolve to the same key
+    print(outer[keyify({"b": 2, "a": 1})])  # "stored value"
+
+    # Switching strategies:
+    # frozenset ignores order entirely
+    keyify_fs = dict_to_key("frozenset")
+    print(keyify_fs({"x": 1, "y": 2}))  # frozenset({('x', 1), ('y', 2)})
+
+    # json produces a human-readable string key
+    keyify_json = dict_to_key("json")
+    print(keyify_json({"x": 1, "y": 2}))  # '{"x": 1, "y": 2}'
+    """
+    import json
+
+    def converter(d):
+        if not isinstance(d, dict):
+            raise TypeError("Expected dict, got {}".format(type(d)))
+
+        if strategy == "frozenset":
+            return frozenset(d.items())
+        elif strategy == "tuple":
+            return tuple(sorted(d.items()))
+        elif strategy == "json":
+            return json.dumps(d, sort_keys=True)
+        else:
+            raise ValueError("Unknown strategy: {}".format(strategy))
+
+    return converter
