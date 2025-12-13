@@ -148,11 +148,11 @@ def clf_hyper_fit(
     # Handle bagging if requested
     if bagging_n_estimators > 0:
         # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
-        base_estimator = clone(best_estimator)
+        base_estimator = clone(best_estimator).set_params(njobs=1)
 
         # Create and fit bagging classifier
         bag = BaggingClassifier(
-            estimator=base_estimator,
+            estimator=MyPipeline(base_estimator.steps),
             n_estimators=int(bagging_n_estimators),
             max_samples=bagging_max_samples,
             max_features=bagging_max_features,
@@ -166,6 +166,7 @@ def clf_hyper_fit(
         else:
             bag.fit(features, labels)
 
+        bag = Pipeline([("bag", bag)])
         return bag, cv_results
     else:
         return best_estimator, cv_results
@@ -346,5 +347,4 @@ def param_grid_size(param_grid: dict):
     from functools import reduce
     from operator import mul
 
-    return reduce(mul, [len(v) for v in param_grid.values()])
     return reduce(mul, [len(v) for v in param_grid.values()])
