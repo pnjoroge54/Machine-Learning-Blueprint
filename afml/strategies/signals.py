@@ -28,7 +28,7 @@ class BollingerStrategy(BaseStrategy):
     BollingerStrategy implements a mean reversion trading strategy using Bollinger Bands.
     Attributes:
         window (int): The lookback period for calculating Bollinger Bands.
-        num_std (float): The number of standard deviations for the bands.
+        std (float): The number of standard deviations for the bands.
         objective (str): The strategy objective, default is "mean_reversion".
     Methods:
         generate_signals(data: pd.DataFrame) -> pd.Series:
@@ -41,9 +41,9 @@ class BollingerStrategy(BaseStrategy):
             Returns the objective of the strategy.
     """
 
-    def __init__(self, window: int = 20, num_std: float = 2.0, objective: str = "mean_reversion"):
+    def __init__(self, window: int = 20, std: float = 2.0, objective: str = "mean_reversion"):
         self.window = window
-        self.num_std = num_std
+        self.std = std
         self.objective = objective
 
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
@@ -52,17 +52,17 @@ class BollingerStrategy(BaseStrategy):
 
         # Calculate Bollinger Bands
         upper_band, _, lower_band = talib.BBANDS(
-            close, timeperiod=self.window, nbdevup=self.num_std, nbdevdn=self.num_std
+            close, timeperiod=self.window, nbdevup=self.std, nbdevdn=self.std
         )
 
         # Generate signals
-        signals = pd.Series(0, index=data.index, dtype="int8", name="side")
+        signals = pd.Series(0, index=data.index, dtype="int8", name="signal")
         signals[(close >= upper_band)] = -1  # Sell signal (mean reversion)
         signals[(close <= lower_band)] = 1  # Buy signal (mean reversion)
         return signals
 
     def get_strategy_name(self) -> str:
-        return f"Bollinger_w{self.window}_std{self.num_std}"
+        return f"Bollinger_w{self.window}_std{self.std}"
 
     def get_objective(self) -> str:
         return self.objective
@@ -101,7 +101,7 @@ class MACrossoverStrategy(BaseStrategy):
         slow_ma = talib.MA(close, self.slow_window)
 
         # Generate signals
-        signals = pd.Series(0, index=data.index, dtype="int8", name="side")
+        signals = pd.Series(0, index=data.index, dtype="int8", name="signal")
         signals[(fast_ma > slow_ma)] = 1  # Long signal when fast MA crosses above slow MA
         signals[(fast_ma < slow_ma)] = -1  # Short signal when fast MA crosses below slow MA
         return signals

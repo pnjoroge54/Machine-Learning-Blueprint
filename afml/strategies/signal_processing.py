@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import Union
 
 import pandas as pd
 from loguru import logger
@@ -12,7 +12,7 @@ def get_entries(
     data: pd.DataFrame,
     filter_threshold: Union[float, pd.Series] = None,
     on_crossover: bool = True,
-) -> Tuple[pd.Series, pd.DatetimeIndex]:
+) -> tuple[pd.Series, pd.DatetimeIndex]:
     """
     Converts raw strategy signals into continuous trading positions and entry timestamps.
 

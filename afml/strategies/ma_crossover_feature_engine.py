@@ -11,7 +11,7 @@ from ..features.fractals import (
     calculate_enhanced_fractals,
     calculate_fractal_trend_features,
 )
-from ..features.time import get_time_features
+from ..features.trading_session import get_time_features
 from ..labeling.trend_scanning import trend_scanning_labels
 from ..util.misc import optimize_dtypes, set_resampling_freq
 

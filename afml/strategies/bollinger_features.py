@@ -14,7 +14,7 @@ from .signal_processing import get_entries
 from .signals import BollingerStrategy
 
 
-def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: float = 2):
+def create_bollinger_features(df: pd.DataFrame, window: int = 20, std: float = 2):
     """
     Create features for meta-labeling model
     """
@@ -23,37 +23,37 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 1. Returns Features ---
     # Garman Volatility
-    features[f"parkinson_vol_{bb_period}"] = get_parkinson_vol(
-        df["high"], df["low"], window=bb_period
+    features[f"parkinson_vol_{window}"] = get_parkinson_vol(
+        df["high"], df["low"], window=window
     )
 
     # Hourly EWM(num_hours) Volatility
     for num_hours in (1, 4, 24):
         features[f"H{num_hours}_vol"] = get_period_vol(
-            df["close"], lookback=bb_period, hours=num_hours
+            df["close"], lookback=window, hours=num_hours
         )
     features.columns = features.columns.str.replace("H24", "D1")
 
     # Lagged returns normalized by volatility
     lagged_ret = get_lagged_returns(df["close"], lags=[1, 5, 10], nperiods=3)
     features = features.join(
-        lagged_ret.div(features[f"parkinson_vol_{bb_period}"], axis=0)
+        lagged_ret.div(features[f"parkinson_vol_{window}"], axis=0)
     )  # Normalize returns
 
     # Distribution
-    features["returns_skew"] = features["returns"].rolling(bb_period).skew()
-    features["returns_kurt"] = features["returns"].rolling(bb_period).kurt()
+    features["returns_skew"] = features["returns"].rolling(window).skew()
+    features["returns_kurt"] = features["returns"].rolling(window).kurt()
 
     # Autocorrelations of normalized returns
     features["autocorr"] = rolling_autocorr_numba(
-        features["returns"].to_numpy(), lookback=bb_period
+        features["returns"].to_numpy(), lookback=window
     )
     for t in range(1, 6):
         features[f"autocorr_{t}"] = features["autocorr"].shift(t)
 
     # --- 2. Technical Analysis Features ---
     # Bollinger Bands
-    bbands = df.ta.bbands(bb_period, bb_std).iloc[:, -2:]  # Use BBP and BBB only
+    bbands = df.ta.bbands(window, std).iloc[:, -2:]  # Use BBP and BBB only
 
     # Volatility
     tr = df.ta.true_range()
@@ -88,7 +88,7 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 4. Add side prediction ---
     # Previous because we shift after
-    features["prev_signal"] = BollingerStrategy(bb_period, bb_std).generate_signals(df)
+    features["prev_signal"] = BollingerStrategy(window, std).generate_signals(df)
 
     # --- 5. Lag features ---
     features = features.shift().dropna()
@@ -375,7 +375,7 @@ def plot_bbands_dual_bbp_bw(
     axes[0].legend(handles, labels, loc="best")
 
 
-# def generate_bollinger_mean_reverting_features(df, bb_period=20, bb_dev=2, rsi_period=14):
+# def generate_bollinger_mean_reverting_features(df, window=20, bb_dev=2, rsi_period=14):
 #     """
 #     Generate mean-reversion features using TA-Lib
 #     Requires: 'open', 'high', 'low', 'close' columns
@@ -385,7 +385,7 @@ def plot_bbands_dual_bbp_bw(
 
 #     # Calculate Bollinger Bands
 #     if not {"bb_upper", "bb_mid", "bb_lower"}.issubset(df.columns):
-#         df = bollinger_mean_reverting_entries(df.copy(), window=bb_period, std=bb_dev)
+#         df = bollinger_mean_reverting_entries(df.copy(), window=window, std=bb_dev)
 
 #     # Normalize Bollinger Bands
 #     df["bb_upper_dev"] = (df["bb_upper"] / df["close"] - 1) * 100
@@ -448,9 +448,9 @@ def plot_bbands_dual_bbp_bw(
 #         df["high"], df["low"], df["close"], timeperiod=rsi_period
 #     )  # ATR for volatility
 
-#     # bb_half_life = int(bb_period / 2)
+#     # bb_half_life = int(window / 2)
 #     df["yz_vol"] = get_yang_zhang_vol(
-#         df["open"], df["high"], df["low"], df["close"], window=bb_period
+#         df["open"], df["high"], df["low"], df["close"], window=window
 #     )  # Yang-Zhang volatility
 #     df["macd"], df["macdsignal"], df["macdhist"] = talib.MACD(
 #         df["close"], fastperiod=12, slowperiod=26, signalperiod=9
