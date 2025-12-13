@@ -541,7 +541,7 @@ class UnifiedCacheMonitor:
                 log_msg += f" ({computation_time:.2f}s)"
             else:
                 td = pd.Timedelta(seconds=computation_time).round("1s")
-                log_msg += f" ({td})".replace("0 days 00:", "").replace("0 days ", "")
+                log_msg += f" ({td})".replace("0 days ", "")
         logger.debug(log_msg)
 
 
