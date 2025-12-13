@@ -26,7 +26,6 @@ lower_is_better = [
     "avg_drawdown",
     "volatility",
     "downside_volatility",
-    "avg_loss",
     "worst_trade",
     "consecutive_losses",
     "var_95",
@@ -152,7 +151,7 @@ def _calculate_trade_stats(
     # Calculate basic win/loss metrics.
     win_rate = len(winning_trades) / num_trades if num_trades > 0 else 0
     avg_win = winning_trades.mean() if len(winning_trades) > 0 else 0
-    avg_loss = losing_trades.mean() if len(losing_trades) > 0 else 0
+    avg_loss = abs(losing_trades.mean()) if len(losing_trades) > 0 else 0
 
     # The profit factor is the gross profit divided by the gross loss.
     gross_profit = winning_trades.sum()
@@ -160,7 +159,7 @@ def _calculate_trade_stats(
     profit_factor = gross_profit / gross_loss if gross_loss != 0 else float("inf")
 
     # Expectancy is the average amount you expect to win or lose per trade.
-    expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
+    expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
 
     # The Kelly Criterion helps determine the optimal fraction of capital to allocate.
     if avg_loss != 0:
@@ -625,8 +624,12 @@ def evaluate_meta_labeling_performance(
     primary_durations = (events["t1"] - events.index).dt.total_seconds() / 86400  # days
     meta_durations = (meta_events["t1"] - meta_events.index).dt.total_seconds() / 86400
 
-    primary_metrics["avg_trade_duration"] = pd.Timedelta(days=primary_durations.mean()).round("1s")
-    meta_metrics["avg_trade_duration"] = pd.Timedelta(days=meta_durations.mean()).round("1s")
+    primary_metrics["avg_trade_duration"] = str(
+        pd.Timedelta(days=primary_durations.mean()).round("1s")
+    ).replace("0 days ", "")
+    meta_metrics["avg_trade_duration"] = str(
+        pd.Timedelta(days=meta_durations.mean()).round("1s")
+    ).replace("0 days ", "")
 
     # Calculate bet frequency
     primary_metrics["bet_frequency"] = len(events)
