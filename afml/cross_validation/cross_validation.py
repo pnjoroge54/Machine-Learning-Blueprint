@@ -82,7 +82,8 @@ class PurgedKFold(_BaseKFold):
 
         super().__init__(n_splits, shuffle=False, random_state=None)
 
-        self.t1 = t1
+        self.t1 = t1.array
+        self.t1_index = t1.index.array
         self.pct_embargo = pct_embargo
 
     def split(self, X, y=None, groups=None):
@@ -97,7 +98,7 @@ class PurgedKFold(_BaseKFold):
         :return: (tuple) [train list of sample indices, and test list of sample indices]
         """
 
-        if (X.index == self.t1.index).sum() != len(self.t1):
+        if (X.index == self.t1_index).sum() != len(self.t1):
             raise ValueError("X and ThruDateValues must have the same index")
 
         indices = np.arange(X.shape[0])
@@ -105,10 +106,10 @@ class PurgedKFold(_BaseKFold):
         test_starts = [(i[0], i[-1] + 1) for i in np.array_split(np.arange(len(X)), self.n_splits)]
 
         for i, j in test_starts:
-            t0 = self.t1.index[i]  # start of test set
+            t0 = self.t1_index[i]  # start of test set
             test_indices = indices[i:j]
-            max_t1_idx = self.t1.index.searchsorted(self.t1[test_indices].max())
-            train_indices = self.t1.index.searchsorted(self.t1[self.t1 <= t0].index)
+            max_t1_idx = np.searchsorted(self.t1_index, self.t1[test_indices].max())
+            train_indices = np.searchsorted(self.t1_index, self.t1_index[self.t1 <= t0])
             if max_t1_idx < X.shape[0]:  # right train (with embargo)
                 train_indices = np.concatenate((train_indices, indices[max_t1_idx + mbrg :]))
             yield train_indices, test_indices
