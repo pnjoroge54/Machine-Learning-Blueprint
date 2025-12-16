@@ -218,7 +218,9 @@ class BacktestCache:
         logger.debug(f"Cached WF split: {split_key}")
         return split_key
 
-    def get_walk_forward_split(self, split_id: str, fold_number: int) -> Optional[Dict[str, Any]]:
+    def get_walk_forward_split(
+        self, split_id: str, fold_number: int
+    ) -> Optional[Dict[str, Any]]:
         """Get cached walk-forward split metadata."""
         split_key = f"{split_id}_fold_{fold_number}"
         split_path = self.splits_dir / f"{split_key}.pkl"
@@ -277,7 +279,9 @@ class BacktestCache:
 
         return None
 
-    def compare_runs(self, run_ids: List[str], metrics: Optional[List[str]] = None) -> pd.DataFrame:
+    def compare_runs(
+        self, run_ids: List[str], metrics: Optional[List[str]] = None
+    ) -> pd.DataFrame:
         """
         Compare metrics across multiple backtest runs.
 
@@ -344,7 +348,9 @@ class BacktestCache:
             DataFrame of top parameter combinations
         """
         matching_runs = [
-            run_id for run_id, info in self.index.items() if info["strategy"] == strategy_name
+            run_id
+            for run_id, info in self.index.items()
+            if info["strategy"] == strategy_name
         ]
 
         if not matching_runs:

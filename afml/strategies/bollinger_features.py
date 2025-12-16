@@ -82,7 +82,9 @@ def create_bollinger_features(df: pd.DataFrame, window: int = 20, std: float = 2
     features["bb_bw_regime"] = (bb_bandwidth > bb_bandwidth.quantile(0.75)).astype(int)
 
     # Calculate oscillators and volatility measures
-    bb_bandwidth_diff = features["bb_bandwidth_diff"].apply(np.sign).fillna(0)  # Bandwidth change
+    bb_bandwidth_diff = (
+        features["bb_bandwidth_diff"].apply(np.sign).fillna(0)
+    )  # Bandwidth change
     features["is_widening_bb"] = bb_bandwidth_diff.replace({-1: 0}).astype("int8")
     features["is_shrinking_bb"] = bb_bandwidth_diff.replace({1: 0}).astype("int8")
 
@@ -95,7 +97,9 @@ def create_bollinger_features(df: pd.DataFrame, window: int = 20, std: float = 2
 
     # --- 6. Formatting ---
     # Abbreviate "returns" to "ret" in columns
-    features.columns = features.columns.str.lower().str.replace("returns", "ret", regex=True)
+    features.columns = features.columns.str.lower().str.replace(
+        "returns", "ret", regex=True
+    )
 
     # --- 7. Conserve memory ---
     features = optimize_dtypes(features, verbose=False)
@@ -221,20 +225,46 @@ def plot_bbands(
 
     # Create dummy line handles for the scatter markers to ensure correct order
     long_entry_handle = mlines.Line2D(
-        [], [], color="lime", marker="^", linestyle="None", markersize=10, label="Long Entry"
+        [],
+        [],
+        color="lime",
+        marker="^",
+        linestyle="None",
+        markersize=10,
+        label="Long Entry",
     )
     long_exit_handle = mlines.Line2D(
-        [], [], color="red", marker="v", linestyle="None", markersize=10, label="Long Exit"
+        [],
+        [],
+        color="red",
+        marker="v",
+        linestyle="None",
+        markersize=10,
+        label="Long Exit",
     )
     short_entry_handle = mlines.Line2D(
-        [], [], color="orange", marker="v", linestyle="None", markersize=10, label="Short Entry"
+        [],
+        [],
+        color="orange",
+        marker="v",
+        linestyle="None",
+        markersize=10,
+        label="Short Entry",
     )
     short_exit_handle = mlines.Line2D(
-        [], [], color="cyan", marker="^", linestyle="None", markersize=10, label="Short Exit"
+        [],
+        [],
+        color="cyan",
+        marker="^",
+        linestyle="None",
+        markersize=10,
+        label="Short Exit",
     )
 
     # Add the dummy handles to the lists
-    handles.extend([long_entry_handle, long_exit_handle, short_entry_handle, short_exit_handle])
+    handles.extend(
+        [long_entry_handle, long_exit_handle, short_entry_handle, short_exit_handle]
+    )
     labels.extend(["Long Entry", "Long Exit", "Short Entry", "Short Exit"])
 
     # Create the legend with the custom handles and labels
@@ -330,7 +360,12 @@ def plot_bbands_dual_bbp_bw(
     indicator_plots = [
         mpf.make_addplot(df[bbp_col], color="yellow", width=1.2, panel=1, ylabel="%B"),
         mpf.make_addplot(
-            df[bbb_col], color="magenta", width=1.2, panel=1, secondary_y=True, ylabel="Bandwidth"
+            df[bbb_col],
+            color="magenta",
+            width=1.2,
+            panel=1,
+            secondary_y=True,
+            ylabel="Bandwidth",
         ),
     ]
 

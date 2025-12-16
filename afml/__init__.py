@@ -152,7 +152,9 @@ def __getattr__(name: str) -> ModuleType:
             logger.debug("Lazy loading heavy module: {}", name)
             module = importlib.import_module(import_path)
             _module_cache[name] = module
-            logger.info("Loaded heavy module: {} ({} MB)", name, _get_module_size(module))
+            logger.info(
+                "Loaded heavy module: {} ({} MB)", name, _get_module_size(module)
+            )
             return module
         except ImportError as e:
             logger.error("Failed to import heavy module {}: {}", name, e)
@@ -188,7 +190,7 @@ def _get_module_size(module) -> str:
                 if not callable(obj) or hasattr(obj, "__module__")
             ]
         )
-        return f"~{obj_count//10}0"  # Very rough estimate
+        return f"~{obj_count // 10}0"  # Very rough estimate
     except Exception:
         return "unknown"
 
@@ -217,7 +219,9 @@ def preload_heavy_modules(*module_names: str) -> Dict[str, ModuleType]:
             except Exception as e:
                 logger.warning("Failed to preload {}: {}", name, e)
         else:
-            logger.warning("'{}' is not a heavy module (already imported or doesn't exist)", name)
+            logger.warning(
+                "'{}' is not a heavy module (already imported or doesn't exist)", name
+            )
 
     return loaded
 
@@ -261,7 +265,9 @@ def cache_status() -> str:
     return " | ".join(status_parts)
 
 
-def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days: int = 30):
+def maintain_cache(
+    auto_clear: bool = True, max_size_mb: int = 500, max_age_days: int = 30
+):
     """
     Perform intelligent cache maintenance.
 
@@ -272,7 +278,9 @@ def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days
     """
     logger.info("Running cache maintenance...")
     report = cache_maintenance(
-        auto_clear_changed=auto_clear, max_cache_size_mb=max_size_mb, max_age_days=max_age_days
+        auto_clear_changed=auto_clear,
+        max_cache_size_mb=max_size_mb,
+        max_age_days=max_age_days,
     )
     return report
 
@@ -360,7 +368,9 @@ __all__ = [
 # =============================================================================
 
 logger.info(
-    "AFML v{} ready - {} heavy modules available for lazy loading", __version__, len(HEAVY_MODULES)
+    "AFML v{} ready - {} heavy modules available for lazy loading",
+    __version__,
+    len(HEAVY_MODULES),
 )
 logger.debug("Cache status: {}", cache_status())
 

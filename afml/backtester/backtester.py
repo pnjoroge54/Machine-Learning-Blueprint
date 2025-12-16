@@ -70,7 +70,9 @@ def backtest_model(
             # Predictions are probabilities
             signals = np.where(predictions > 0.5, 1, -1)
             # Use confidence as position size
-            positions = pd.Series(signals, index=X_test.index) * confidence * max_position
+            positions = (
+                pd.Series(signals, index=X_test.index) * confidence * max_position
+            )
         else:
             # Predictions are signals, use as-is
             positions = predictions * confidence * max_position
@@ -157,7 +159,11 @@ def backtest_with_labeling(
             trade_idx = trade_entries.get_loc(timestamp)
             exit_time = trade_exits.iloc[trade_idx]
             trade_ret = trade_returns.iloc[trade_idx]
-            direction = trade_directions.iloc[trade_idx] if hasattr(trade_directions, "iloc") else 1
+            direction = (
+                trade_directions.iloc[trade_idx]
+                if hasattr(trade_directions, "iloc")
+                else 1
+            )
 
             # Record this trade
             active_trades[timestamp] = {
@@ -176,12 +182,14 @@ def backtest_with_labeling(
             if timestamp >= trade_info["exit_time"]:
                 # Calculate actual return (might differ from expected due to execution)
                 exit_price = close_prices.loc[trade_info["exit_time"]]
-                actual_return = (exit_price / trade_info["entry_price"] - 1) * trade_info[
-                    "direction"
-                ]
+                actual_return = (
+                    exit_price / trade_info["entry_price"] - 1
+                ) * trade_info["direction"]
 
                 # Apply transaction costs
-                actual_return_net = actual_return - transaction_cost * 2  # Entry and exit
+                actual_return_net = (
+                    actual_return - transaction_cost * 2
+                )  # Entry and exit
 
                 # Update capital
                 current_capital *= 1 + actual_return_net

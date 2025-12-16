@@ -70,7 +70,9 @@ class ForexFeatureEngine:
 
         # Currency Strength Features
         if additional_pairs:
-            strength_features = self._calculate_currency_strength_features(close, additional_pairs)
+            strength_features = self._calculate_currency_strength_features(
+                close, additional_pairs
+            )
             all_features += [strength_features]
 
         # Risk Environment Features
@@ -266,11 +268,15 @@ class ForexFeatureEngine:
         if "EURUSD" in additional_pairs and self.pair_name != "EURUSD":
             eurusd_returns = additional_pairs["EURUSD"]["close"].pct_change()
             pair_returns = self.returns
-            features["correlation_eurusd"] = pair_returns.rolling(50).corr(eurusd_returns)
+            features["correlation_eurusd"] = pair_returns.rolling(50).corr(
+                eurusd_returns
+            )
 
         return features
 
-    def _calculate_risk_environment_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_risk_environment_features(
+        self, price_data: pd.DataFrame
+    ) -> pd.DataFrame:
         """Risk environment and market stress indicators"""
         features = pd.DataFrame(index=price_data.index)
         returns = self.returns
@@ -286,7 +292,9 @@ class ForexFeatureEngine:
         # Market stress proxy (high volatility + negative skew)
         vol_20 = returns.rolling(20).std()
         skew_20 = returns.rolling(20).skew()
-        features["market_stress"] = (vol_20 > vol_20.rolling(100).quantile(0.8)) & (skew_20 < -0.5)
+        features["market_stress"] = (vol_20 > vol_20.rolling(100).quantile(0.8)) & (
+            skew_20 < -0.5
+        )
         features["market_stress"] = features["market_stress"].astype(int)
 
         # Drawdown features
@@ -302,7 +310,9 @@ class ForexFeatureEngine:
 
         return features
 
-    def _calculate_market_structure_features(self, price_data: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_market_structure_features(
+        self, price_data: pd.DataFrame
+    ) -> pd.DataFrame:
         """Market microstructure and pattern features"""
         features = pd.DataFrame(index=price_data.index)
 
@@ -320,12 +330,20 @@ class ForexFeatureEngine:
         ).astype(int)
 
         # Price action features
-        features["inside_bar"] = ((high < high.shift(1)) & (low > low.shift(1))).astype(int)
-        features["outside_bar"] = ((high > high.shift(1)) & (low < low.shift(1))).astype(int)
+        features["inside_bar"] = ((high < high.shift(1)) & (low > low.shift(1))).astype(
+            int
+        )
+        features["outside_bar"] = (
+            (high > high.shift(1)) & (low < low.shift(1))
+        ).astype(int)
 
         # Support/Resistance levels (simplified)
-        features["near_recent_high"] = (close >= high.rolling(20).max() * 0.999).astype(int)
-        features["near_recent_low"] = (close <= low.rolling(20).min() * 1.001).astype(int)
+        features["near_recent_high"] = (close >= high.rolling(20).max() * 0.999).astype(
+            int
+        )
+        features["near_recent_low"] = (close <= low.rolling(20).min() * 1.001).astype(
+            int
+        )
 
         # Fractal patterns
         fractal_features = self._calculate_enhanced_fractal_features(price_data)
@@ -349,7 +367,9 @@ class ForexFeatureEngine:
         lr_results.columns = [f"trend_{col}" for col in lr_results.columns]
         return lr_results
 
-    def _calculate_hh_ll_count(self, high: pd.Series, low: pd.Series, period: int) -> pd.Series:
+    def _calculate_hh_ll_count(
+        self, high: pd.Series, low: pd.Series, period: int
+    ) -> pd.Series:
         """Count of higher highs and lower lows"""
         hh = (high > high.shift(1)).rolling(period).sum()
         ll = (low < low.shift(1)).rolling(period).sum()
@@ -381,12 +401,16 @@ class ForexFeatureEngine:
         )
 
         # Distance to nearest fractal level (for risk management)
-        recent_high_fractal = high[fractal_features["valid_fractal_high"] == 1].rolling(10).max()
-        recent_low_fractal = low[fractal_features["valid_fractal_low"] == 1].rolling(10).min()
-
-        features["distance_to_fractal_resistance"] = (recent_high_fractal - close).reindex(
-            price_data.index, method="ffill"
+        recent_high_fractal = (
+            high[fractal_features["valid_fractal_high"] == 1].rolling(10).max()
         )
+        recent_low_fractal = (
+            low[fractal_features["valid_fractal_low"] == 1].rolling(10).min()
+        )
+
+        features["distance_to_fractal_resistance"] = (
+            recent_high_fractal - close
+        ).reindex(price_data.index, method="ffill")
 
         features["distance_to_fractal_support"] = (close - recent_low_fractal).reindex(
             price_data.index, method="ffill"
@@ -419,25 +443,34 @@ class ForexFeatureEngine:
         # Only add HTF features where multiplier makes sense (>= 2)
         for htf_name, multiplier in htf_multipliers.items():
             if multiplier >= 2:  # Must be at least 2x the base timeframe
-
                 # Simulate HTF moving averages
                 features[f"htf_{htf_name}_ma_20"] = price_data.ta.sma(20 * multiplier)
                 features[f"htf_{htf_name}_ma_50"] = price_data.ta.sma(50 * multiplier)
 
                 # HTF trend direction
                 features[f"htf_{htf_name}_trend"] = np.where(
-                    features[f"htf_{htf_name}_ma_20"] > features[f"htf_{htf_name}_ma_50"], 1, -1
+                    features[f"htf_{htf_name}_ma_20"]
+                    > features[f"htf_{htf_name}_ma_50"],
+                    1,
+                    -1,
                 )
 
                 # HTF trend strength (ribbon alignment)
                 htf_ma_10 = price_data.ta.sma(10 * multiplier)
                 htf_ma_100 = price_data.ta.sma(100 * multiplier)
 
-                htf_alignment = np.where(htf_ma_10 > features[f"htf_{htf_name}_ma_20"], 1, -1)
-                htf_alignment *= np.where(
-                    features[f"htf_{htf_name}_ma_20"] > features[f"htf_{htf_name}_ma_50"], 1, -1
+                htf_alignment = np.where(
+                    htf_ma_10 > features[f"htf_{htf_name}_ma_20"], 1, -1
                 )
-                htf_alignment *= np.where(features[f"htf_{htf_name}_ma_50"] > htf_ma_100, 1, -1)
+                htf_alignment *= np.where(
+                    features[f"htf_{htf_name}_ma_20"]
+                    > features[f"htf_{htf_name}_ma_50"],
+                    1,
+                    -1,
+                )
+                htf_alignment *= np.where(
+                    features[f"htf_{htf_name}_ma_50"] > htf_ma_100, 1, -1
+                )
 
                 features[f"htf_{htf_name}_ribbon_aligned"] = htf_alignment
 

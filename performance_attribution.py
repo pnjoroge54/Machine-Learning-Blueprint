@@ -83,7 +83,9 @@ def performance_attribution_analysis(
     trades_df = df[df["prediction"] != 0].copy()
 
     if len(trades_df) < min_observations:
-        warnings.warn(f"Insufficient trades ({len(trades_df)}) for meaningful attribution")
+        warnings.warn(
+            f"Insufficient trades ({len(trades_df)}) for meaningful attribution"
+        )
 
     # 1. Signal Strength Analysis
     signal_analysis = _analyze_by_signal_strength(trades_df, min_observations)
@@ -112,7 +114,9 @@ def performance_attribution_analysis(
     }
 
 
-def _add_market_regimes(df: pd.DataFrame, returns: pd.Series, lookback: int) -> pd.DataFrame:
+def _add_market_regimes(
+    df: pd.DataFrame, returns: pd.Series, lookback: int
+) -> pd.DataFrame:
     """Add market regime classifications to the dataframe."""
     df = df.copy()
 
@@ -155,11 +159,13 @@ def _add_signal_strength_bins(df: pd.DataFrame, bins: Union[int, list]) -> pd.Da
         # Create quantile-based bins, handling duplicates
         try:
             # First try with duplicates='drop' to get actual bin edges
-            _, bin_edges = pd.qcut(abs_t_values, q=bins, retbins=True, duplicates="drop")
+            _, bin_edges = pd.qcut(
+                abs_t_values, q=bins, retbins=True, duplicates="drop"
+            )
             actual_bins = len(bin_edges) - 1
 
             # Create labels matching actual number of bins
-            labels = [f"Weak_{i+1}" for i in range(actual_bins)]
+            labels = [f"Weak_{i + 1}" for i in range(actual_bins)]
 
             df["signal_strength_bin"] = pd.qcut(
                 abs_t_values, q=bins, labels=labels, duplicates="drop"
@@ -172,14 +178,16 @@ def _add_signal_strength_bins(df: pd.DataFrame, bins: Union[int, list]) -> pd.Da
             bin_edges = np.unique(bin_edges)
             actual_bins = len(bin_edges) - 1
 
-            labels = [f"Weak_{i+1}" for i in range(actual_bins)]
+            labels = [f"Weak_{i + 1}" for i in range(actual_bins)]
             df["signal_strength_bin"] = pd.cut(
                 abs_t_values, bins=bin_edges, labels=labels, include_lowest=True
             )
     else:
         # Use provided bin edges
         df["signal_strength_bin"] = pd.cut(
-            abs_t_values, bins=bins, labels=[f"Bin_{i+1}" for i in range(len(bins) - 1)]
+            abs_t_values,
+            bins=bins,
+            labels=[f"Bin_{i + 1}" for i in range(len(bins) - 1)],
         )
         bin_edges = bins
 
@@ -198,7 +206,12 @@ def _analyze_by_signal_strength(df: pd.DataFrame, min_obs: int) -> pd.DataFrame:
         df.groupby("signal_strength_bin")
         .agg(
             {
-                "trading_return": ["count", "mean", "std", "sum"],  # Use directional returns
+                "trading_return": [
+                    "count",
+                    "mean",
+                    "std",
+                    "sum",
+                ],  # Use directional returns
                 "abs_return": "mean",  # Average magnitude of price moves
                 "abs_t_value": ["mean", "min", "max"],
                 "correct_direction": "mean",
@@ -234,7 +247,12 @@ def _analyze_by_market_regime(df: pd.DataFrame, min_obs: int) -> pd.DataFrame:
         df.groupby("market_regime")
         .agg(
             {
-                "trading_return": ["count", "mean", "std", "sum"],  # Use directional returns
+                "trading_return": [
+                    "count",
+                    "mean",
+                    "std",
+                    "sum",
+                ],  # Use directional returns
                 "abs_return": "mean",  # Average magnitude of price moves
                 "market_volatility": "mean",
                 "market_trend": "mean",
@@ -271,7 +289,12 @@ def _analyze_combined_attribution(df: pd.DataFrame, min_obs: int) -> pd.DataFram
         df.groupby(["signal_strength_bin", "market_regime"])
         .agg(
             {
-                "trading_return": ["count", "mean", "std", "sum"],  # Use directional returns
+                "trading_return": [
+                    "count",
+                    "mean",
+                    "std",
+                    "sum",
+                ],  # Use directional returns
                 "abs_return": "mean",  # Average magnitude of price moves
                 "correct_direction": "mean",
                 "abs_t_value": "mean",
@@ -303,7 +326,9 @@ def _calculate_summary_stats(df: pd.DataFrame) -> Dict:
         return {}
 
     trading_returns = df["trading_return"].dropna()  # Use directional returns
-    abs_returns = df["abs_return"].dropna() if "abs_return" in df else df["ret"].abs().dropna()
+    abs_returns = (
+        df["abs_return"].dropna() if "abs_return" in df else df["ret"].abs().dropna()
+    )
 
     return {
         "total_trades": len(df),
@@ -315,7 +340,9 @@ def _calculate_summary_stats(df: pd.DataFrame) -> Dict:
             if trading_returns.std() > 0
             else 0
         ),
-        "hit_rate": df["correct_direction"].mean() if "correct_direction" in df else np.nan,
+        "hit_rate": df["correct_direction"].mean()
+        if "correct_direction" in df
+        else np.nan,
         "max_drawdown": _calculate_max_drawdown(trading_returns.cumsum()),
         "skewness": stats.skew(trading_returns),
         "kurtosis": stats.kurtosis(trading_returns),
@@ -388,7 +415,9 @@ def _create_attribution_plots(
 
     # Plot 5: Trade Distribution
     ax = axes[1, 1]
-    trades_df["prediction"].value_counts().plot(kind="bar", ax=ax, color="purple", alpha=0.7)
+    trades_df["prediction"].value_counts().plot(
+        kind="bar", ax=ax, color="purple", alpha=0.7
+    )
     ax.set_title("Trade Distribution by Direction")
     ax.set_xlabel("Prediction")
     ax.set_ylabel("Number of Trades")
@@ -403,7 +432,7 @@ def _create_attribution_plots(
         x=trades_df["trading_return"].mean(),
         color="red",
         linestyle="--",
-        label=f'Mean: {trades_df["trading_return"].mean():.4f}',
+        label=f"Mean: {trades_df['trading_return'].mean():.4f}",
     )
     ax.axvline(x=0, color="black", linestyle="--", alpha=0.5)
     ax.legend()
@@ -416,7 +445,9 @@ def _create_attribution_plots(
         plt.figure(figsize=(12, 8))
 
         pivot_data = combined_analysis.pivot(
-            index="signal_strength_bin", columns="market_regime", values="trading_return_mean"
+            index="signal_strength_bin",
+            columns="market_regime",
+            values="trading_return_mean",
         )
 
         sns.heatmap(

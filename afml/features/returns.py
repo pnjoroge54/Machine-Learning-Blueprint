@@ -61,7 +61,9 @@ def rolling_autocorr_numba(data: np.ndarray, lookback: int) -> np.ndarray:
     return result
 
 
-def get_period_autocorr(close: pd.Series, lookback: int = 100, **time_delta_kwargs) -> pd.Series:
+def get_period_autocorr(
+    close: pd.Series, lookback: int = 100, **time_delta_kwargs
+) -> pd.Series:
     """
     Estimates rolling periodic autocorrelation of closing prices.
 
@@ -123,7 +125,9 @@ def get_lagged_returns(
         # winsorize extreme values by clipping.
         df[f"returns_{lag}"] = (
             prices.pct_change(lag)
-            .pipe(lambda x: x.clip(lower=x.quantile(q), upper=x.quantile(1 - q)))  # winsorize
+            .pipe(
+                lambda x: x.clip(lower=x.quantile(q), upper=x.quantile(1 - q))
+            )  # winsorize
             .add(1)
             .pow(1 / lag)
             .sub(1)

@@ -52,8 +52,12 @@ def load_my_data(
     # Must return a DataFrame and a Series of primary model signals
     print("Hook: Loading data and primary signals...")
 
-    df = make_bars(tick_df, bar_type, timeframe, price="midprice", bar_size=bar_size, verbose=False)
-    df0 = make_bars(tick_df, bar_type, timeframe, price="bid_ask", bar_size=bar_size, verbose=False)
+    df = make_bars(
+        tick_df, bar_type, timeframe, price="midprice", bar_size=bar_size, verbose=False
+    )
+    df0 = make_bars(
+        tick_df, bar_type, timeframe, price="bid_ask", bar_size=bar_size, verbose=False
+    )
     df["spread"] = df0.ask_close - df0.bid_close
     strategy_kwargs["data"] = df
     label_kwargs["data"] = df
@@ -166,7 +170,9 @@ class PredictionHook(ExperimentHook):
         y_pred_proba = model.predict_proba(X_test)[:, 1]
 
         # Store predictions in the experiment
-        experiment.artifacts["y_pred_proba"] = pd.Series(y_pred_proba, index=X_test.index)
+        experiment.artifacts["y_pred_proba"] = pd.Series(
+            y_pred_proba, index=X_test.index
+        )
         experiment.artifacts["metrics"] = {
             "accuracy": accuracy_score(y_test, y_pred, sample_weight=w_test),
             "precision": precision_score(y_test, y_pred, sample_weight=w_test),
@@ -201,7 +207,9 @@ class PerformanceLoggingHook(ExperimentHook):
             X_test=experiment.data["X_test"],
             strategy_name=experiment.strategy_name,
         )
-        log_performance_results(results=experiment.results, model=experiment.model_template)
+        log_performance_results(
+            results=experiment.results, model=experiment.model_template
+        )
 
 
 # --- Main Execution ---
@@ -234,7 +242,9 @@ class ReportingHook(ExperimentHook):
 # --- Main Execution ---
 if __name__ == "__main__":
     # 1. Define the experiment
-    my_experiment = ResearchExperiment(strategy_name="Momentum Strategy with RF Meta-Labeling v2")
+    my_experiment = ResearchExperiment(
+        strategy_name="Momentum Strategy with RF Meta-Labeling v2"
+    )
 
     # 2. Define the hooks (workflow steps)
     # The list now includes the dedicated logging and reporting hooks.
@@ -253,8 +263,16 @@ if __name__ == "__main__":
 
     # You can now access all results from the final_experiment object
     print("\nAccess final results:")
-    print(f"Sharpe (Primary): {final_experiment.results['primary_metrics']['sharpe_ratio']:.4f}")
-    print(f"Sharpe (Meta): {final_experiment.results['meta_metrics']['sharpe_ratio']:.4f}")
+    print(
+        f"Sharpe (Primary): {final_experiment.results['primary_metrics']['sharpe_ratio']:.4f}"
+    )
+    print(
+        f"Sharpe (Meta): {final_experiment.results['meta_metrics']['sharpe_ratio']:.4f}"
+    )
     print("\nAccess final results:")
-    print(f"Sharpe (Primary): {final_experiment.results['primary_metrics']['sharpe_ratio']:.4f}")
-    print(f"Sharpe (Meta): {final_experiment.results['meta_metrics']['sharpe_ratio']:.4f}")
+    print(
+        f"Sharpe (Primary): {final_experiment.results['primary_metrics']['sharpe_ratio']:.4f}"
+    )
+    print(
+        f"Sharpe (Meta): {final_experiment.results['meta_metrics']['sharpe_ratio']:.4f}"
+    )

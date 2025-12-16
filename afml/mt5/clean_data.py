@@ -76,7 +76,9 @@ def clean_tick_data(
     return df
 
 
-def save_cleaned_data_parquet(df_cleaned: pd.DataFrame, cleaned_data_path: Path, symbol: str):
+def save_cleaned_data_parquet(
+    df_cleaned: pd.DataFrame, cleaned_data_path: Path, symbol: str
+):
     """
     Save cleaned data preserving the original directory structure
 
@@ -113,7 +115,9 @@ def save_cleaned_data_parquet(df_cleaned: pd.DataFrame, cleaned_data_path: Path,
         final_df = group_df.drop(["year", "month"], axis=1)
 
         # Save with same compression settings as original data
-        final_df.to_parquet(output_file, engine="pyarrow", compression="zstd", index=True)
+        final_df.to_parquet(
+            output_file, engine="pyarrow", compression="zstd", index=True
+        )
 
         logger.debug(
             f"Saved {len(final_df):,} rows to {output_file.relative_to(cleaned_data_path)}"

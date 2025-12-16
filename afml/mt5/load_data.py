@@ -63,8 +63,12 @@ def get_credentials_from_env(account):
     server = os.environ.get(f"{prefix}_SERVER")
 
     if not all([login, password, server]):
-        logger.error(f"Missing one or more environment variables for account '{account}'.")
-        logger.error(f"Please set {prefix}_LOGIN, {prefix}_PASSWORD, and {prefix}_SERVER.")
+        logger.error(
+            f"Missing one or more environment variables for account '{account}'."
+        )
+        logger.error(
+            f"Please set {prefix}_LOGIN, {prefix}_PASSWORD, and {prefix}_SERVER."
+        )
         return None, None, None
 
     if login.isnumeric():
@@ -93,8 +97,12 @@ def login_mt5(account, timeout=60000, verbose=True):
     if not login:
         return None
 
-    if not mt5.initialize(login=login, password=password, server=server, timeout=timeout):
-        logger.error(f"MT5 initialize() failed for account {account}. Error: {mt5.last_error()}")
+    if not mt5.initialize(
+        login=login, password=password, server=server, timeout=timeout
+    ):
+        logger.error(
+            f"MT5 initialize() failed for account {account}. Error: {mt5.last_error()}"
+        )
         mt5.shutdown()
         return
 
@@ -144,7 +152,9 @@ def verify_or_create_account_info(data_path, current_account_name):
                 return False
             elif not stored_name:
                 # File exists but is malformed, so we fix it.
-                logger.warning("Account info file is malformed. Overwriting with current account.")
+                logger.warning(
+                    "Account info file is malformed. Overwriting with current account."
+                )
                 with open(account_info_file, "w") as f:
                     json.dump({"account_name": current_account_name}, f, indent=4)
 
@@ -221,7 +231,9 @@ def get_ticks(symbol, start_date, end_date, datetime_index=True, verbose=True):
         return pd.DataFrame()
 
 
-def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbose=True):
+def get_bars(
+    symbol, timeframe, start_date, end_date, datetime_index=True, verbose=True
+):
     """
     Downloads bar (OHLCV) data from the MT5 terminal for a given period.
 
@@ -260,7 +272,15 @@ def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbo
             df.set_index("time", inplace=True)
 
         # Optimize memory usage
-        for col in ["open", "high", "low", "close", "tick_volume", "spread", "real_volume"]:
+        for col in [
+            "open",
+            "high",
+            "low",
+            "close",
+            "tick_volume",
+            "spread",
+            "real_volume",
+        ]:
             if col in df.columns:
                 df[col] = df[col].astype("float32")
 
@@ -283,7 +303,9 @@ def process_symbol(symbol, start_dt, end_dt, data_path, account_name):
 
     symbol_path = data_path / symbol
     dates_from = pd.date_range(start=start_dt, end=end_dt, freq="MS", tz="UTC")
-    dates_to = pd.date_range(start=start_dt, end=end_dt, freq="ME", tz="UTC") + pd.Timedelta(days=1)
+    dates_to = pd.date_range(
+        start=start_dt, end=end_dt, freq="ME", tz="UTC"
+    ) + pd.Timedelta(days=1)
 
     missing_data = []
 
@@ -302,7 +324,9 @@ def process_symbol(symbol, start_dt, end_dt, data_path, account_name):
                     logger.info(f"{log_msg_prefix} Exists—Skipping download")
                     continue
                 else:
-                    logger.info(f"{log_msg_prefix} Exists—Appending from {start} to {end}")
+                    logger.info(
+                        f"{log_msg_prefix} Exists—Appending from {start} to {end}"
+                    )
         else:
             df0 = pd.DataFrame()
 
@@ -360,7 +384,9 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None)
             for symbol in symbols
         }
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading symbols"):
+        for future in tqdm(
+            as_completed(futures), total=len(futures), desc="Downloading symbols"
+        ):
             symbol = futures[future]
             try:
                 result = future.result()
@@ -438,7 +464,9 @@ def load_tick_data(
             )
             return pd.DataFrame()
 
-        logger.success(f"Loaded {len(df):,} rows of {symbol} tick data for account {account_name}")
+        logger.success(
+            f"Loaded {len(df):,} rows of {symbol} tick data for account {account_name}"
+        )
 
         to_drop = []
         for col in df.columns:
@@ -528,7 +556,9 @@ if __name__ == "__main__":
     logger.info("--- Starting New Data Download Session ---")
 
     # --- 3. Login to MT5 ---
-    logged_in_account = login_mt5(account=CONFIG["account_to_use"], verbose=CONFIG["verbose_login"])
+    logged_in_account = login_mt5(
+        account=CONFIG["account_to_use"], verbose=CONFIG["verbose_login"]
+    )
 
     # --- 4. Run Downloader ---
     if logged_in_account:

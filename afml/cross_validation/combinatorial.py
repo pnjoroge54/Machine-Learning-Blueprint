@@ -202,7 +202,10 @@ class CombinatorialPurgedKFold:
             # Collect all indices from the selected test splits
             for split_idx in test_split_indices:
                 # Get boundaries for this test split
-                start, end = split_boundaries[split_idx][1], split_boundaries[split_idx][2]
+                start, end = (
+                    split_boundaries[split_idx][1],
+                    split_boundaries[split_idx][2],
+                )
 
                 # Add all indices in this range to test set
                 test_indices.extend(range(start, end))
@@ -212,7 +215,9 @@ class CombinatorialPurgedKFold:
 
             # Get training indices with proper purging and embargo
             # This ensures no temporal leakage between train and test sets
-            train_indices = self._get_purged_train_indices(test_ranges, embargo_samples, n_samples)
+            train_indices = self._get_purged_train_indices(
+                test_ranges, embargo_samples, n_samples
+            )
 
             # Convert to numpy arrays for consistency with sklearn API
             train_array = np.array(train_indices)
@@ -266,7 +271,9 @@ class CombinatorialPurgedKFold:
         for start, end in test_ranges:
             # Calculate embargo range: from end of test to end + embargo_samples
             embargo_start = end
-            embargo_end = min(end + embargo_samples, n_samples)  # Don't exceed dataset bounds
+            embargo_end = min(
+                end + embargo_samples, n_samples
+            )  # Don't exceed dataset bounds
 
             # Remove embargoed samples from training candidates
             if embargo_start < embargo_end:  # Only if embargo period is valid
@@ -275,7 +282,9 @@ class CombinatorialPurgedKFold:
 
         # Step 3: Apply purging based on temporal information overlap
         # This is the most crucial step for financial data
-        final_train_indices = self._apply_temporal_purging(train_candidates, test_ranges)
+        final_train_indices = self._apply_temporal_purging(
+            train_candidates, test_ranges
+        )
 
         # Return sorted list for consistent ordering
         return sorted(final_train_indices)
@@ -330,7 +339,10 @@ class CombinatorialPurgedKFold:
                 # 2. Train ends during test period
                 condition2 = test_info_start <= train_info_end <= test_info_end
                 # 3. Train completely contains test period
-                condition3 = train_info_start <= test_info_start and test_info_end <= train_info_end
+                condition3 = (
+                    train_info_start <= test_info_start
+                    and test_info_end <= train_info_end
+                )
 
                 if condition1 or condition2 or condition3:
                     has_overlap = True
@@ -397,7 +409,9 @@ def demonstrate_combinatorial_cv():
 
     # Simulate information collection periods (typical in financial ML)
     # Each sample uses information from the past 10 days
-    samples_info_sets = pd.Series(index=dates, data=[date + timedelta(days=10) for date in dates])
+    samples_info_sets = pd.Series(
+        index=dates, data=[date + timedelta(days=10) for date in dates]
+    )
 
     # Create features and target
     X = pd.DataFrame(
@@ -451,12 +465,16 @@ def demonstrate_combinatorial_cv():
             max_test_idx = max(test_idx)
             # Look for train samples in the embargo period (next 5 samples after test)
             embargo_violations_in_split = sum(
-                1 for idx in train_idx if max_test_idx < idx <= max_test_idx + int(n_samples * 0.02)
+                1
+                for idx in train_idx
+                if max_test_idx < idx <= max_test_idx + int(n_samples * 0.02)
             )
 
             if embargo_violations_in_split > 0:
                 embargo_violations += 1
-                print(f"Combination {i}: {embargo_violations_in_split} embargo violations")
+                print(
+                    f"Combination {i}: {embargo_violations_in_split} embargo violations"
+                )
 
     print(
         f"Embargo validation: {embargo_violations} violations in {total_combinations} combinations"

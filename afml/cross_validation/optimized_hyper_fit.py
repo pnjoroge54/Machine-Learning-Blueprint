@@ -38,7 +38,9 @@ def optimize_trading_model_with_pruning(
         "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
         "max_features": trial.suggest_float("max_features", 0.1, 1.0),
         "max_samples": trial.suggest_float("max_samples", 0.1, 1.0),
-        "min_weight_fraction_leaf": trial.suggest_float("min_weight_fraction_leaf", 0.01, 0.5),
+        "min_weight_fraction_leaf": trial.suggest_float(
+            "min_weight_fraction_leaf", 0.01, 0.5
+        ),
     }
 
     # Create cross-validation splits
@@ -77,7 +79,8 @@ def optimize_trading_model_with_pruning(
             trial.set_user_attr("total_folds_attempted", len(fold_scores))
 
             raise TrialPruned(
-                f"Trial pruned at fold {fold_idx}. " f"Average score: {avg_score_so_far:.4f}"
+                f"Trial pruned at fold {fold_idx}. "
+                f"Average score: {avg_score_so_far:.4f}"
             )
 
     # If we complete all folds without pruning
@@ -129,7 +132,9 @@ class TradingModelPruner(MedianPruner):
         """Custom pruning logic for trading models."""
 
         # Get all completed trials
-        completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        completed_trials = [
+            t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+        ]
 
         # Don't prune if we don't have enough data
         if len(completed_trials) < self._n_startup_trials:
@@ -245,12 +250,21 @@ def optimize_trading_model_with_advanced_pruning(
     # Define objective function with data
     def objective(trial):
         return optimize_trading_model_with_pruning(
-            trial=trial, X=X, y=y, sample_weight=sample_weight, events=events, n_splits=n_splits
+            trial=trial,
+            X=X,
+            y=y,
+            sample_weight=sample_weight,
+            events=events,
+            n_splits=n_splits,
         )
 
     # Set up callbacks
     if callback_functions is None:
-        callback_functions = [print_best_trial, save_intermediate_results, check_for_overfitting]
+        callback_functions = [
+            print_best_trial,
+            save_intermediate_results,
+            check_for_overfitting,
+        ]
 
     # Add study-specific callbacks
     study_callbacks = []
@@ -282,8 +296,12 @@ def print_best_trial(study: optuna.Study, trial: optuna.trial.FrozenTrial):
 
         # Print pruning info if trial was pruned
         if trial.state == optuna.trial.TrialState.PRUNED:
-            print(f"   ⚠️  Trial was pruned at fold {trial.user_attrs.get('pruned_at_fold', 'N/A')}")
-            print(f"   Score when pruned: {trial.user_attrs.get('score_when_pruned', 0):.4f}")
+            print(
+                f"   ⚠️  Trial was pruned at fold {trial.user_attrs.get('pruned_at_fold', 'N/A')}"
+            )
+            print(
+                f"   Score when pruned: {trial.user_attrs.get('score_when_pruned', 0):.4f}"
+            )
 
 
 def save_intermediate_results(study: optuna.Study, trial: optuna.trial.FrozenTrial):
@@ -348,8 +366,12 @@ def check_for_overfitting(study: optuna.Study, trial: optuna.trial.FrozenTrial):
 # Analysis and visualization functions
 def analyze_pruning_effectiveness(study: optuna.Study):
     """Analyze how effective pruning was."""
-    pruned_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
-    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    pruned_trials = [
+        t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED
+    ]
+    completed_trials = [
+        t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+    ]
 
     print("\n" + "=" * 60)
     print("PRUNING EFFECTIVENESS ANALYSIS")
@@ -359,7 +381,7 @@ def analyze_pruning_effectiveness(study: optuna.Study):
     print(f"   Total trials: {len(study.trials)}")
     print(f"   Completed trials: {len(completed_trials)}")
     print(f"   Pruned trials: {len(pruned_trials)}")
-    print(f"   Pruning rate: {len(pruned_trials)/len(study.trials)*100:.1f}%")
+    print(f"   Pruning rate: {len(pruned_trials) / len(study.trials) * 100:.1f}%")
 
     if pruned_trials:
         # Calculate average time saved
@@ -371,14 +393,16 @@ def analyze_pruning_effectiveness(study: optuna.Study):
                 pruned_folds.append(pruned_at / total_folds)
 
         avg_folds_saved = 1 - np.mean(pruned_folds) if pruned_folds else 0
-        print(f"\n⏱️  Time Saved by Pruning:")
+        print("\n⏱️  Time Saved by Pruning:")
         print(
             f"   Average folds completed before pruning: {np.mean([t.user_attrs.get('pruned_at_fold', 0) for t in pruned_trials]):.1f}"
         )
-        print(f"   Estimated time saved: {avg_folds_saved*100:.1f}%")
+        print(f"   Estimated time saved: {avg_folds_saved * 100:.1f}%")
 
         # Analyze pruned trial quality
-        pruned_scores = [t.user_attrs.get("score_when_pruned", 0) for t in pruned_trials]
+        pruned_scores = [
+            t.user_attrs.get("score_when_pruned", 0) for t in pruned_trials
+        ]
         completed_scores = [t.value for t in completed_trials]
 
         print("\n📈 Score Analysis:")
@@ -465,7 +489,9 @@ def plot_pruning_analysis(study: optuna.Study, save_path: str = None):
     labels = []
     for state in ["TrialState.COMPLETE", "TrialState.PRUNED"]:
         if state in df["state"].values:
-            box_data.append(df[df["state"] == state]["duration"].values / 60)  # Convert to minutes
+            box_data.append(
+                df[df["state"] == state]["duration"].values / 60
+            )  # Convert to minutes
             labels.append(state.replace("TrialState.", ""))
 
     if box_data:
@@ -501,7 +527,12 @@ def quick_optimize_with_pruning(
 
     def objective(trial):
         return optimize_trading_model_with_pruning(
-            trial=trial, X=X, y=y, sample_weight=sample_weight, events=events, n_splits=5
+            trial=trial,
+            X=X,
+            y=y,
+            sample_weight=sample_weight,
+            events=events,
+            n_splits=5,
         )
 
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)

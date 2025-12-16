@@ -119,7 +119,9 @@ class MQL5Bridge:
             )
 
             # Start listener thread
-            listener_thread = threading.Thread(target=self._accept_connections, daemon=True)
+            listener_thread = threading.Thread(
+                target=self._accept_connections, daemon=True
+            )
             listener_thread.start()
 
         except Exception as e:
@@ -223,9 +225,13 @@ class MQL5Bridge:
 
             # Keep only last 10000 packets per symbol
             if len(self.market_data_buffer[symbol]) > 10000:
-                self.market_data_buffer[symbol] = self.market_data_buffer[symbol][-10000:]
+                self.market_data_buffer[symbol] = self.market_data_buffer[symbol][
+                    -10000:
+                ]
 
-            logger.debug(f"Received market data for {symbol}: {packet.bid}/{packet.ask}")
+            logger.debug(
+                f"Received market data for {symbol}: {packet.bid}/{packet.ask}"
+            )
 
         except Exception as e:
             logger.error(f"Error handling market data: {e}")
@@ -311,7 +317,10 @@ class MQL5Bridge:
 
     def _send_heartbeat_response(self):
         """Send heartbeat response to MQL5."""
-        message = {"type": "heartbeat_response", "timestamp": datetime.now().isoformat()}
+        message = {
+            "type": "heartbeat_response",
+            "timestamp": datetime.now().isoformat(),
+        }
         self._send_message(message)
 
     def get_market_data(
@@ -398,12 +407,16 @@ class MQL5Bridge:
             "signals_sent": self.signals_sent,
             "signals_executed": self.signals_executed,
             "execution_rate": (
-                self.signals_executed / self.signals_sent if self.signals_sent > 0 else 0
+                self.signals_executed / self.signals_sent
+                if self.signals_sent > 0
+                else 0
             ),
             "pending_signals": len(self.pending_signals),
             "connected": self.client_socket is not None,
             "uptime_seconds": (
-                time.time() - self.connection_start_time if self.connection_start_time else 0
+                time.time() - self.connection_start_time
+                if self.connection_start_time
+                else 0
             ),
             "symbols_tracked": list(self.market_data_buffer.keys()),
         }
@@ -430,7 +443,11 @@ class MQL5CachedStrategy:
     """
 
     def __init__(
-        self, strategy_func, bridge: MQL5Bridge, use_cache: bool = True, track_data: bool = True
+        self,
+        strategy_func,
+        bridge: MQL5Bridge,
+        use_cache: bool = True,
+        track_data: bool = True,
     ):
         """
         Initialize cached strategy for MQL5.
@@ -474,7 +491,9 @@ class MQL5CachedStrategy:
                     dataset_name=f"mql5_{self.bridge.mode}",
                     start_date=market_data.index[0],
                     end_date=market_data.index[-1],
-                    purpose="live_trading" if self.bridge.mode == "live" else "backtest",
+                    purpose="live_trading"
+                    if self.bridge.mode == "live"
+                    else "backtest",
                     data_shape=market_data.shape,
                 )
 

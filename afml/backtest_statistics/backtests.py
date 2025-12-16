@@ -28,7 +28,9 @@ class CampbellBacktesting:
         self.simulations = simulations
 
     @staticmethod
-    def _sample_random_multest(rho, n_trails, prob_zero_mean, lambd, n_simulations, annual_vol=0.15, n_obs=240):
+    def _sample_random_multest(
+        rho, n_trails, prob_zero_mean, lambd, n_simulations, annual_vol=0.15, n_obs=240
+    ):
         """
         Generates empirical p-value distributions.
 
@@ -71,10 +73,12 @@ class CampbellBacktesting:
 
         # Creating a sample from a multivariate normal distribution as returns simulations
         # Covariance matrix - Created from correlation matrix multiplied by monthly volatility and adjusted
-        covariance_matrix = correlation_matrix * (monthly_volatility ** 2 / n_obs)
+        covariance_matrix = correlation_matrix * (monthly_volatility**2 / n_obs)
 
         # Result - n_simulations rows with n_trails inside
-        shock_mat = np.random.multivariate_normal(mean, covariance_matrix, n_simulations)
+        shock_mat = np.random.multivariate_normal(
+            mean, covariance_matrix, n_simulations
+        )
 
         # Sample of uniform distribution with the same dimensions as shock_mat
         prob_vec = np.random.uniform(0, 1, (n_simulations, n_trails))
@@ -89,7 +93,9 @@ class CampbellBacktesting:
         mu_null = np.multiply(nonzero_mean, mean_vec)
 
         # Matrix of p-value distributions
-        tstat_matrix = abs(mu_null + shock_mat) / (monthly_volatility / n_obs ** (1 / 2))
+        tstat_matrix = abs(mu_null + shock_mat) / (
+            monthly_volatility / n_obs ** (1 / 2)
+        )
 
         return tstat_matrix
 
@@ -107,33 +113,56 @@ class CampbellBacktesting:
         """
 
         # Levels of parameters based on rho. [rho, n_simulations, prob_zero_mean, lambd]
-        parameter_levels = np.array([[0, 1295, 3.9660 * 0.1, 5.4995 * 0.001],
-                                     [0.2, 1377, 4.4589 * 0.1, 5.5508 * 0.001],
-                                     [0.4, 1476, 4.8604 * 0.1, 5.5413 * 0.001],
-                                     [0.6, 1773, 5.9902 * 0.1, 5.5512 * 0.001],
-                                     [0.8, 3109, 8.3901 * 0.1, 5.5956 * 0.001]])
+        parameter_levels = np.array(
+            [
+                [0, 1295, 3.9660 * 0.1, 5.4995 * 0.001],
+                [0.2, 1377, 4.4589 * 0.1, 5.5508 * 0.001],
+                [0.4, 1476, 4.8604 * 0.1, 5.5413 * 0.001],
+                [0.6, 1773, 5.9902 * 0.1, 5.5512 * 0.001],
+                [0.8, 3109, 8.3901 * 0.1, 5.5956 * 0.001],
+            ]
+        )
 
         # Linear interpolation for parameter estimates
-        if (rho < 0):
-            parameters = parameter_levels[1]  # Set at the preferred level if rho is misspecified
-        elif (rho < 0.2):
-            parameters = ((0.2 - rho) / 0.2) * parameter_levels[0] + ((rho - 0) / 0.2) * parameter_levels[1]
-        elif (rho < 0.4):
-            parameters = ((0.4 - rho) / 0.2) * parameter_levels[1] + ((rho - 0.2) / 0.2) * parameter_levels[2]
-        elif (rho < 0.6):
-            parameters = ((0.6 - rho) / 0.2) * parameter_levels[2] + ((rho - 0.4) / 0.2) * parameter_levels[3]
-        elif (rho < 0.8):
-            parameters = ((0.8 - rho) / 0.2) * parameter_levels[3] + ((rho - 0.6) / 0.2) * parameter_levels[4]
-        elif (rho < 1.0):  # Interpolation based on the previous level here
-            parameters = ((0.8 - rho) / 0.2) * parameter_levels[3] + ((rho - 0.6) / 0.2) * parameter_levels[4]
+        if rho < 0:
+            parameters = parameter_levels[
+                1
+            ]  # Set at the preferred level if rho is misspecified
+        elif rho < 0.2:
+            parameters = ((0.2 - rho) / 0.2) * parameter_levels[0] + (
+                (rho - 0) / 0.2
+            ) * parameter_levels[1]
+        elif rho < 0.4:
+            parameters = ((0.4 - rho) / 0.2) * parameter_levels[1] + (
+                (rho - 0.2) / 0.2
+            ) * parameter_levels[2]
+        elif rho < 0.6:
+            parameters = ((0.6 - rho) / 0.2) * parameter_levels[2] + (
+                (rho - 0.4) / 0.2
+            ) * parameter_levels[3]
+        elif rho < 0.8:
+            parameters = ((0.8 - rho) / 0.2) * parameter_levels[3] + (
+                (rho - 0.6) / 0.2
+            ) * parameter_levels[4]
+        elif rho < 1.0:  # Interpolation based on the previous level here
+            parameters = ((0.8 - rho) / 0.2) * parameter_levels[3] + (
+                (rho - 0.6) / 0.2
+            ) * parameter_levels[4]
         else:
-            parameters = parameter_levels[1]  # Set at the preferred level if rho is misspecified
+            parameters = parameter_levels[
+                1
+            ]  # Set at the preferred level if rho is misspecified
 
         return parameters
 
     @staticmethod
-    def _annualized_sharpe_ratio(sharpe_ratio, sampling_frequency='A', rho=0, annualized=False,
-                                 autocorr_adjusted=False):
+    def _annualized_sharpe_ratio(
+        sharpe_ratio,
+        sampling_frequency="A",
+        rho=0,
+        annualized=False,
+        autocorr_adjusted=False,
+    ):
         """
         Calculate the equivalent annualized Sharpe ratio after taking the autocorrelation of returns into account.
 
@@ -150,15 +179,15 @@ class CampbellBacktesting:
         """
 
         # If not annualized, calculating the appropriate multiplier for the Sharpe ratio
-        if sampling_frequency == 'D':
+        if sampling_frequency == "D":
             times_per_year = 360
-        elif sampling_frequency == 'W':
+        elif sampling_frequency == "W":
             times_per_year = 52
-        elif sampling_frequency == 'M':
+        elif sampling_frequency == "M":
             times_per_year = 12
-        elif sampling_frequency == 'Q':
+        elif sampling_frequency == "Q":
             times_per_year = 4
-        elif sampling_frequency == 'A':
+        elif sampling_frequency == "A":
             times_per_year = 1
         else:
             times_per_year = 1  # Misspecified
@@ -170,8 +199,11 @@ class CampbellBacktesting:
 
         # If not adjusted for returns autocorrelation, another multiplier
         if not autocorr_adjusted:
-            autocorr_multiplier = (1 + (2 * rho / (1 - rho)) * (1 - ((1 - rho ** (times_per_year)) /
-                                                                     (times_per_year * (1 - rho))))) ** (-0.5)
+            autocorr_multiplier = (
+                1
+                + (2 * rho / (1 - rho))
+                * (1 - ((1 - rho ** (times_per_year)) / (times_per_year * (1 - rho))))
+            ) ** (-0.5)
         else:
             autocorr_multiplier = 1
 
@@ -192,15 +224,15 @@ class CampbellBacktesting:
         """
 
         # N - Number of monthly observations
-        if sampling_frequency == 'D':
+        if sampling_frequency == "D":
             monthly_obs = np.floor(num_obs * 12 / 360)
-        elif sampling_frequency == 'W':
+        elif sampling_frequency == "W":
             monthly_obs = np.floor(num_obs * 12 / 52)
-        elif sampling_frequency == 'M':
+        elif sampling_frequency == "M":
             monthly_obs = np.floor(num_obs * 12 / 12)
-        elif sampling_frequency == 'Q':
+        elif sampling_frequency == "Q":
             monthly_obs = np.floor(num_obs * 12 / 4)
-        elif sampling_frequency == 'A':
+        elif sampling_frequency == "A":
             monthly_obs = np.floor(num_obs * 12 / 1)
         else:  # If the frequency is misspecified
             monthly_obs = np.floor(num_obs)
@@ -229,7 +261,9 @@ class CampbellBacktesting:
             # Iterating through the available subsets of Holm adjusted p-values
             for j in range(1, i + 1):
                 # Holm adjusted p-values
-                p_adjusted_holm = np.append(p_adjusted_holm, (num_mult_test + 1 - j + 1) * all_p_values[j - 1])
+                p_adjusted_holm = np.append(
+                    p_adjusted_holm, (num_mult_test + 1 - j + 1) * all_p_values[j - 1]
+                )
 
             # Calculating the final p-values of the Holm method and adding to an array
             p_holm_values = np.append(p_holm_values, min(max(p_adjusted_holm), 1))
@@ -267,7 +301,10 @@ class CampbellBacktesting:
 
             else:  # If it's the previous observations
                 # The p-value is adjusted according to the BHY method
-                p_adjusted_holm = min(((num_mult_test + 1) * c_constant / i) * all_p_values[i - 1], p_previous)
+                p_adjusted_holm = min(
+                    ((num_mult_test + 1) * c_constant / i) * all_p_values[i - 1],
+                    p_previous,
+                )
 
             # Adding the final BHY method p-values to an array
             p_bhy_values = np.append(p_adjusted_holm, p_bhy_values)
@@ -317,10 +354,12 @@ class CampbellBacktesting:
 
         # Creating adjusted levels of significance
         for trail_number in range(1, num_mult_test + 1):
-            sign_levels[trail_number - 1] = alpha_sig / (num_mult_test + 1 - trail_number)
+            sign_levels[trail_number - 1] = alpha_sig / (
+                num_mult_test + 1 - trail_number
+            )
 
         # Where the simulations have higher p-values
-        exceeding_pval = (p_values_simulation > sign_levels)
+        exceeding_pval = p_values_simulation > sign_levels
 
         # Used to find the first exceeding p-value
         exceeding_cumsum = np.cumsum(exceeding_pval)
@@ -362,11 +401,13 @@ class CampbellBacktesting:
 
             # Creating adjusted levels of significance
             for trail_number in range(1, num_mult_test + 1):
-                sign_levels[trail_number - 1] = (alpha_sig * trail_number) / (num_mult_test * c_constant)
+                sign_levels[trail_number - 1] = (alpha_sig * trail_number) / (
+                    num_mult_test * c_constant
+                )
 
             # Finding the first exceeding value
             sign_levels_desc = np.sort(sign_levels)[::-1]
-            exceeding_pval = (p_desc <= sign_levels_desc)
+            exceeding_pval = p_desc <= sign_levels_desc
 
             if sum(exceeding_pval) == 0:  # If no exceeding p-values
                 tstat_b = 1.96
@@ -385,8 +426,17 @@ class CampbellBacktesting:
 
         return tstat_b
 
-    def haircut_sharpe_ratios(self, sampling_frequency, num_obs, sharpe_ratio, annualized,
-                              autocorr_adjusted, rho_a, num_mult_test, rho):
+    def haircut_sharpe_ratios(
+        self,
+        sampling_frequency,
+        num_obs,
+        sharpe_ratio,
+        annualized,
+        autocorr_adjusted,
+        rho_a,
+        num_mult_test,
+        rho,
+    ):
         # pylint: disable=too-many-locals
         """
         Calculates the adjusted Sharpe ratio due to testing multiplicity.
@@ -412,8 +462,9 @@ class CampbellBacktesting:
         """
 
         # Calculating the annual Sharpe ratio adjusted for the autocorrelation of returns
-        sr_annual = self._annualized_sharpe_ratio(sharpe_ratio, sampling_frequency, rho_a, annualized,
-                                                  autocorr_adjusted)
+        sr_annual = self._annualized_sharpe_ratio(
+            sharpe_ratio, sampling_frequency, rho_a, annualized, autocorr_adjusted
+        )
 
         # Estimating the parameters used for distributions based on HLZ model
         # Result is [rho, n_simulations, prob_zero_mean, lambd]
@@ -423,11 +474,14 @@ class CampbellBacktesting:
         monthly_obs = self._monthly_observations(num_obs, sampling_frequency)
 
         # Needed number of trails inside a simulation with the check of (num_simulations >= num_mul_tests)
-        num_trails = int((np.floor(num_mult_test / parameters[1]) + 1) * np.floor(parameters[1] + 1))
+        num_trails = int(
+            (np.floor(num_mult_test / parameters[1]) + 1) * np.floor(parameters[1] + 1)
+        )
 
         # Generating a panel of t-ratios (of size self.simulations * num_simulations)
-        t_sample = self._sample_random_multest(parameters[0], num_trails, parameters[2], parameters[3],
-                                               self.simulations)
+        t_sample = self._sample_random_multest(
+            parameters[0], num_trails, parameters[2], parameters[3], self.simulations
+        )
 
         # Annual Sharpe ratio, adjusted to monthly
         sr_monthly = sr_annual / 12 ** (1 / 2)
@@ -444,9 +498,10 @@ class CampbellBacktesting:
 
         # Iterating through the simulations
         for simulation_number in range(1, self.simulations + 1):
-
             # Get one sample of previously generated simulation of t-values
-            t_values_simulation = t_sample[simulation_number - 1, 1:(num_mult_test + 1)]
+            t_values_simulation = t_sample[
+                simulation_number - 1, 1 : (num_mult_test + 1)
+            ]
 
             # Calculating adjusted p-values from the simulated t-ratios
             p_values_simulation = 2 * (1 - ss.norm.cdf(t_values_simulation, 0, 1))
@@ -459,30 +514,44 @@ class CampbellBacktesting:
             all_p_values = np.sort(all_p_values)
 
             # Holm method
-            p_holm[simulation_number - 1] = self._holm_method_sharpe(all_p_values, num_mult_test, p_val)
+            p_holm[simulation_number - 1] = self._holm_method_sharpe(
+                all_p_values, num_mult_test, p_val
+            )
 
             # BHY method
-            p_bhy[simulation_number - 1] = self._bhy_method_sharpe(all_p_values, num_mult_test, p_val)
+            p_bhy[simulation_number - 1] = self._bhy_method_sharpe(
+                all_p_values, num_mult_test, p_val
+            )
 
         # Calculating the resulting p-values of methods from simulations
         # Array with adjusted p-values
         # [Bonferroni, Holm, BHY, Average]
-        p_val_adj = np.array([np.minimum(num_mult_test * p_val, 1), np.median(p_holm), np.median(p_bhy)])
-        p_val_adj = np.append(p_val_adj, (p_val_adj[0] + p_val_adj[1] + p_val_adj[2]) / 3)
+        p_val_adj = np.array(
+            [np.minimum(num_mult_test * p_val, 1), np.median(p_holm), np.median(p_bhy)]
+        )
+        p_val_adj = np.append(
+            p_val_adj, (p_val_adj[0] + p_val_adj[1] + p_val_adj[2]) / 3
+        )
 
         # Arrays with adjusted Sharpe ratios and haircuts
         sr_adj = np.zeros(4)
         haircut = np.zeros(4)
 
         # Adjusted Sharpe ratios and haircut percentages
-        sr_adj[0], haircut[0] = self._sharpe_ratio_haircut(p_val_adj[0], monthly_obs, sr_annual)
-        sr_adj[1], haircut[1] = self._sharpe_ratio_haircut(p_val_adj[1], monthly_obs, sr_annual)
-        sr_adj[2], haircut[2] = self._sharpe_ratio_haircut(p_val_adj[2], monthly_obs, sr_annual)
-        sr_adj[3], haircut[3] = self._sharpe_ratio_haircut(p_val_adj[3], monthly_obs, sr_annual)
+        sr_adj[0], haircut[0] = self._sharpe_ratio_haircut(
+            p_val_adj[0], monthly_obs, sr_annual
+        )
+        sr_adj[1], haircut[1] = self._sharpe_ratio_haircut(
+            p_val_adj[1], monthly_obs, sr_annual
+        )
+        sr_adj[2], haircut[2] = self._sharpe_ratio_haircut(
+            p_val_adj[2], monthly_obs, sr_annual
+        )
+        sr_adj[3], haircut[3] = self._sharpe_ratio_haircut(
+            p_val_adj[3], monthly_obs, sr_annual
+        )
 
-        results = np.array([p_val_adj,
-                            sr_adj,
-                            haircut])
+        results = np.array([p_val_adj, sr_adj, haircut])
 
         return results
 
@@ -518,12 +587,14 @@ class CampbellBacktesting:
         parameters = self._parameter_calculation(rho)
 
         # Needed number of trails inside a simulation with the check of (num_simulations >= num_mul_tests)
-        num_trails = int((np.floor(num_mult_test / parameters[1]) + 1) * np.floor(parameters[1] + 1))
+        num_trails = int(
+            (np.floor(num_mult_test / parameters[1]) + 1) * np.floor(parameters[1] + 1)
+        )
 
         # Generating a panel of t-ratios (of size self.simulations * num_simulations)
-        t_sample = self._sample_random_multest(parameters[0], num_trails, parameters[2], parameters[3],
-                                               self.simulations)
-
+        t_sample = self._sample_random_multest(
+            parameters[0], num_trails, parameters[2], parameters[3], self.simulations
+        )
 
         # Arrays for final t-statistics for every simulation for Holm and BHY methods
         tstats_holm = np.array([])
@@ -534,14 +605,18 @@ class CampbellBacktesting:
             # Holm method
 
             # Get one sample of previously generated simulation of t-values
-            t_values_simulation = t_sample[simulation_number - 1, 1:(num_mult_test + 1)]
+            t_values_simulation = t_sample[
+                simulation_number - 1, 1 : (num_mult_test + 1)
+            ]
 
             # Calculating p-values from the simulated t-ratios
             p_values_simulation = 2 * (1 - ss.norm.cdf(t_values_simulation))
             p_values_simulation = np.sort(p_values_simulation)
 
             # Holm method itself
-            tstat_h = self._holm_method_returns(p_values_simulation, num_mult_test, alpha_sig)
+            tstat_h = self._holm_method_returns(
+                p_values_simulation, num_mult_test, alpha_sig
+            )
 
             # Adding to array of t-statistics
             tstats_holm = np.append(tstats_holm, tstat_h)
@@ -549,24 +624,40 @@ class CampbellBacktesting:
             # BHY method
 
             # Get one sample of previously generated simulation of t-values
-            t_values_simulation = t_sample[simulation_number - 1, 1:(num_mult_test + 1)]
+            t_values_simulation = t_sample[
+                simulation_number - 1, 1 : (num_mult_test + 1)
+            ]
 
             # Calculating p-values from the simulated t-ratios
             p_values_simulation = 2 * (1 - ss.norm.cdf(t_values_simulation))
 
             # BHY method itself
-            tstat_b = self._bhy_method_returns(p_values_simulation, num_mult_test, alpha_sig)
+            tstat_b = self._bhy_method_returns(
+                p_values_simulation, num_mult_test, alpha_sig
+            )
 
             # Adding to array of t-statistics
             tstats_bhy = np.append(tstats_bhy, tstat_b)
 
         # Array of t-values for every method
-        tcut_vec = np.array([tstat_independent, tstat_bonderroni, np.median(tstats_holm), np.median(tstats_bhy)])
+        tcut_vec = np.array(
+            [
+                tstat_independent,
+                tstat_bonderroni,
+                np.median(tstats_holm),
+                np.median(tstats_bhy),
+            ]
+        )
 
         # Array of minimum average monthly returns for every method
         ret_hur = ((vol_anu / 12 ** (1 / 2)) / num_obs ** (1 / 2)) * tcut_vec
 
         # Preparing array of results
-        results = np.array([ret_hur[0], ret_hur[1], ret_hur[2], ret_hur[3], np.mean(ret_hur[1:-1])]) * 100
+        results = (
+            np.array(
+                [ret_hur[0], ret_hur[1], ret_hur[2], ret_hur[3], np.mean(ret_hur[1:-1])]
+            )
+            * 100
+        )
 
         return results

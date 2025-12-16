@@ -30,7 +30,9 @@ def get_ind_matrix(samples_info_sets, price_bars_index):
 
     # precompute searchsorted positions to restrict scanning range
     starts = np.searchsorted(price_bars_index, samples_info_sets.index, side="left")
-    ends = np.searchsorted(price_bars_index, samples_info_sets.values, side="right")  # exclusive
+    ends = np.searchsorted(
+        price_bars_index, samples_info_sets.values, side="right"
+    )  # exclusive
 
     for sample_id in range(n):
         s = starts[sample_id]
@@ -63,7 +65,9 @@ def get_active_indices(samples_info_sets, price_bars_index):
 
     # precompute searchsorted positions to restrict scanning range
     starts = np.searchsorted(price_bars_index, samples_info_sets.index, side="left")
-    ends = np.searchsorted(price_bars_index, samples_info_sets.values, side="right")  # exclusive
+    ends = np.searchsorted(
+        price_bars_index, samples_info_sets.values, side="right"
+    )  # exclusive
 
     for sample_id in range(n):
         s = starts[sample_id]
@@ -325,7 +329,9 @@ def seq_bootstrap(active_indices, sample_length=None, random_seed=None):
     uniforms = rng.random_sample(sample_length).astype(np.float64)
 
     # Run njit loop (this mutates concurrency but we don't need concurrency afterwards)
-    chosen_packed = _seq_bootstrap_loop(flat_indices, offsets, lengths, concurrency, uniforms)
+    chosen_packed = _seq_bootstrap_loop(
+        flat_indices, offsets, lengths, concurrency, uniforms
+    )
 
     # Map packed indices back to original sample ids
     phi = [sample_ids[int(i)] for i in chosen_packed.tolist()]

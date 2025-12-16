@@ -16,7 +16,6 @@ from .perfomance_statistics import (
     all_bets_concentration,
     average_holding_period,
     drawdown_and_time_under_water,
-    information_ratio,
     timing_of_flattening_and_flips,
 )
 
@@ -24,6 +23,7 @@ from .perfomance_statistics import (
 lower_is_better = [
     "max_drawdown",
     "avg_drawdown",
+    "avg_loss",
     "volatility",
     "downside_volatility",
     "worst_trade",
@@ -71,7 +71,9 @@ def get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd.
             positions.values,
             trade_end_times,
         )
-        trade_durations = [returns.index[x[1]] - returns.index[x[0]] for x in trade_durations]
+        trade_durations = [
+            returns.index[x[1]] - returns.index[x[0]] for x in trade_durations
+        ]
 
         return pd.Series(trade_returns), pd.Series(trade_durations)
 
@@ -261,7 +263,9 @@ def get_annualization_factors(
 
         time_unit = "".join(filter(str.isalpha, timeframe))
         if time_unit not in periods_in_year:
-            raise ValueError(f"Invalid timeframe unit '{time_unit}'. Must be W, D, H, or M.")
+            raise ValueError(
+                f"Invalid timeframe unit '{time_unit}'. Must be W, D, H, or M."
+            )
 
         # Calculate periods per year by dividing the base by the timeframe's numeric value.
         periods_per_year = periods_in_year[time_unit] / numeric_val
@@ -381,18 +385,24 @@ def calculate_performance_metrics(
 
     # --- Overall Return & Risk ---
     total_return = (1 + returns).prod() - 1
-    years = (data_index[-1] - data_index[0]).days / 365.25 if periods_per_year > 0 else 0
+    years = (
+        (data_index[-1] - data_index[0]).days / 365.25 if periods_per_year > 0 else 0
+    )
     annualized_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
 
     volatility = returns.std()
     annualized_volatility = volatility * annualization_factor
 
     downside_returns = returns[returns < 0]
-    downside_volatility = downside_returns.std(ddof=0) if len(downside_returns) > 0 else 0
+    downside_volatility = (
+        downside_returns.std(ddof=0) if len(downside_returns) > 0 else 0
+    )
     annualized_downside_volatility = downside_volatility * annualization_factor
 
     # --- Ratios & Distribution ---
-    sharpe_ratio = (returns.mean() / volatility) * annualization_factor if volatility != 0 else 0.0
+    sharpe_ratio = (
+        (returns.mean() / volatility) * annualization_factor if volatility != 0 else 0.0
+    )
     sortino_ratio = (
         (returns.mean() / downside_volatility) * annualization_factor
         if downside_volatility != 0
@@ -400,8 +410,8 @@ def calculate_performance_metrics(
     )
     skewness = skew(returns) if len(returns) > 3 else 0
     kurtosis_ = kurtosis(returns) if len(returns) > 3 else 0
-    positive_concentration, negative_concentration, time_concentration = all_bets_concentration(
-        returns
+    positive_concentration, negative_concentration, time_concentration = (
+        all_bets_concentration(returns)
     )
 
     metrics = {
@@ -443,7 +453,9 @@ def calculate_performance_metrics(
 
     # The Calmar ratio is the annualized return over the maximum drawdown.
     metrics["calmar_ratio"] = (
-        annualized_return / metrics["max_drawdown"] if metrics["max_drawdown"] != 0 else 0.0
+        annualized_return / metrics["max_drawdown"]
+        if metrics["max_drawdown"] != 0
+        else 0.0
     )
 
     # --- Trade Stats (if positions are provided) ---
@@ -458,7 +470,9 @@ def calculate_performance_metrics(
         bet_frequency = timing_of_flattening_and_flips(positions).size
         metrics["bet_frequency"] = bet_frequency
         metrics["bets_per_year"] = int(
-            bet_frequency * (periods_per_year / total_periods) if total_periods > 0 else 0
+            bet_frequency * (periods_per_year / total_periods)
+            if total_periods > 0
+            else 0
         )
         side = positions.loc[returns.index]
         longs = (side > 0).sum()
@@ -542,134 +556,3 @@ def get_positions_from_events(
     positions.loc[end_times] = 0  # End of trade
     positions = positions.ffill().fillna(0)
     return positions
-
-
-def evaluate_meta_labeling_performance(
-    events: pd.DataFrame,
-    meta_probabilities: pd.Series,
-    close: pd.Series,
-    confidence_threshold: float = 0.5,
-    trading_days_per_year: int = 252,
-    trading_hours_per_day: int = 24,
-    strategy_name: str = "Strategy",
-    bet_sizing: str = None,
-    **kwargs,
-) -> dict:
-    # Calculate base returns (price changes without side)
-    events = events.dropna(subset=["t1"])
-    t1 = events["t1"]
-    side = events["side"]
-    all_dates = events.index.union(other=t1.array).drop_duplicates()
-    prices = close.reindex(all_dates, method="bfill")
-
-    # Base returns (price movements)
-    base_returns = prices.loc[t1.array].array / prices.loc[events.index] - 1
-
-    # Primary strategy: apply side to get directional returns
-    primary_returns = pd.Series(base_returns * side.values, index=events.index)
-    data_index = close.loc[: t1.iloc[-1]].index
-
-    # Filter trades based on confidence threshold
-    aligned_probs = meta_probabilities.reindex(events.index, fill_value=0.5)
-    confident_trades = aligned_probs > confidence_threshold
-    meta_prob = aligned_probs[confident_trades]
-    meta_events = events[confident_trades]
-    meta_side = meta_events["side"]
-    meta_t1 = meta_events["t1"]
-
-    # --- Bet Sizing Logic ---
-    if bet_sizing is None:
-        bets = meta_side.copy()
-        bet_sizing = "none"
-    elif bet_sizing == "probability":
-        bets = bet_size_probability(meta_events, meta_prob, num_classes=2, pred=meta_side, **kwargs)
-    elif bet_sizing == "budget":
-        result = bet_size_budget(meta_t1, meta_side)
-        bets = result["bet_size"]
-    elif bet_sizing == "reserve":
-        result = bet_size_reserve(meta_t1, meta_side, **kwargs)
-        bets = result["bet_size"]
-    else:
-        raise ValueError(f"Unknown bet_sizing method: {bet_sizing}")
-
-    msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
-    msg = msg + f"\n{kwargs}" if kwargs else msg
-    print(msg)
-
-    # Apply bet sizes to base returns for filtered trades
-    meta_base_returns = base_returns[confident_trades]
-
-    meta_returns = (meta_base_returns * bets).dropna()
-
-    # --- Performance Calculation ---
-    # Don't pass positions - calculate trade stats separately for events
-    primary_metrics = calculate_performance_metrics(
-        primary_returns,
-        data_index,
-        positions=None,  # Don't pass positions for event-based data
-        trading_days_per_year=trading_days_per_year,
-        trading_hours_per_day=trading_hours_per_day,
-    )
-
-    meta_metrics = calculate_performance_metrics(
-        meta_returns,
-        data_index,
-        positions=None,  # Don't pass positions for event-based data
-        trading_days_per_year=trading_days_per_year,
-        trading_hours_per_day=trading_hours_per_day,
-    )
-
-    # --- Add Event-Specific Metrics Manually ---
-    # Calculate trade duration directly from events
-    primary_durations = (events["t1"] - events.index).dt.total_seconds() / 86400  # days
-    meta_durations = (meta_events["t1"] - meta_events.index).dt.total_seconds() / 86400
-
-    primary_metrics["avg_trade_duration"] = str(
-        pd.Timedelta(days=primary_durations.mean()).round("1s")
-    ).replace("0 days ", "")
-    meta_metrics["avg_trade_duration"] = str(
-        pd.Timedelta(days=meta_durations.mean()).round("1s")
-    ).replace("0 days ", "")
-
-    # Calculate bet frequency
-    primary_metrics["bet_frequency"] = len(events)
-    meta_metrics["bet_frequency"] = len(meta_events)
-
-    total_periods = len(data_index)
-    periods_per_year = trading_days_per_year  # Simplified
-
-    primary_metrics["bets_per_year"] = int(
-        len(events) * (periods_per_year / total_periods) if total_periods > 0 else 0
-    )
-    meta_metrics["bets_per_year"] = int(
-        len(meta_events) * (periods_per_year / total_periods) if total_periods > 0 else 0
-    )
-
-    # --- Meta-Specific Metrics ---
-    total_signals = len(events)
-    filtered_signals = len(meta_events)
-
-    meta_metrics["signal_filter_rate"] = (
-        1 - (filtered_signals / total_signals) if total_signals > 0 else 0
-    )
-    meta_metrics["confidence_threshold"] = confidence_threshold
-
-    if len(meta_returns) > 1:
-        duration_days = (meta_returns.index[-1] - meta_returns.index[0]).days
-        actual_trades_per_year = (
-            len(meta_returns) * (365.25 / duration_days) if duration_days > 0 else len(meta_returns)
-        )
-    else:
-        actual_trades_per_year = 1
-
-    meta_metrics["actual_trades_per_year"] = int(actual_trades_per_year)
-
-    return {
-        "strategy_name": strategy_name,
-        "primary_metrics": primary_metrics,
-        "meta_metrics": meta_metrics,
-        "primary_returns": primary_returns,
-        "meta_returns": meta_returns,
-        "total_primary_signals": total_signals,
-        "filtered_signals": filtered_signals,
-    }

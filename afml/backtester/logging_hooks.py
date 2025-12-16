@@ -40,7 +40,9 @@ logger.add(
 # --- REFINED LOGGING FUNCTIONS ---
 
 
-def log_model_configuration(model, X_train, X_test, params=None, strategy_name="Strategy"):
+def log_model_configuration(
+    model, X_train, X_test, params=None, strategy_name="Strategy"
+):
     """Logs model configuration with dual-level output."""
     model_metadata = {
         "event": "model_configuration",
@@ -59,7 +61,9 @@ def log_model_configuration(model, X_train, X_test, params=None, strategy_name="
             "end": X_test.index.max().isoformat(),
             "samples": len(X_test),
         },
-        "hyperparameters": (params if params else getattr(model, "get_params", lambda: {})()),
+        "hyperparameters": (
+            params if params else getattr(model, "get_params", lambda: {})()
+        ),
         "environment": {"python_version": sys.version, "platform": sys.platform},
     }
     # User-friendly message for the console.
@@ -74,7 +78,9 @@ def log_performance_results(results, model=None):
         "event": "performance_results",
         "timestamp": datetime.now(timezone("UTC")).isoformat(),
         "strategy": results["strategy_name"],
-        "confidence_threshold": results["meta_metrics"].get("confidence_threshold", 0.6),
+        "confidence_threshold": results["meta_metrics"].get(
+            "confidence_threshold", 0.6
+        ),
         "primary_metrics": results["primary_metrics"],
         "meta_metrics": results["meta_metrics"],
         "signal_stats": {
@@ -91,7 +97,9 @@ def log_performance_results(results, model=None):
 
     # User-friendly message for the console.
     sharpe = performance_log["meta_metrics"].get("sharpe_ratio", 0)
-    logger.info(f"Performance logged for {results['strategy_name']}. Meta Sharpe: {sharpe:.2f}")
+    logger.info(
+        f"Performance logged for {results['strategy_name']}. Meta Sharpe: {sharpe:.2f}"
+    )
     # Detailed dictionary for the JSON log file.
     logger.debug(performance_log)
 
@@ -107,7 +115,9 @@ def log_trade_decisions(signals, meta_probabilities, returns, confidence_thresho
                 "signal": int(signal),
                 "confidence": float(meta_probabilities.get(idx, 0)),
                 "action": (
-                    "take" if meta_probabilities.get(idx, 0) > confidence_threshold else "skip"
+                    "take"
+                    if meta_probabilities.get(idx, 0) > confidence_threshold
+                    else "skip"
                 ),
                 "return": float(returns.get(idx, 0)),
             }

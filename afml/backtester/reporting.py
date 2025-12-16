@@ -106,7 +106,10 @@ def meta_labeling_reports(model_data, name="Meta-Model", plot=False):
 
 
 def compare_confusion_matrices(
-    model_data_1: ModelData, model_data_2: ModelData, normalize=None, titles: List[str] = None
+    model_data_1: ModelData,
+    model_data_2: ModelData,
+    normalize=None,
+    titles: List[str] = None,
 ):
     cm0 = confusion_matrix(
         model_data_1.y_test,
@@ -261,7 +264,12 @@ def compare_roc_pr_curves(
     nrows = int(np.ceil(n / columns))
     sharex = True if nrows <= 2 else False
     fig, ax = plt.subplots(
-        nrows, ncols=columns, sharex=sharex, sharey=False, figsize=(width, height), dpi=100
+        nrows,
+        ncols=columns,
+        sharex=sharex,
+        sharey=False,
+        figsize=(width, height),
+        dpi=100,
     )
 
     ax = np.atleast_1d(ax).flatten()
@@ -300,7 +308,12 @@ def compare_roc_pr_curves(
         if show_baseline:
             baseline = data.y_test.sum() / len(data.y_test)
             axis.hlines(
-                baseline, 0, 1, colors="gray", linestyles="-.", label=f"Baseline = {baseline:.2f}"
+                baseline,
+                0,
+                1,
+                colors="gray",
+                linestyles="-.",
+                label=f"Baseline = {baseline:.2f}",
             )
 
         axis.set_xlabel("Recall / FPR")
@@ -319,7 +332,9 @@ def compare_roc_pr_curves(
     return fig
 
 
-def plot_multi_pr_curves(y_true_dict, y_score_dict, title="Precision–Recall Comparison"):
+def plot_multi_pr_curves(
+    y_true_dict, y_score_dict, title="Precision–Recall Comparison"
+):
     """
     Plot Precision–Recall curves for multiple labeling methods on one chart.
 
@@ -477,7 +492,9 @@ def create_classification_report_image(
     # Calculate width needed for each data column
     column_widths = []
     for col_idx in range(len(header_parts)):
-        max_width = font_data.getlength(str(header_parts[col_idx]))  # Start with header width
+        max_width = font_data.getlength(
+            str(header_parts[col_idx])
+        )  # Start with header width
 
         # Check all data values in this column
         for row in data_values:
@@ -491,15 +508,16 @@ def create_classification_report_image(
     # Calculate the image height with new sections
     total_height = int(
         padding * 2
-        + (len(lines)) * (font_data.getbbox("A")[3] - font_data.getbbox("A")[1] + line_spacing)
+        + (len(lines))
+        * (font_data.getbbox("A")[3] - font_data.getbbox("A")[1] + line_spacing)
         + 20
     )
     total_height += (
         font_data.getbbox("A")[3] - font_data.getbbox("A")[1]
     ) + 2 * line_spacing  # for confusion matrix title
-    total_height += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1] + line_spacing) * len(
-        cm
-    )  # for confusion matrix data
+    total_height += (
+        font_data.getbbox("A")[3] - font_data.getbbox("A")[1] + line_spacing
+    ) * len(cm)  # for confusion matrix data
     total_height += (
         font_data.getbbox("A")[3] - font_data.getbbox("A")[1]
     ) + 2 * line_spacing  # for accuracy title
@@ -508,7 +526,9 @@ def create_classification_report_image(
     ) + line_spacing  # for accuracy value
 
     # Add extra height for the empty row before accuracy
-    total_height += (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + line_spacing
+    total_height += (
+        font_data.getbbox("A")[3] - font_data.getbbox("A")[1]
+    ) + line_spacing
 
     img_width = int(x_positions[-1] + padding)
     img_height = total_height
@@ -518,7 +538,12 @@ def create_classification_report_image(
     # Draw the report title
     title_width = font_header.getlength(title)
     y_pos = padding / 2
-    draw.text(((img_width - title_width) / 2, y_pos), title, font=font_header, fill=header_color)
+    draw.text(
+        ((img_width - title_width) / 2, y_pos),
+        title,
+        font=font_header,
+        fill=header_color,
+    )
 
     # Draw the table headers
     y_pos += (font_header.getbbox("A")[3] - font_header.getbbox("A")[1]) + 10
@@ -534,7 +559,10 @@ def create_classification_report_image(
     # Draw a horizontal line under the header
     draw.line(
         [
-            (padding, y_pos + (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + 5),
+            (
+                padding,
+                y_pos + (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + 5,
+            ),
             (
                 img_width - padding,
                 y_pos + (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + 5,
@@ -579,7 +607,9 @@ def create_classification_report_image(
             draw.text((x_pos_f1_score, y_pos), row[1], font=font_data, fill=data_color)
 
             # Draw total support in the support column (right-aligned)
-            x_pos_support = x_positions[support_col_index + 1] - font_data.getlength(row[2])
+            x_pos_support = x_positions[support_col_index + 1] - font_data.getlength(
+                row[2]
+            )
             draw.text((x_pos_support, y_pos), row[2], font=font_data, fill=data_color)
 
         else:
@@ -645,7 +675,9 @@ def create_classification_report_image(
     logger.info(f"Successfully generated and saved '{output_filename}'")
 
 
-def meta_labeling_classification_report_images(model_data, titles, output_filenames, dirpath):
+def meta_labeling_classification_report_images(
+    model_data, titles, output_filenames, dirpath
+):
     dirpath = Path(dirpath)
     dirpath.mkdir(parents=True, exist_ok=True)
 
@@ -668,7 +700,10 @@ def meta_labeling_classification_report_images(model_data, titles, output_filena
 
 
 def meta_labeling_classification_report_tables(
-    model_data: List[ModelData], methods: List[str], title: str, dirpath: str = "../reports"
+    model_data: List[ModelData],
+    methods: List[str],
+    title: str,
+    dirpath: str = "../reports",
 ):
     dirpath = Path(dirpath)
     dirpath.mkdir(parents=True, exist_ok=True)
@@ -684,7 +719,9 @@ def meta_labeling_classification_report_tables(
         df = pd.DataFrame(rpt).iloc[:4, :n_classes].T  # shape: (metrics, classes)
 
         # Add labeling method as top-level index
-        df.index = pd.MultiIndex.from_product([[method], df.index], names=["method", "class"])
+        df.index = pd.MultiIndex.from_product(
+            [[method], df.index], names=["method", "class"]
+        )
         report_frames.append(df)
         print(f"{method} accuracy: {rpt['accuracy']:.3f}")
 
@@ -713,7 +750,10 @@ def meta_labeling_classification_report_tables(
             [
                 {
                     "selector": "th",
-                    "props": [("text-align", "center"), ("background-color", "#f2f2f2")],
+                    "props": [
+                        ("text-align", "center"),
+                        ("background-color", "#f2f2f2"),
+                    ],
                 },
                 {"selector": "td", "props": [("text-align", "center")]},
             ]
@@ -747,9 +787,9 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
         primary_metrics = results["primary_metrics"]
         meta_metrics = results["meta_metrics"]
 
-        print(f"\n{'='*100}")
+        print(f"\n{'=' * 100}")
         print(f"Meta-Labeling Performance Analysis: {strategy_name}")
-        print(f"{'='*100}")
+        print(f"{'=' * 100}")
 
         # --- Signal Filtering Summary ---
         print(f"\nSignal Filtering Summary:")
@@ -776,13 +816,21 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
                 primary_val = primary_metrics.get(metric_key, 0)
                 meta_val = meta_metrics.get(metric_key, 0)
                 improvement = calculate_improvement(primary_val, meta_val, metric_key)
-                primary_str = f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
+                primary_str = (
+                    f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
+                )
                 meta_str = f"{meta_val:,.2%}" if fmt == "%" else f"{meta_val:,.4f}"
-                improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
-                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+                improvement_str = (
+                    f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
+                )
+                print(
+                    f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}"
+                )
 
         # --- Risk Metrics Table ---
-        print(f"\n{'RISK METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}")
+        print(
+            f"\n{'RISK METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}"
+        )
         print("=" * 75)
         risk_metrics = [
             ("Max Drawdown", "max_drawdown", "%"),
@@ -798,13 +846,21 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
                 primary_val = primary_metrics.get(metric_key, 0)
                 meta_val = meta_metrics.get(metric_key, 0)
                 improvement = calculate_improvement(primary_val, meta_val, metric_key)
-                primary_str = f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
+                primary_str = (
+                    f"{primary_val:,.2%}" if fmt == "%" else f"{primary_val:,.4f}"
+                )
                 meta_str = f"{meta_val:,.2%}" if fmt == "%" else f"{meta_val:,.4f}"
-                improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
-                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+                improvement_str = (
+                    f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
+                )
+                print(
+                    f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}"
+                )
 
         # --- Trading Metrics Table ---
-        print(f"\n{'TRADING METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}")
+        print(
+            f"\n{'TRADING METRICS':<30} {'Primary':<15} {'Meta-Labeled':<15} {'Improvement':<15}"
+        )
         print("=" * 75)
         trading_metrics = [
             ("Number of Bets", "bet_frequency", "0f"),
@@ -841,8 +897,12 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
                 else:
                     primary_str, meta_str = f"{primary_val:,.4f}", f"{meta_val:,.4f}"
 
-                improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
-                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+                improvement_str = (
+                    f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
+                )
+                print(
+                    f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}"
+                )
 
         # --- Distribution Metrics Table ---
         print(
@@ -857,8 +917,12 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
                 improvement = calculate_improvement(primary_val, meta_val, metric_key)
                 primary_str = f"{primary_val:,.4f}"
                 meta_str = f"{meta_val:,.4f}"
-                improvement_str = f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
-                print(f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}")
+                improvement_str = (
+                    f"{improvement:+.1f}%" if improvement != float("inf") else "N/A"
+                )
+                print(
+                    f"{display_name:<30} {primary_str:<15} {meta_str:<15} {improvement_str:<15}"
+                )
 
         # --- Summary Assessment ---
         print(f"\n{'SUMMARY ASSESSMENT'}")
@@ -886,7 +950,9 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
             )
             key_improvements.append(("Max Drawdown", dd_imp))
 
-        avg_improvement = np.mean([imp for _, imp in key_improvements if imp != float("inf")])
+        avg_improvement = np.mean(
+            [imp for _, imp in key_improvements if imp != float("inf")]
+        )
 
         if avg_improvement > 10:
             assessment = "✅ Meta-labeling shows SIGNIFICANT improvement"
@@ -902,9 +968,9 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
             if improvement != float("inf"):
                 print(f"  {metric_name} Change: {improvement:+.1f}%")
 
-        if "sharpe_ratio" in meta_metrics and meta_metrics["sharpe_ratio"] > primary_metrics.get(
-            "sharpe_ratio", 0
-        ):
+        if "sharpe_ratio" in meta_metrics and meta_metrics[
+            "sharpe_ratio"
+        ] > primary_metrics.get("sharpe_ratio", 0):
             print(f"\n✅ Meta-labeling improves risk-adjusted returns")
         if "signal_filter_rate" in meta_metrics:
             print(
@@ -927,7 +993,9 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
         print(f"\nOutput saved to: {save_path}")
 
 
-def calculate_improvement(primary_val: float, meta_val: float, metric_key: str) -> float:
+def calculate_improvement(
+    primary_val: float, meta_val: float, metric_key: str
+) -> float:
     """
     Calculates the percentage improvement of a metric from primary to meta.
 

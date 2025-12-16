@@ -32,7 +32,9 @@ def calculate_ma_differences(
     # Create differences of all unique combinations of windows
     for win in combinations(windows, 2):
         fast_window, slow_window = sorted(win)
-        df[f"sma_diff_{fast_window}_{slow_window}"] = sma[fast_window] - sma[slow_window]
+        df[f"sma_diff_{fast_window}_{slow_window}"] = (
+            sma[fast_window] - sma[slow_window]
+        )
 
     if drop:
         dcf = DropCorrelatedFeatures(threshold=threshold)

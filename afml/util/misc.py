@@ -70,7 +70,9 @@ def _count_max_decimals_numba(values: np.ndarray, max_places: int = 10) -> int:
     return max_dec
 
 
-def count_max_decimals(values: Union[pd.Series, np.ndarray], max_places: int = 10) -> int:
+def count_max_decimals(
+    values: Union[pd.Series, np.ndarray], max_places: int = 10
+) -> int:
     """
     Determine the maximum number of decimal places in a numeric array or pandas Series
     without using string-based operations.
@@ -182,9 +184,13 @@ def optimize_dtypes(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
                     and (optimized_df[col] == optimized_df[col].round()).all()
                 ):
                     optimized_df[col] = optimized_df[col].astype("int64")
-                    optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="integer")
+                    optimized_df[col] = pd.to_numeric(
+                        optimized_df[col], downcast="integer"
+                    )
                 else:
-                    optimized_df[col] = pd.to_numeric(optimized_df[col], downcast="float")
+                    optimized_df[col] = pd.to_numeric(
+                        optimized_df[col], downcast="float"
+                    )
 
         elif pd.api.types.is_object_dtype(col_dtype):
             num_unique_values = optimized_df[col].nunique()

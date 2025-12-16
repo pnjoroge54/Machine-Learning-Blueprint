@@ -155,7 +155,12 @@ class ParameterOptimizer:
 
         configs = []
         for bb_w, bb_s, vol_m, (pt, sl), depth, min_w in itertools.product(
-            bb_windows, bb_stds, vol_multipliers, barrier_ratios, model_depths, model_min_weights
+            bb_windows,
+            bb_stds,
+            vol_multipliers,
+            barrier_ratios,
+            model_depths,
+            model_min_weights,
         ):
             config = StrategyConfig(
                 bb_window=bb_w,
@@ -191,7 +196,9 @@ class ParameterOptimizer:
         # Step 1: Prepare training data (cached by BB + barrier params)
         features, events = self.prepare_training_data(
             df=self.prices_df,
-            strategy=self.strategy.__class__(window=config.bb_window, num_std=config.bb_std),
+            strategy=self.strategy.__class__(
+                window=config.bb_window, num_std=config.bb_std
+            ),
             feature_engine=self.feature_engine,
             feature_params=dict(bb_period=config.bb_window, bb_std=config.bb_std),
             vol_lookback=config.vol_lookback,
@@ -254,7 +261,9 @@ class ParameterOptimizer:
         )
 
         # Step 5: Train final model and get OOS performance
-        clf_final = self.train_rf(clf.set_params(oob_score=True), X_train, y_train, sample_weight)
+        clf_final = self.train_rf(
+            clf.set_params(oob_score=True), X_train, y_train, sample_weight
+        )
 
         # OOS predictions
         y_pred_proba = clf_final.predict_proba(X_test)[:, 1]
@@ -330,7 +339,9 @@ class ParameterOptimizer:
                     self.best_score = result["cv_f1_mean"]
                     self.best_config = config
                     print(f"\n✨ New best: {config}")
-                    print(f"   CV F1: {result['cv_f1_mean']:.4f} (±{result['cv_f1_std']:.4f})")
+                    print(
+                        f"   CV F1: {result['cv_f1_mean']:.4f} (±{result['cv_f1_std']:.4f})"
+                    )
                     print(f"   OOS F1: {result['oos_f1']:.4f}\n")
 
                 # Early stopping check
@@ -409,7 +420,9 @@ class ParameterOptimizer:
 
         # 1. Parameter sensitivities
         for param in ["bb_window", "bb_std", "vol_multiplier", "max_depth"]:
-            param_impact = results_df.groupby(param)["cv_f1_mean"].agg(["mean", "std", "count"])
+            param_impact = results_df.groupby(param)["cv_f1_mean"].agg(
+                ["mean", "std", "count"]
+            )
             insights[f"{param}_impact"] = param_impact
 
         # 2. Best ranges

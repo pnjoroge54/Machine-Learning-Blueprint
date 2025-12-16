@@ -36,7 +36,9 @@ def num_concurrent_events(close_series_index, label_endtime, molecule):
     nearest_index = close_series_index.searchsorted(
         pd.DatetimeIndex([label_endtime.index[0], label_endtime.max()])
     )
-    count = pd.Series(0, index=close_series_index[nearest_index[0] : nearest_index[1] + 1])
+    count = pd.Series(
+        0, index=close_series_index[nearest_index[0] : nearest_index[1] + 1]
+    )
     for t_in, t_out in label_endtime.items():
         count.loc[t_in:t_out] += 1
     return count.loc[molecule[0] : label_endtime[molecule].max()]
@@ -116,7 +118,7 @@ def get_av_uniqueness_from_triple_barrier(
     # Verify index compatibility
     missing_in_close = processed_ce.index.difference(close_series.index)
     assert missing_in_close.empty, (
-        f"num_conc_events contains {len(missing_in_close)} " "indices not in close_series"
+        f"num_conc_events contains {len(missing_in_close)} indices not in close_series"
     )
 
     out["tW"] = mp_pandas_obj(

@@ -17,7 +17,11 @@ def load_stock_prices() -> pd.DataFrame:
     """
 
     project_path = os.path.dirname(__file__)
-    prices_df = pd.read_csv(os.path.join(project_path, 'data/stock_prices.csv'), index_col=0, parse_dates=[0])
+    prices_df = pd.read_csv(
+        os.path.join(project_path, "data/stock_prices.csv"),
+        index_col=0,
+        parse_dates=[0],
+    )
     return prices_df
 
 
@@ -29,7 +33,9 @@ def load_tick_sample() -> pd.DataFrame:
     """
 
     project_path = os.path.dirname(__file__)
-    tick_df = pd.read_csv(os.path.join(project_path, 'data/tick_data.csv'), index_col=0, parse_dates=[0])
+    tick_df = pd.read_csv(
+        os.path.join(project_path, "data/tick_data.csv"), index_col=0, parse_dates=[0]
+    )
     return tick_df
 
 
@@ -41,5 +47,9 @@ def load_dollar_bar_sample() -> pd.DataFrame:
     """
 
     project_path = os.path.dirname(__file__)
-    bars_df = pd.read_csv(os.path.join(project_path, 'data/dollar_bar_sample.csv'), index_col=0, parse_dates=[0])
+    bars_df = pd.read_csv(
+        os.path.join(project_path, "data/dollar_bar_sample.csv"),
+        index_col=0,
+        parse_dates=[0],
+    )
     return bars_df

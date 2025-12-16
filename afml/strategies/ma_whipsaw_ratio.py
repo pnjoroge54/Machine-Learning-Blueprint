@@ -105,7 +105,9 @@ def calculate_enhanced_whipsaw_metrics(prices, short_ma, long_ma):
     whipsaw_trades = trade_details[trade_details["is_whipsaw"] == True]
 
     # Average loss from whipsaw trades
-    avg_whipsaw_loss = whipsaw_trades["return"].mean() if len(whipsaw_trades) > 0 else 0.0
+    avg_whipsaw_loss = (
+        whipsaw_trades["return"].mean() if len(whipsaw_trades) > 0 else 0.0
+    )
 
     # Count consecutive whipsaw streaks
     consecutive_whipsaws = 0
@@ -120,7 +122,9 @@ def calculate_enhanced_whipsaw_metrics(prices, short_ma, long_ma):
 
     # Economic impact: total whipsaw losses vs total trend gains
     whipsaw_losses = whipsaw_trades["return"].sum()
-    non_whipsaw_net = trade_details[trade_details["is_whipsaw"] == False]["return"].sum()
+    non_whipsaw_net = trade_details[trade_details["is_whipsaw"] == False][
+        "return"
+    ].sum()
 
     # Only positive non-whipsaw returns
     non_whipsaw_gains_positive = trade_details[
@@ -154,7 +158,9 @@ if __name__ == "__main__":
         sample_prices, short_period, long_period
     )
 
-    enhanced_metrics = calculate_enhanced_whipsaw_metrics(sample_prices, short_period, long_period)
+    enhanced_metrics = calculate_enhanced_whipsaw_metrics(
+        sample_prices, short_period, long_period
+    )
 
     print(f"Whipsaw Ratio: {whipsaw_ratio:.3f}")
     print(f"Total Trades: {len(trade_details)}")

@@ -31,8 +31,12 @@ def timing_of_flattening_and_flips(target_positions: pd.Series) -> pd.DatetimeIn
     :return: (pd.DatetimeIndex) Timestamps of trades flattening, flipping and last bet
     """
 
-    empty_positions = target_positions[(target_positions == 0)].index  # Empty positions index
-    previous_positions = target_positions.shift(1)  # Timestamps pointing at previous positions
+    empty_positions = target_positions[
+        (target_positions == 0)
+    ].index  # Empty positions index
+    previous_positions = target_positions.shift(
+        1
+    )  # Timestamps pointing at previous positions
 
     # Index of positions where previous one wasn't empty
     previous_positions = previous_positions[(previous_positions != 0)].index
@@ -46,8 +50,12 @@ def timing_of_flattening_and_flips(target_positions: pd.Series) -> pd.DatetimeIn
     # FLIPS - if current position has another direction compared to the next
     flips = multiplied_positions[(multiplied_positions < 0)].index
     flips_and_flattenings = flattening.union(flips).sort_values()
-    if target_positions.index[-1] not in flips_and_flattenings:  # Appending with last bet
-        flips_and_flattenings = flips_and_flattenings.append(target_positions.index[-1:])
+    if (
+        target_positions.index[-1] not in flips_and_flattenings
+    ):  # Appending with last bet
+        flips_and_flattenings = flips_and_flattenings.append(
+            target_positions.index[-1:]
+        )
 
     return flips_and_flattenings
 
@@ -71,14 +79,18 @@ def average_holding_period(target_positions: pd.Series) -> float:
     position_difference = target_positions.diff()
 
     # Time elapsed from the starting time for each position
-    time_difference = (target_positions.index - target_positions.index[0]) / np.timedelta64(1, "D")
+    time_difference = (
+        target_positions.index - target_positions.index[0]
+    ) / np.timedelta64(1, "D")
 
     holding_time, holding_weight = _average_holding_period_numba(
         target_positions.values, position_difference.values, time_difference.values
     )
 
     if holding_weight.sum() > 0:  # If there were closed trades at all
-        avg_holding_period = (holding_time * holding_weight).sum() / holding_weight.sum()
+        avg_holding_period = (
+            holding_time * holding_weight
+        ).sum() / holding_weight.sum()
     else:
         avg_holding_period = np.nan
 
@@ -86,7 +98,9 @@ def average_holding_period(target_positions: pd.Series) -> float:
 
 
 @njit(cache=True)
-def _average_holding_period_numba(target_positions, position_difference, time_difference):
+def _average_holding_period_numba(
+    target_positions, position_difference, time_difference
+):
     holding_time = np.empty(target_positions.size - 1, dtype=np.float64)
     holding_weight = np.empty(target_positions.size - 1, dtype=np.float64)
     entry_time = 0.0
@@ -166,7 +180,9 @@ def all_bets_concentration(returns: pd.Series, frequency: str = "M") -> tuple:
     negative_concentration = bets_concentration(returns[returns < 0])
 
     # Concentration of bets/time period (month by default)
-    time_concentration = bets_concentration(returns.groupby(pd.Grouper(freq=frequency)).count())
+    time_concentration = bets_concentration(
+        returns.groupby(pd.Grouper(freq=frequency)).count()
+    )
 
     return (positive_concentration, negative_concentration, time_concentration)
 
@@ -215,7 +231,8 @@ def drawdown_and_time_under_water(returns: pd.Series, dollars: bool = False) -> 
         drawdown = 1 - high_watermarks["min"] / high_watermarks["hwm"]
 
     time_under_water = (
-        (high_watermarks.index[1:] - high_watermarks.index[:-1]) / np.timedelta64(1, "D")
+        (high_watermarks.index[1:] - high_watermarks.index[:-1])
+        / np.timedelta64(1, "D")
     ).values
 
     # Adding also period from last High watermark to last return observed.
@@ -248,7 +265,11 @@ def sharpe_ratio(
     :return: (float) Annualized Sharpe ratio
     """
 
-    sharpe_r = (returns.mean() - risk_free_rate) / returns.std() * (entries_per_year) ** (1 / 2)
+    sharpe_r = (
+        (returns.mean() - risk_free_rate)
+        / returns.std()
+        * (entries_per_year) ** (1 / 2)
+    )
 
     return sharpe_r
 
@@ -305,7 +326,11 @@ def probabilistic_sharpe_ratio(
     """
 
     test_value = ((observed_sr - benchmark_sr) * np.sqrt(number_of_returns - 1)) / (
-        (1 - skewness_of_returns * observed_sr + (kurtosis_of_returns - 1) / 4 * observed_sr**2)
+        (
+            1
+            - skewness_of_returns * observed_sr
+            + (kurtosis_of_returns - 1) / 4 * observed_sr**2
+        )
         ** (1 / 2)
     )
 
@@ -422,7 +447,9 @@ def minimum_track_record_length(
     """
 
     track_rec_length = 1 + (
-        1 - skewness_of_returns * observed_sr + (kurtosis_of_returns - 1) / 4 * observed_sr**2
+        1
+        - skewness_of_returns * observed_sr
+        + (kurtosis_of_returns - 1) / 4 * observed_sr**2
     ) * (norm.ppf(1 - alpha) / (observed_sr - benchmark_sr)) ** (2)
 
     return track_rec_length

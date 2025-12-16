@@ -268,7 +268,9 @@ class AFMLBacktestBridge:
         df["rsi"] = ta.momentum.rsi(df["close"], window=14)
 
         # ATR (14-period) for volatility
-        df["atr"] = ta.volatility.average_true_range(df["high"], df["low"], df["close"], window=14)
+        df["atr"] = ta.volatility.average_true_range(
+            df["high"], df["low"], df["close"], window=14
+        )
 
         # EMA envelope bands
         ema_20 = df["close"].ewm(span=20).mean()
@@ -306,7 +308,15 @@ class AFMLBacktestBridge:
 
         # Get last row for prediction
         X = features[
-            ["z_spike", "macd_hist", "rsi", "atr", "ema_lower", "ema_upper", "env_position"]
+            [
+                "z_spike",
+                "macd_hist",
+                "rsi",
+                "atr",
+                "ema_lower",
+                "ema_upper",
+                "env_position",
+            ]
         ].iloc[-1:]
 
         # Predict probabilities
@@ -357,7 +367,10 @@ class AFMLBacktestBridge:
     # =========================================================================
 
     def run_backtest(
-        self, config: BacktestConfig, model_path: Optional[Path] = None, save_results: bool = True
+        self,
+        config: BacktestConfig,
+        model_path: Optional[Path] = None,
+        save_results: bool = True,
     ) -> Dict[str, Any]:
         """
         Run complete backtest with cached feature engineering.
@@ -371,7 +384,8 @@ class AFMLBacktestBridge:
             Dict with backtest metrics and trade list
         """
         logger.info(
-            f"Starting backtest: {config.symbol} " f"{config.start_date} to {config.end_date}"
+            f"Starting backtest: {config.symbol} "
+            f"{config.start_date} to {config.end_date}"
         )
 
         self.current_config = config
@@ -385,7 +399,9 @@ class AFMLBacktestBridge:
             parquet_file = self.data_dir / f"{symbol_key}_hist.parquet"
 
             if not parquet_file.exists():
-                raise FileNotFoundError(f"No historical data found. Run bootstrap first.")
+                raise FileNotFoundError(
+                    f"No historical data found. Run bootstrap first."
+                )
 
             df = pd.read_parquet(parquet_file)
             self.historical_bars[symbol_key] = df
@@ -393,7 +409,9 @@ class AFMLBacktestBridge:
             df = self.historical_bars[symbol_key]
 
         # Filter to backtest period
-        backtest_data = df[(df.index >= config.start_date) & (df.index <= config.end_date)].copy()
+        backtest_data = df[
+            (df.index >= config.start_date) & (df.index <= config.end_date)
+        ].copy()
 
         logger.info(f"Backtest data: {len(backtest_data)} bars")
 
@@ -459,15 +477,25 @@ class AFMLBacktestBridge:
                 if current_position["direction"] == "LONG":
                     if current_price <= current_position["stop_loss"]:
                         # Stop loss hit
-                        pnl = current_position["stop_loss"] - current_position["entry_price"]
+                        pnl = (
+                            current_position["stop_loss"]
+                            - current_position["entry_price"]
+                        )
                         balance += pnl * current_position["size"]
                         self._record_trade(
-                            current_position, current_time, current_position["stop_loss"], "SL", pnl
+                            current_position,
+                            current_time,
+                            current_position["stop_loss"],
+                            "SL",
+                            pnl,
                         )
                         current_position = None
                     elif current_price >= current_position["take_profit"]:
                         # Take profit hit
-                        pnl = current_position["take_profit"] - current_position["entry_price"]
+                        pnl = (
+                            current_position["take_profit"]
+                            - current_position["entry_price"]
+                        )
                         balance += pnl * current_position["size"]
                         self._record_trade(
                             current_position,
@@ -481,15 +509,25 @@ class AFMLBacktestBridge:
                 elif current_position["direction"] == "SHORT":
                     if current_price >= current_position["stop_loss"]:
                         # Stop loss hit
-                        pnl = current_position["entry_price"] - current_position["stop_loss"]
+                        pnl = (
+                            current_position["entry_price"]
+                            - current_position["stop_loss"]
+                        )
                         balance += pnl * current_position["size"]
                         self._record_trade(
-                            current_position, current_time, current_position["stop_loss"], "SL", pnl
+                            current_position,
+                            current_time,
+                            current_position["stop_loss"],
+                            "SL",
+                            pnl,
                         )
                         current_position = None
                     elif current_price <= current_position["take_profit"]:
                         # Take profit hit
-                        pnl = current_position["entry_price"] - current_position["take_profit"]
+                        pnl = (
+                            current_position["entry_price"]
+                            - current_position["take_profit"]
+                        )
                         balance += pnl * current_position["size"]
                         self._record_trade(
                             current_position,
@@ -520,7 +558,9 @@ class AFMLBacktestBridge:
                 }
 
             # Record equity
-            equity_curve.append({"time": current_time, "balance": balance, "equity": balance})
+            equity_curve.append(
+                {"time": current_time, "balance": balance, "equity": balance}
+            )
 
         # Close any remaining position at end
         if current_position:
@@ -531,7 +571,9 @@ class AFMLBacktestBridge:
                 pnl = current_position["entry_price"] - final_price
 
             balance += pnl * current_position["size"]
-            self._record_trade(current_position, features.index[-1], final_price, "EOD", pnl)
+            self._record_trade(
+                current_position, features.index[-1], final_price, "EOD", pnl
+            )
 
         return {
             "final_balance": balance,
@@ -541,7 +583,12 @@ class AFMLBacktestBridge:
         }
 
     def _record_trade(
-        self, position: Dict, exit_time: datetime, exit_price: float, exit_reason: str, pnl: float
+        self,
+        position: Dict,
+        exit_time: datetime,
+        exit_price: float,
+        exit_reason: str,
+        pnl: float,
     ):
         """Record completed trade."""
         trade = BacktestTrade(
@@ -571,8 +618,16 @@ class AFMLBacktestBridge:
 
         total_pnl = trades_df["pnl"].sum()
         win_rate = (trades_df["pnl"] > 0).sum() / len(trades_df)
-        avg_win = trades_df[trades_df["pnl"] > 0]["pnl"].mean() if any(trades_df["pnl"] > 0) else 0
-        avg_loss = trades_df[trades_df["pnl"] < 0]["pnl"].mean() if any(trades_df["pnl"] < 0) else 0
+        avg_win = (
+            trades_df[trades_df["pnl"] > 0]["pnl"].mean()
+            if any(trades_df["pnl"] > 0)
+            else 0
+        )
+        avg_loss = (
+            trades_df[trades_df["pnl"] < 0]["pnl"].mean()
+            if any(trades_df["pnl"] < 0)
+            else 0
+        )
         profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else 0
 
         # Calculate max drawdown

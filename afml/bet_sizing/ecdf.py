@@ -5,7 +5,9 @@ from scipy.interpolate import interp1d
 # --- 1. ECDF Training Function ---
 
 
-def train_ecdf_sizing(training_probabilities: pd.Series, training_outcomes: pd.Series) -> interp1d:
+def train_ecdf_sizing(
+    training_probabilities: pd.Series, training_outcomes: pd.Series
+) -> interp1d:
     """
     Trains the ECDF function required for position sizing based on
     historically profitable trade probabilities.
@@ -30,7 +32,9 @@ def train_ecdf_sizing(training_probabilities: pd.Series, training_outcomes: pd.S
     profitable_probabilities = training_probabilities[training_outcomes == 1]
 
     if profitable_probabilities.empty:
-        raise ValueError("No profitable trades found in the training data to fit the ECDF.")
+        raise ValueError(
+            "No profitable trades found in the training data to fit the ECDF."
+        )
 
     # 2. Sort the profitable probabilities
     # ECDF calculation requires the data to be sorted.
@@ -72,7 +76,9 @@ def train_ecdf_sizing(training_probabilities: pd.Series, training_outcomes: pd.S
 # --- 2. ECDF Application Function ---
 
 
-def apply_ecdf_sizing(ecdf_func: interp1d, new_probability: float, threshold: float = 0.5) -> float:
+def apply_ecdf_sizing(
+    ecdf_func: interp1d, new_probability: float, threshold: float = 0.5
+) -> float:
     """
     Applies the trained ECDF function to a new probability score (P) to determine
     the fractional position size.
@@ -108,9 +114,13 @@ if __name__ == "__main__":
     # Assume 100 trade signals
     num_samples = 100
     # M2 probabilities (raw confidence scores)
-    M2_probs_train = pd.Series(np.random.rand(num_samples) * 0.4 + 0.5)  # biased towards > 0.5
+    M2_probs_train = pd.Series(
+        np.random.rand(num_samples) * 0.4 + 0.5
+    )  # biased towards > 0.5
     # Meta-Labels (1=profitable, 0=loss/neutral)
-    M2_outcomes_train = pd.Series(np.random.choice([1, 0], size=num_samples, p=[0.4, 0.6]))
+    M2_outcomes_train = pd.Series(
+        np.random.choice([1, 0], size=num_samples, p=[0.4, 0.6])
+    )
 
     # 2. Train the ECDF Sizing Function
     try:
@@ -143,4 +153,6 @@ if __name__ == "__main__":
         print(f"Probability P={prob_A:.4f} -> Position Size: {size_A:.4f}")
         print(f"Probability P={prob_B:.4f} -> Position Size: {size_B:.4f}")
         print(f"Probability P={prob_C:.4f} -> Position Size: {size_C:.4f}")
-        print(f"Probability P={prob_D:.4f} (Below 0.5 Threshold) -> Position Size: {size_D:.4f}")
+        print(
+            f"Probability P={prob_D:.4f} (Below 0.5 Threshold) -> Position Size: {size_D:.4f}"
+        )

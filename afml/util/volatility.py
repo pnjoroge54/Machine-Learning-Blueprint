@@ -53,7 +53,9 @@ def get_daily_vol(close: pd.Series, lookback: int = 100) -> pd.Series:
     return vol
 
 
-def get_period_vol(close: pd.Series, lookback: int = 100, **time_delta_kwargs) -> pd.Series:
+def get_period_vol(
+    close: pd.Series, lookback: int = 100, **time_delta_kwargs
+) -> pd.Series:
     """
     Periodic Volatility Estimates with Custom Time Intervals
 
@@ -247,8 +249,12 @@ def get_yang_zhang_vol(
     low_open_ret = np.log(low / open)
 
     # Three volatility components
-    sigma_open_sq = 1 / (window - 1) * (open_prev_close_ret**2).rolling(window=window).sum()
-    sigma_close_sq = 1 / (window - 1) * (close_prev_open_ret**2).rolling(window=window).sum()
+    sigma_open_sq = (
+        1 / (window - 1) * (open_prev_close_ret**2).rolling(window=window).sum()
+    )
+    sigma_close_sq = (
+        1 / (window - 1) * (close_prev_open_ret**2).rolling(window=window).sum()
+    )
     sigma_rs_sq = (
         1
         / (window - 1)
@@ -261,7 +267,9 @@ def get_yang_zhang_vol(
     return np.sqrt(sigma_open_sq + k * sigma_close_sq + (1 - k) * sigma_rs_sq)
 
 
-def two_time_scale_realized_vol(tick_prices: pd.Series, slow_freq: str = "5min") -> float:
+def two_time_scale_realized_vol(
+    tick_prices: pd.Series, slow_freq: str = "5min"
+) -> float:
     """
     Two-Time-Scale Realized Volatility Estimator
 

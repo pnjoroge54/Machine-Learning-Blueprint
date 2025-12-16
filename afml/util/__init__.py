@@ -1,5 +1,5 @@
 """
-Utility functions. In particular Chapter20 code on Multiprocessing and Vectorization
+Utility functions. In particular Chapter 20 code on Multiprocessing and Vectorization
 """
 
 from .constants import (
@@ -47,6 +47,7 @@ from .multiprocess import (
     process_jobs_,
     report_progress,
 )
+from .pipelines import make_custom_pipeline, set_pipeline_params
 from .volatility import (
     get_daily_vol,
     get_garman_klass_vol,
@@ -55,3 +56,53 @@ from .volatility import (
     get_yang_zhang_vol,
     two_time_scale_realized_vol,
 )
+
+__all__ = [
+    "COMMODITIES",
+    "CRYPTO",
+    "DATA_PATH",
+    "DATE_COMPONENTS",
+    "FX_MAJORS",
+    "GREEKS",
+    "NUM_THREADS",
+    "OHLCV",
+    "PERCENTILES",
+    "UTC",
+    "DataFrameFormatter",
+    "_count_max_decimals_numba",
+    "count_max_decimals",
+    "crop_data_frame_in_batches",
+    "date_conversion",
+    "dict_to_key",
+    "expand_params",
+    "flatten_column_names",
+    "get_folder_size",
+    "indices_to_mask",
+    "is_first_weekday",
+    "is_last_weekday",
+    "is_trading_day",
+    "log_column_changes",
+    "log_df_info",
+    "log_performance",
+    "markdown_to_notebook",
+    "optimize_dtypes",
+    "set_resampling_freq",
+    "smart_subscript",
+    "to_subscript",
+    "value_counts_data",
+    "expand_call",
+    "lin_parts",
+    "mp_pandas_obj",
+    "nested_parts",
+    "process_jobs",
+    "process_jobs_",
+    "report_progress",
+    "make_custom_pipeline",
+    "set_pipeline_params",
+    "get_daily_vol",
+    "get_garman_klass_vol",
+    "get_parkinson_vol",
+    "get_period_vol",
+    "get_yang_zhang_vol",
+    "two_time_scale_realized_vol",
+]

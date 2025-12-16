@@ -50,7 +50,9 @@ class CacheKeyGenerator:
                 key_part = CacheKeyGenerator._hash_argument(value, key)
                 key_parts.append(f"{key}={key_part}")
             except Exception as e:
-                logger.warning(f"Failed to hash kwarg '{key}' of type {type(value)}: {e}")
+                logger.warning(
+                    f"Failed to hash kwarg '{key}' of type {type(value)}: {e}"
+                )
                 # Fallback
                 key_parts.append(f"{key}={str(hash(str(value)))}")
 
@@ -227,7 +229,10 @@ class TimeSeriesCacheKey(CacheKeyGenerator):
 
     @staticmethod
     def generate_key_with_time_range(
-        func, args: tuple, kwargs: dict, time_range: Tuple[pd.Timestamp, pd.Timestamp] = None
+        func,
+        args: tuple,
+        kwargs: dict,
+        time_range: Tuple[pd.Timestamp, pd.Timestamp] = None,
     ) -> str:
         """
         Generate cache key that includes time range information.
@@ -255,18 +260,25 @@ class TimeSeriesCacheKey(CacheKeyGenerator):
         return base_key
 
     @staticmethod
-    def _extract_time_range(args: tuple, kwargs: dict) -> Tuple[pd.Timestamp, pd.Timestamp] | None:
+    def _extract_time_range(
+        args: tuple, kwargs: dict
+    ) -> Tuple[pd.Timestamp, pd.Timestamp] | None:
         """
         Attempt to extract time range from function arguments.
         Looks for DataFrames with DatetimeIndex or explicit start/end parameters.
         """
         # Check kwargs for explicit time parameters
         if "start_date" in kwargs and "end_date" in kwargs:
-            return (pd.Timestamp(kwargs["start_date"]), pd.Timestamp(kwargs["end_date"]))
+            return (
+                pd.Timestamp(kwargs["start_date"]),
+                pd.Timestamp(kwargs["end_date"]),
+            )
 
         # Check for DataFrames with DatetimeIndex in args
         for arg in args:
-            if isinstance(arg, pd.DataFrame) and isinstance(arg.index, pd.DatetimeIndex):
+            if isinstance(arg, pd.DataFrame) and isinstance(
+                arg.index, pd.DatetimeIndex
+            ):
                 if len(arg.index) > 0:
                     return (arg.index[0], arg.index[-1])
 
@@ -324,7 +336,9 @@ def create_robust_cacheable(
 
             try:
                 if use_time_awareness:
-                    cache_key = TimeSeriesCacheKey.generate_key_with_time_range(func, args, kwargs)
+                    cache_key = TimeSeriesCacheKey.generate_key_with_time_range(
+                        func, args, kwargs
+                    )
                 else:
                     cache_key = CacheKeyGenerator.generate_key(func, args, kwargs)
 
@@ -355,7 +369,9 @@ def create_robust_cacheable(
                 try:
                     from .data_access_tracker import get_data_tracker
 
-                    _track_dataframe_access(get_data_tracker(), args, kwargs, dataset_name, purpose)
+                    _track_dataframe_access(
+                        get_data_tracker(), args, kwargs, dataset_name, purpose
+                    )
                 except Exception as e:
                     logger.warning(f"Data tracking failed for {func_name}: {e}")
 
@@ -370,7 +386,9 @@ def create_robust_cacheable(
                     if computation_start:
                         computation_time = time.time() - computation_start
                         monitor.track_computation_time(func_name, computation_time)
-                        logger.debug(f"Computation time for {func_name}: {computation_time:.3f}s")
+                        logger.debug(
+                            f"Computation time for {func_name}: {computation_time:.3f}s"
+                        )
 
                 return result
 
@@ -434,7 +452,9 @@ def _clear_corrupted_cache(cached_func, args, kwargs, func_name):
                     logger.debug(f"Removed corrupted file: {cache_file.name}")
 
             if removed_count > 0:
-                logger.info(f"Cleared {removed_count} corrupted cache files for {func_name}")
+                logger.info(
+                    f"Cleared {removed_count} corrupted cache files for {func_name}"
+                )
 
     except Exception as clear_exc:
         logger.warning(f"Failed to clear corrupted cache for {func_name}: {clear_exc}")
@@ -455,7 +475,9 @@ def _track_dataframe_access(tracker, args, kwargs, dataset_name, purpose):
 def _is_trackable_dataframe(obj):
     """Check if object is a DataFrame with temporal index."""
     return (
-        isinstance(obj, pd.DataFrame) and isinstance(obj.index, pd.DatetimeIndex) and len(obj) > 0
+        isinstance(obj, pd.DataFrame)
+        and isinstance(obj.index, pd.DatetimeIndex)
+        and len(obj) > 0
     )
 
 
@@ -480,11 +502,19 @@ time_aware_cacheable = create_robust_cacheable(use_time_awareness=True)
 
 # Data tracking decorators (new functionality)
 data_tracking_cacheable = lambda dataset_name, purpose: create_robust_cacheable(
-    track_data_access=True, dataset_name=dataset_name, purpose=purpose, use_time_awareness=False
+    track_data_access=True,
+    dataset_name=dataset_name,
+    purpose=purpose,
+    use_time_awareness=False,
 )
 
-time_aware_data_tracking_cacheable = lambda dataset_name, purpose: create_robust_cacheable(
-    track_data_access=True, dataset_name=dataset_name, purpose=purpose, use_time_awareness=True
+time_aware_data_tracking_cacheable = (
+    lambda dataset_name, purpose: create_robust_cacheable(
+        track_data_access=True,
+        dataset_name=dataset_name,
+        purpose=purpose,
+        use_time_awareness=True,
+    )
 )
 
 __all__ = [

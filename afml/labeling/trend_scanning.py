@@ -131,7 +131,9 @@ def trend_scanning_labels(
     3. Boundary slices ensure no forward-looking data leak into features.
     """
     # Input validation and setup
-    close = close.sort_index() if not close.index.is_monotonic_increasing else close.copy()
+    close = (
+        close.sort_index() if not close.index.is_monotonic_increasing else close.copy()
+    )
     hrzns = list(range(*span)) if isinstance(span, tuple) else span
     max_hrzn = max(hrzns)
 
@@ -141,7 +143,9 @@ def trend_scanning_labels(
         valid_indices = close.index[max_hrzn - 1 :].to_list()
 
     if not valid_indices:
-        return pd.DataFrame(columns=["t1", "window", "slope", "t_value", "rsquared", "ret", "bin"])
+        return pd.DataFrame(
+            columns=["t1", "window", "slope", "t_value", "rsquared", "ret", "bin"]
+        )
 
     # Log transformation
     if use_log:
@@ -153,7 +157,9 @@ def trend_scanning_labels(
     N = len(y)
 
     # Compute volatility threshold
-    volatility = pd.Series(y, index=close.index).rolling(max_hrzn, min_periods=1).std().ffill()
+    volatility = (
+        pd.Series(y, index=close.index).rolling(max_hrzn, min_periods=1).std().ffill()
+    )
     vol_threshold = volatility.expanding().quantile(volatility_threshold).ffill().values
 
     # Precompute all window stats
@@ -294,18 +300,28 @@ def plot_event_tvalues(df, event_start, span, symbol, timeframe):
     plt.style.use("dark_background")
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 6), dpi=100)
     y.iloc[: max(span)].plot(
-        ax=ax1, lw=1.5, legend=True, xlabel="", ylabel="Close", label=f"{symbol} {timeframe}"
+        ax=ax1,
+        lw=1.5,
+        legend=True,
+        xlabel="",
+        ylabel="Close",
+        label=f"{symbol} {timeframe}",
     )
 
     ax2.plot(hrzns, t_values, marker="o")
     ax2.axhline(0, color="white", lw=1)
     ax2.axvline(
-        best_h, color="red", linestyle="--", label=f"Best horizon = {best_h}, t={best_t:.2f}"
+        best_h,
+        color="red",
+        linestyle="--",
+        label=f"Best horizon = {best_h}, t={best_t:.2f}",
     )
     ax2.set_xlabel("Horizon (bars)")
     ax2.set_ylabel("t-value")
     ax2.legend()
 
-    fig.suptitle(f"T-values across horizons for event starting {event_start}", fontsize=14)
+    fig.suptitle(
+        f"T-values across horizons for event starting {event_start}", fontsize=14
+    )
     plt.tight_layout()
     plt.show()

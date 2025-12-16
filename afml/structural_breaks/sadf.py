@@ -66,12 +66,22 @@ def _get_y_x(
         x["const"] = 1
 
     if model == "linear":
-        x["trend"] = np.arange(x.shape[0])  # Add t to the model (0, 1, 2, 3, 4, 5, .... t)
-        beta_column = "y_lagged"  # Column which is used to estimate test beta statistics
+        x["trend"] = np.arange(
+            x.shape[0]
+        )  # Add t to the model (0, 1, 2, 3, 4, 5, .... t)
+        beta_column = (
+            "y_lagged"  # Column which is used to estimate test beta statistics
+        )
     elif model == "quadratic":
-        x["trend"] = np.arange(x.shape[0])  # Add t to the model (0, 1, 2, 3, 4, 5, .... t)
-        x["quad_trend"] = np.arange(x.shape[0]) ** 2  # Add t^2 to the model (0, 1, 4, 9, ....)
-        beta_column = "y_lagged"  # Column which is used to estimate test beta statistics
+        x["trend"] = np.arange(
+            x.shape[0]
+        )  # Add t to the model (0, 1, 2, 3, 4, 5, .... t)
+        x["quad_trend"] = (
+            np.arange(x.shape[0]) ** 2
+        )  # Add t^2 to the model (0, 1, 4, 9, ....)
+        beta_column = (
+            "y_lagged"  # Column which is used to estimate test beta statistics
+        )
     elif model == "sm_poly_1":
         y = series.loc[y.index]
         x = pd.DataFrame(index=y.index)
@@ -159,7 +169,12 @@ def get_betas(X: pd.DataFrame, y: pd.DataFrame) -> Tuple[np.array, np.array]:
 
 
 def _sadf_outer_loop(
-    X: pd.DataFrame, y: pd.DataFrame, min_length: int, model: str, phi: float, molecule: list
+    X: pd.DataFrame,
+    y: pd.DataFrame,
+    min_length: int,
+    model: str,
+    phi: float,
+    molecule: list,
 ) -> pd.Series:
     """
     This function gets SADF for t times from molecule

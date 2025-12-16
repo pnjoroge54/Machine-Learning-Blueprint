@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 import numpy as np
 import onnx
 import onnxruntime
-import pandas as pd
 import sklearn
+from loguru import logger
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 
@@ -74,8 +74,8 @@ def export_model_to_onnx(
         # Embed metadata in doc_string
         onnx_model.doc_string = json.dumps(metadata, indent=2)
 
-        print(f"✓ Conversion successful")
-        print(f"✓ ONNX opset: 12 (MQL5 compatible)")
+        print("✓ Conversion successful")
+        print("✓ ONNX opset: 12 (MQL5 compatible)")
 
     except Exception as e:
         print(f"✗ Conversion failed: {e}")
@@ -99,7 +99,7 @@ def export_model_to_onnx(
     try:
         # Check model is valid
         onnx.checker.check_model(onnx_model)
-        print(f"✓ ONNX model structure valid")
+        print("✓ ONNX model structure valid")
     except Exception as e:
         print(f"✗ Validation failed: {e}")
         return False
@@ -162,11 +162,11 @@ def validate_onnx_predictions(
     if len(onnx_outputs) > 1:
         # Second output contains probabilities
         onnx_probs = onnx_outputs[1]
-        print(f"\n✓ Using output 1 (probabilities)")
+        print("\n✓ Using output 1 (probabilities)")
     else:
         # Only one output - assume it's probabilities
         onnx_probs = onnx_outputs[0]
-        print(f"\n✓ Using output 0")
+        print("\n✓ Using output 0")
 
     # If probabilities are 2D [n_samples, n_classes], extract positive class
     if onnx_probs.ndim > 1 and onnx_probs.shape[1] == 2:
@@ -193,15 +193,19 @@ def validate_onnx_predictions(
     tolerance = 1e-5
 
     if max_diff < tolerance:
-        print(f"\n✅ VALIDATION PASSED - Predictions match within tolerance ({tolerance:.2e})")
+        print(
+            f"\n✅ VALIDATION PASSED - Predictions match within tolerance ({tolerance:.2e})"
+        )
 
         # Show some example predictions
-        print(f"\nSample Predictions (first 5):")
+        print("\nSample Predictions (first 5):")
         print(f"{'Index':<8} {'Python':<12} {'ONNX':<12} {'Diff':<12}")
         print("-" * 50)
         for i in range(5):
             diff = abs(python_preds[i] - onnx_preds[i])
-            print(f"{i:<8} {python_preds[i]:<12.6f} {onnx_preds[i]:<12.6f} {diff:<12.2e}")
+            print(
+                f"{i:<8} {python_preds[i]:<12.6f} {onnx_preds[i]:<12.6f} {diff:<12.2e}"
+            )
 
         return True
     else:
@@ -211,12 +215,14 @@ def validate_onnx_predictions(
 
         # Find and report worst mismatches
         worst_indices = np.argsort(np.abs(python_preds - onnx_preds))[-5:]
-        print(f"\nWorst 5 Mismatches:")
+        print("\nWorst 5 Mismatches:")
         print(f"{'Index':<8} {'Python':<12} {'ONNX':<12} {'Diff':<12}")
         print("-" * 50)
         for idx in worst_indices:
             diff = abs(python_preds[idx] - onnx_preds[idx])
-            print(f"{idx:<8} {python_preds[idx]:<12.6f} {onnx_preds[idx]:<12.6f} {diff:<12.2e}")
+            print(
+                f"{idx:<8} {python_preds[idx]:<12.6f} {onnx_preds[idx]:<12.6f} {diff:<12.2e}"
+            )
 
         return False
 
@@ -231,7 +237,8 @@ def extract_onnx_metadata(onnx_path: str) -> Dict[str, Any]:
     try:
         metadata = json.loads(model.doc_string)
         return metadata
-    except:
+    except Exception as e:
+        logger.error(e)
         return {}
 
 
@@ -283,7 +290,7 @@ def complete_export_workflow(
             for i, feat in enumerate(feature_names, 1):
                 f.write(f"  {i:2d}. {feat}\n")
             f.write("\n")
-            f.write(f"Metadata:\n")
+            f.write("Metadata:\n")
             for key, value in metadata.items():
                 f.write(f"  {key}: {value}\n")
 

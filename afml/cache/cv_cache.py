@@ -302,9 +302,9 @@ def _cv_cacheable_enhanced(
             "log_metrics": log_metrics,
         }
 
-        params_hash = hashlib.md5(json.dumps(tracking_params, sort_keys=True).encode()).hexdigest()[
-            :8
-        ]
+        params_hash = hashlib.md5(
+            json.dumps(tracking_params, sort_keys=True).encode()
+        ).hexdigest()[:8]
 
         return f"{base_key}_tracking_{params_hash}"
 
@@ -320,7 +320,9 @@ def _cv_cacheable_enhanced(
         if track_data_access:
             from .data_access_tracker import get_data_tracker
 
-            _track_cv_data_access(get_data_tracker(), args, kwargs, dataset_name, purpose)
+            _track_cv_data_access(
+                get_data_tracker(), args, kwargs, dataset_name, purpose
+            )
 
         # Check cache
         if cache_file.exists():
@@ -387,7 +389,9 @@ def _track_cv_data_access(tracker, args, kwargs, dataset_name, purpose):
     for key, value in kwargs.items():
         if key in ["X", "x", "features"] and _is_trackable_dataframe(value):
             X = value
-        elif key in ["y", "target", "labels"] and isinstance(value, (pd.Series, np.ndarray)):
+        elif key in ["y", "target", "labels"] and isinstance(
+            value, (pd.Series, np.ndarray)
+        ):
             y = value
 
     # Log access if we found trackable data
@@ -412,7 +416,6 @@ def _log_cv_metrics_to_mlflow(result, func_name, cache_key):
             run_name=f"cv_{func_name}_{cache_key[:8]}",
             tags={"type": "cross_validation", "function": func_name},
         ) as ctx:
-
             # Extract metrics from common CV result formats
             if isinstance(result, dict):
                 # Direct metric dictionary

@@ -49,12 +49,19 @@ def _generate_random_features(random_state, bootstrap, n_population, n_samples):
     if bootstrap:
         indices = random_state.randint(0, n_population, n_samples)
     else:
-        indices = sample_without_replacement(n_population, n_samples, random_state=random_state)
+        indices = sample_without_replacement(
+            n_population, n_samples, random_state=random_state
+        )
     return indices
 
 
 def _generate_bagging_indices(
-    random_state, bootstrap_features, n_features, max_features, max_samples, active_indices
+    random_state,
+    bootstrap_features,
+    n_features,
+    max_features,
+    max_samples,
+    active_indices,
 ):
     """Randomly draw feature and sample indices."""
     # Get valid random state - this returns a RandomState object
@@ -82,7 +89,9 @@ def _generate_bagging_indices(
         elif isinstance(max_features, numbers.Real):
             n_feat = int(round(max_features * n_features))
         else:
-            raise ValueError("max_features must be int or float when bootstrap_features=True")
+            raise ValueError(
+                "max_features must be int or float when bootstrap_features=True"
+            )
 
         feature_indices = _generate_random_features(
             random_state_obj, bootstrap_features, n_features, n_feat
@@ -94,7 +103,15 @@ def _generate_bagging_indices(
 
 
 def _parallel_build_estimators(
-    n_estimators, ensemble, X, y, active_indices, sample_weight, seeds, total_n_estimators, verbose
+    n_estimators,
+    ensemble,
+    X,
+    y,
+    active_indices,
+    sample_weight,
+    seeds,
+    total_n_estimators,
+    verbose,
 ):
     """Private function used to build a batch of estimators within a job."""
     # Retrieve settings
@@ -121,7 +138,12 @@ def _parallel_build_estimators(
 
         # Draw samples and features
         sample_indices, feature_indices = _generate_bagging_indices(
-            random_state, bootstrap_features, n_features, max_features, max_samples, active_indices
+            random_state,
+            bootstrap_features,
+            n_features,
+            max_features,
+            max_samples,
+            active_indices,
         )
 
         # Draw samples, using sample weights if supported
@@ -347,7 +369,9 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
 
         # Generate random seeds for each estimator, just like BaseBagging does
         random_state = check_random_state(self.random_state)
-        self._seeds = random_state.randint(np.iinfo(np.int32).max, size=self.n_estimators)
+        self._seeds = random_state.randint(
+            np.iinfo(np.int32).max, size=self.n_estimators
+        )
 
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
@@ -366,7 +390,9 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
             max_samples = self.max_samples
 
         if not isinstance(max_samples, (numbers.Integral, numbers.Real)):
-            raise ValueError("max_samples must be int or float, got %s" % type(max_samples))
+            raise ValueError(
+                "max_samples must be int or float, got %s" % type(max_samples)
+            )
 
         if isinstance(max_samples, numbers.Integral):
             max_samples = min(max_samples, n_samples)
@@ -380,7 +406,9 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
 
         # Compute indicator matrix for sequential bootstrap
         if self.active_indices_ is None:
-            self.active_indices_ = get_active_indices(self.samples_info_sets, self.price_bars_index)
+            self.active_indices_ = get_active_indices(
+                self.samples_info_sets, self.price_bars_index
+            )
 
         # Check if indicator matrix matches data shape
         if len(self.active_indices_) != n_samples:
@@ -406,11 +434,16 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
             )
 
         elif n_more_estimators == 0:
-            warn("Warm-start fitting without increasing n_estimators does not " "fit new trees.")
+            warn(
+                "Warm-start fitting without increasing n_estimators does not "
+                "fit new trees."
+            )
             return self
 
         # Parallel or sequential construction
-        n_jobs, n_estimators, starts = _partition_estimators(n_more_estimators, self.n_jobs)
+        n_jobs, n_estimators, starts = _partition_estimators(
+            n_more_estimators, self.n_jobs
+        )
         total_n_estimators = sum(n_estimators)
 
         # Generate random seeds for each estimator
@@ -572,7 +605,9 @@ class SequentiallyBootstrappedBaggingClassifier(
         random_state = check_random_state(self.random_state)
 
         # Generate random seeds
-        self._seeds = random_state.randint(np.iinfo(np.int32).max, size=self.n_estimators)
+        self._seeds = random_state.randint(
+            np.iinfo(np.int32).max, size=self.n_estimators
+        )
 
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
@@ -591,7 +626,9 @@ class SequentiallyBootstrappedBaggingClassifier(
             max_samples = self.max_samples
 
         if not isinstance(max_samples, (numbers.Integral, numbers.Real)):
-            raise ValueError("max_samples must be int or float, got %s" % type(max_samples))
+            raise ValueError(
+                "max_samples must be int or float, got %s" % type(max_samples)
+            )
 
         if isinstance(max_samples, numbers.Integral):
             max_samples = min(max_samples, n_samples)
@@ -610,7 +647,9 @@ class SequentiallyBootstrappedBaggingClassifier(
                     "samples_info_sets and price_bars_index must be provided "
                     "either in __init__ or by setting them as attributes before calling fit()"
                 )
-            self.active_indices_ = get_active_indices(self.samples_info_sets, self.price_bars_index)
+            self.active_indices_ = get_active_indices(
+                self.samples_info_sets, self.price_bars_index
+            )
 
         # Check if indicator matrix matches data shape
         if len(self.active_indices_) != n_samples:

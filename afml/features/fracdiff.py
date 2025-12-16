@@ -62,7 +62,9 @@ def _frac_diff_numba_core(series_values, weights, skip):
     """
     N = len(series_values)
     output_values = np.empty(N, dtype=np.float64)
-    output_values[:] = np.nan  # Initialize with NaN, as per pd.Series dtype='float64' behavior
+    output_values[:] = (
+        np.nan
+    )  # Initialize with NaN, as per pd.Series dtype='float64' behavior
 
     for iloc in prange(skip, N):
         output_values[iloc] = np.dot(
@@ -290,7 +292,13 @@ def adf_data(df1, df2, d=0, out_df=None, alpha=0.05):
         "corr",
         "stationary",
     ]
-    vals = list(adf[:4]) + [df1.shape[0] - adf[3]] + [adf[4][f"{alpha:.0%}"]] + [corr] + [False]
+    vals = (
+        list(adf[:4])
+        + [df1.shape[0] - adf[3]]
+        + [adf[4][f"{alpha:.0%}"]]
+        + [corr]
+        + [False]
+    )
 
     if out_df is None or out_df.empty:
         out_df = {d: {k: v for k, v in zip(columns, vals)}}
@@ -308,7 +316,13 @@ def adf_data(df1, df2, d=0, out_df=None, alpha=0.05):
 
 
 def fracdiff_optimal(
-    series, fixed_width=True, alpha=0.05, max_d=1.0, tol=1e-3, use_log=True, verbose=False
+    series,
+    fixed_width=True,
+    alpha=0.05,
+    max_d=1.0,
+    tol=1e-3,
+    use_log=True,
+    verbose=False,
 ):
     """
     Determines the smallest differentiation factor (d) required for stationarity
@@ -379,7 +393,9 @@ def fracdiff_optimal(
     """
 
     if not isinstance(series, pd.Series):
-        raise TypeError(f"Expected `series` to be a pandas Series, but got type {type(series)}")
+        raise TypeError(
+            f"Expected `series` to be a pandas Series, but got type {type(series)}"
+        )
 
     low, high = 0.0, max_d
     best_d = None

@@ -54,8 +54,10 @@ def nested_parts(num_atoms, num_threads, upper_triangle=False):
     num_threads_ = min(num_threads, num_atoms)
 
     for _ in range(num_threads_):
-        part = 1 + 4 * (parts[-1] ** 2 + parts[-1] + num_atoms * (num_atoms + 1.0) / num_threads_)
-        part = (-1 + part ** 0.5) / 2.0
+        part = 1 + 4 * (
+            parts[-1] ** 2 + parts[-1] + num_atoms * (num_atoms + 1.0) / num_threads_
+        )
+        part = (-1 + part**0.5) / 2.0
         parts.append(part)
 
     parts = np.round(parts).astype(int)
@@ -68,7 +70,9 @@ def nested_parts(num_atoms, num_threads, upper_triangle=False):
 
 
 # Snippet 20.7 (page 310), The mpPandasObj, used at various points in the book
-def mp_pandas_obj(func, pd_obj, num_threads=24, mp_batches=1, lin_mols=True, verbose=True, **kargs):
+def mp_pandas_obj(
+    func, pd_obj, num_threads=24, mp_batches=1, lin_mols=True, verbose=True, **kargs
+):
     """
     Advances in Financial Machine Learning, Snippet 20.7, page 310.
 
@@ -112,13 +116,13 @@ def mp_pandas_obj(func, pd_obj, num_threads=24, mp_batches=1, lin_mols=True, ver
     if lin_mols:
         parts = lin_parts(len(pd_obj[1]), num_threads * mp_batches)
     else:
-        upper_triangle = kargs.setdefault('upper_triangle', False)
+        upper_triangle = kargs.setdefault("upper_triangle", False)
         parts = nested_parts(len(pd_obj[1]), num_threads * mp_batches, upper_triangle)
-        del kargs['upper_triangle']
-   
+        del kargs["upper_triangle"]
+
     jobs = []
     for i in range(1, len(parts)):
-        job = {pd_obj[0]: pd_obj[1][parts[i - 1]:parts[i]], 'func': func}
+        job = {pd_obj[0]: pd_obj[1][parts[i - 1] : parts[i]], "func": func}
         job.update(kargs)
         jobs.append(job)
 
@@ -130,7 +134,7 @@ def mp_pandas_obj(func, pd_obj, num_threads=24, mp_batches=1, lin_mols=True, ver
     if isinstance(out[0], pd.DataFrame):
         df0 = pd.DataFrame()
     elif isinstance(out[0], pd.Series):
-        df0 = pd.Series(dtype='float64')
+        df0 = pd.Series(dtype="float64")
     else:
         return out
 
@@ -170,8 +174,8 @@ def expand_call(kargs):
     :param kargs: Job (molecule)
     :return: Result of a job
     """
-    func = kargs['func']
-    del kargs['func']
+    func = kargs["func"]
+    del kargs["func"]
     out = func(**kargs)
     return out
 
@@ -196,13 +200,17 @@ def report_progress(job_num, num_jobs, time0, task):
 
     # Format time output to display as hh:mm:ss
     elapsed = timedelta(seconds=int(msg[1]))
-    remaining = timedelta(seconds=int(msg[2])) # Using int avoids displaying milliseconds
-    msg = f"{time_stamp} {msg[0]:.2%} {task} done after {elapsed}. Remaining {remaining}."
+    remaining = timedelta(
+        seconds=int(msg[2])
+    )  # Using int avoids displaying milliseconds
+    msg = (
+        f"{time_stamp} {msg[0]:.2%} {task} done after {elapsed}. Remaining {remaining}."
+    )
 
     if job_num < num_jobs:
-        sys.stderr.write(msg + '\r')
+        sys.stderr.write(msg + "\r")
     else:
-        sys.stderr.write(msg + '\n')
+        sys.stderr.write(msg + "\n")
 
 
 # Snippet 20.9.2, pg 312, Example of Asynchronous call to pythons multiprocessing library
@@ -220,9 +228,9 @@ def process_jobs(jobs, task=None, num_threads=24, verbose=True):
     :param verbose: (bool) Flag to report progress on asynch jobs
     :return: (None)
     """
-    
+
     if task is None:
-        task = jobs[0]['func'].__name__
+        task = jobs[0]["func"].__name__
 
     pool = Pool(processes=num_threads)
     outputs = pool.imap_unordered(expand_call, jobs)

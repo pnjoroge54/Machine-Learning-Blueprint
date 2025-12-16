@@ -22,7 +22,9 @@ from numba import njit, prange
 
 
 @njit(parallel=True, fastmath=True, cache=True)
-def _compute_concurrent_events_numba(start_times, end_times, time_index, start_idx, end_idx):
+def _compute_concurrent_events_numba(
+    start_times, end_times, time_index, start_idx, end_idx
+):
     """
     Numba-optimized function to compute concurrent events count.
 
@@ -191,7 +193,9 @@ def _get_average_uniqueness_optimized(label_endtime, num_conc_events):
     concurrent_counts = num_conc_events.to_numpy()
 
     # Use Numba-optimized function for heavy computation
-    uniqueness = _compute_uniqueness_numba(start_indices, end_indices, concurrent_counts, n_events)
+    uniqueness = _compute_uniqueness_numba(
+        start_indices, end_indices, concurrent_counts, n_events
+    )
 
     return pd.Series(uniqueness, index=label_endtime.index)
 
@@ -374,9 +378,9 @@ def get_av_uniqueness_from_triple_barrier_optimized(
 
     # Verify index compatibility
     missing_in_close = processed_ce.index.difference(close_index)
-    assert (
-        missing_in_close.empty
-    ), f"num_conc_events contains {len(missing_in_close)} indices not in close"
+    assert missing_in_close.empty, (
+        f"num_conc_events contains {len(missing_in_close)} indices not in close"
+    )
 
     # Compute average uniqueness using optimized function
     out["tW"] = _get_average_uniqueness_optimized(

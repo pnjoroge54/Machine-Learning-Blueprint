@@ -154,7 +154,9 @@ class UnifiedCacheKeyGenerator:
             func_hash = _get_function_source_hash(func)
             if func_hash:
                 key_parts.append(f"v_{func_hash}")
-                logger.trace(f"Auto-versioning enabled for {func.__qualname__}: v_{func_hash[:8]}")
+                logger.trace(
+                    f"Auto-versioning enabled for {func.__qualname__}: v_{func_hash[:8]}"
+                )
             else:
                 # Graceful fallback to mtime if source unavailable
                 mtime = _get_function_file_mtime(func)
@@ -182,11 +184,15 @@ class UnifiedCacheKeyGenerator:
             # Extract time range if time-aware
             time_range = None
             if time_aware:
-                time_range = UnifiedCacheKeyGenerator._extract_time_range(bound.arguments)
+                time_range = UnifiedCacheKeyGenerator._extract_time_range(
+                    bound.arguments
+                )
 
             # Hash each parameter
             for param_name, param_value in bound.arguments.items():
-                key_part = UnifiedCacheKeyGenerator._hash_parameter(param_name, param_value)
+                key_part = UnifiedCacheKeyGenerator._hash_parameter(
+                    param_name, param_value
+                )
                 key_parts.append(key_part)
 
             # Add time range to key if present
@@ -198,7 +204,9 @@ class UnifiedCacheKeyGenerator:
             logger.debug(f"Parameter binding failed for {func.__name__}: {e}")
             # Fallback to positional hashing
             for i, arg in enumerate(args):
-                key_parts.append(UnifiedCacheKeyGenerator._hash_parameter(f"arg_{i}", arg))
+                key_parts.append(
+                    UnifiedCacheKeyGenerator._hash_parameter(f"arg_{i}", arg)
+                )
             for k, v in kwargs.items():
                 key_parts.append(UnifiedCacheKeyGenerator._hash_parameter(k, v))
 
@@ -304,7 +312,9 @@ class UnifiedCacheKeyGenerator:
                     )
                     step_hashes.append(f"{step_name}:{step_hash}")
 
-                pipeline_hash = hashlib.md5("_".join(step_hashes).encode()).hexdigest()[:12]
+                pipeline_hash = hashlib.md5("_".join(step_hashes).encode()).hexdigest()[
+                    :12
+                ]
                 return f"{name}_Pipeline_{pipeline_hash}"
 
             # For regular estimators, get params (but not deep for nested objects)
@@ -351,7 +361,12 @@ class UnifiedCacheKeyGenerator:
             dist_type = type(value).__name__
             args = value.args if hasattr(value, "args") else ()
             kwds = value.kwds if hasattr(value, "kwds") else {}
-            return {"_type": "scipy_dist", "dist": dist_type, "args": args, "kwds": kwds}
+            return {
+                "_type": "scipy_dist",
+                "dist": dist_type,
+                "args": args,
+                "kwds": kwds,
+            }
 
         # Handle nested estimators (THIS IS THE KEY FIX)
         if isinstance(value, BaseEstimator):
@@ -361,13 +376,16 @@ class UnifiedCacheKeyGenerator:
 
         # Handle lists/tuples (may contain estimators)
         if isinstance(value, (list, tuple)):
-            serialized = [UnifiedCacheKeyGenerator._serialize_param_value(item) for item in value]
+            serialized = [
+                UnifiedCacheKeyGenerator._serialize_param_value(item) for item in value
+            ]
             return {"_type": "sequence", "items": serialized}
 
         # Handle dicts (may contain estimators)
         if isinstance(value, dict):
             serialized = {
-                k: UnifiedCacheKeyGenerator._serialize_param_value(v) for k, v in value.items()
+                k: UnifiedCacheKeyGenerator._serialize_param_value(v)
+                for k, v in value.items()
             }
             return {"_type": "dict", "items": serialized}
 
@@ -480,19 +498,30 @@ class UnifiedCacheKeyGenerator:
             return f"{name}_{type(obj).__name__}_{id(obj)}"
 
     @staticmethod
-    def _extract_time_range(params: dict) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+    def _extract_time_range(
+        params: dict,
+    ) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
         """Extract temporal range from parameters for time-aware caching."""
         # Check for explicit time parameters
         if "start_date" in params and "end_date" in params:
-            return (pd.Timestamp(params["start_date"]), pd.Timestamp(params["end_date"]))
+            return (
+                pd.Timestamp(params["start_date"]),
+                pd.Timestamp(params["end_date"]),
+            )
 
         # Check for DataFrames with DatetimeIndex
         for param_value in params.values():
             if isinstance(param_value, pd.DataFrame):
-                if isinstance(param_value.index, pd.DatetimeIndex) and len(param_value) > 0:
+                if (
+                    isinstance(param_value.index, pd.DatetimeIndex)
+                    and len(param_value) > 0
+                ):
                     return (param_value.index[0], param_value.index[-1])
             elif isinstance(param_value, pd.Series):
-                if isinstance(param_value.index, pd.DatetimeIndex) and len(param_value) > 0:
+                if (
+                    isinstance(param_value.index, pd.DatetimeIndex)
+                    and len(param_value) > 0
+                ):
                     return (param_value.index[0], param_value.index[-1])
 
         return None
@@ -638,7 +667,11 @@ def cacheable(
 
             # Generate our custom cache key for tracking/monitoring
             cache_key = UnifiedCacheKeyGenerator.generate_key(
-                func, args, kwargs, time_aware=time_aware, auto_versioning=auto_versioning
+                func,
+                args,
+                kwargs,
+                time_aware=time_aware,
+                auto_versioning=auto_versioning,
             )
 
             is_hit = cached_func.check_call_in_cache(*args, **kwargs)
@@ -711,7 +744,9 @@ def _track_data_access(args, kwargs, dataset_name, purpose):
 
         # Check all arguments
         for arg in args:
-            if isinstance(arg, pd.DataFrame) and isinstance(arg.index, pd.DatetimeIndex):
+            if isinstance(arg, pd.DataFrame) and isinstance(
+                arg.index, pd.DatetimeIndex
+            ):
                 if len(arg) > 0:
                     tracker.log_access(
                         dataset_name=dataset_name or "unknown",
@@ -722,7 +757,9 @@ def _track_data_access(args, kwargs, dataset_name, purpose):
                     )
 
         for key, value in kwargs.items():
-            if isinstance(value, pd.DataFrame) and isinstance(value.index, pd.DatetimeIndex):
+            if isinstance(value, pd.DataFrame) and isinstance(
+                value.index, pd.DatetimeIndex
+            ):
                 if len(value) > 0:
                     tracker.log_access(
                         dataset_name=dataset_name or key,

@@ -17,21 +17,27 @@ def _get_param_columns(cv_results: pd.DataFrame) -> List[str]:
     return [col for col in cv_results.columns if col.startswith("param_")]
 
 
-def _get_param_value(cv_results: pd.DataFrame, param_name: str, row_idx: int = 0) -> Any:
+def _get_param_value(
+    cv_results: pd.DataFrame, param_name: str, row_idx: int = 0
+) -> Any:
     """Safely get parameter value from cv_results."""
     if param_name in cv_results.columns:
         return cv_results.iloc[row_idx][param_name]
     return None
 
 
-def _safe_groupby_param(cv_results: pd.DataFrame, param_col: str) -> Optional[pd.DataFrame]:
+def _safe_groupby_param(
+    cv_results: pd.DataFrame, param_col: str
+) -> Optional[pd.DataFrame]:
     """Safely group by parameter column, handling missing columns."""
     if param_col not in cv_results.columns:
         return None
 
     try:
         param_stats = (
-            cv_results.groupby(param_col)[["mean_test_score", "std_test_score", "mean_fit_time"]]
+            cv_results.groupby(param_col)[
+                ["mean_test_score", "std_test_score", "mean_fit_time"]
+            ]
             .agg(
                 {
                     "mean_test_score": ["mean", "std", "count"],
@@ -42,7 +48,13 @@ def _safe_groupby_param(cv_results: pd.DataFrame, param_col: str) -> Optional[pd
             .round(4)
         )
 
-        param_stats.columns = ["score_mean", "score_std", "count", "fold_std_mean", "time_mean"]
+        param_stats.columns = [
+            "score_mean",
+            "score_std",
+            "count",
+            "fold_std_mean",
+            "time_mean",
+        ]
         param_stats = param_stats.sort_values("score_mean", ascending=False)
         return param_stats
     except Exception as e:
@@ -101,7 +113,7 @@ def analyze_hyperparameter_results(
         print("No standard columns found in results")
 
     # 2. PERFORMANCE ANALYSIS
-    print(f"\n2. PERFORMANCE SUMMARY:")
+    print("\n2. PERFORMANCE SUMMARY:")
     print("-" * 50)
 
     if target_metric in cv_results.columns:
@@ -119,7 +131,7 @@ def analyze_hyperparameter_results(
         mean_score = max_score = min_score = std_score = 0
 
     # 3. STABILITY ANALYSIS
-    print(f"\n3. STABILITY ANALYSIS:")
+    print("\n3. STABILITY ANALYSIS:")
     print("-" * 50)
 
     if "std_test_score" in cv_results.columns:
@@ -140,11 +152,13 @@ def analyze_hyperparameter_results(
         print("No stability metrics available")
 
     # 4. TIME-EFFICIENCY ANALYSIS
-    print(f"\n4. TIME-EFFICIENCY ANALYSIS:")
+    print("\n4. TIME-EFFICIENCY ANALYSIS:")
     print("-" * 50)
 
     if "mean_fit_time" in cv_results.columns:
-        cv_results["efficiency_score"] = cv_results[target_metric] / cv_results["mean_fit_time"]
+        cv_results["efficiency_score"] = (
+            cv_results[target_metric] / cv_results["mean_fit_time"]
+        )
 
         if time_constraint:
             time_efficient = cv_results[cv_results["mean_fit_time"] <= time_constraint]
@@ -159,7 +173,7 @@ def analyze_hyperparameter_results(
         print("No training time data available")
 
     # 5. HYPERPARAMETER TREND ANALYSIS
-    print(f"\n5. HYPERPARAMETER TRENDS:")
+    print("\n5. HYPERPARAMETER TRENDS:")
     print("-" * 50)
 
     param_columns = _get_param_columns(cv_results)
@@ -174,27 +188,31 @@ def analyze_hyperparameter_results(
                 print(
                     f"Optimal value: {param_stats.index[0]} (score: {param_stats['score_mean'].iloc[0]:.4f})"
                 )
-                print(f"Performance by value:")
+                print("Performance by value:")
                 print(param_stats.to_string())
     else:
         print("No hyperparameter columns found")
 
     # 6. CROSS-VALIDATION FOLD CONSISTENCY
-    print(f"\n6. CROSS-VALIDATION CONSISTENCY:")
+    print("\n6. CROSS-VALIDATION CONSISTENCY:")
     print("-" * 50)
 
-    fold_columns = [col for col in cv_results.columns if "split" in col and "test" in col]
+    fold_columns = [
+        col for col in cv_results.columns if "split" in col and "test" in col
+    ]
 
     if fold_columns:
         fold_scores = cv_results[fold_columns]
         fold_means = fold_scores.mean(axis=0)
         fold_stds = fold_scores.std(axis=0)
 
-        print(f"Fold performance consistency:")
+        print("Fold performance consistency:")
         for i, (fold_mean, fold_std) in enumerate(zip(fold_means, fold_stds)):
             print(f"  Fold {i}: {fold_mean:.4f} ± {fold_std:.4f}")
 
-        problem_folds = [(i, std) for i, std in enumerate(fold_stds) if std > stability_threshold]
+        problem_folds = [
+            (i, std) for i, std in enumerate(fold_stds) if std > stability_threshold
+        ]
         if problem_folds:
             print(f"\n⚠️  High variance folds detected (std > {stability_threshold}):")
             for fold, std in problem_folds:
@@ -203,7 +221,7 @@ def analyze_hyperparameter_results(
         print("No fold-specific data available")
 
     # 7. MODEL SELECTION RECOMMENDATION
-    print(f"\n7. MODEL SELECTION RECOMMENDATION:")
+    print("\n7. MODEL SELECTION RECOMMENDATION:")
     print("-" * 50)
 
     if target_metric in cv_results.columns:
@@ -223,30 +241,40 @@ def analyze_hyperparameter_results(
 
                     score_diff = best_score - stable_score
                     if score_diff < 0.005:
-                        print(f"✅ RECOMMENDATION: Choose stable model")
-                        print(f"   Score: {stable_score:.4f} (vs best: {best_score:.4f})")
-                        print(f"   Stability: {stable_std:.4f} (vs best: {best_std:.4f})")
-                        print(f"   Performance difference: {score_diff:.4f} (insignificant)")
+                        print("✅ RECOMMENDATION: Choose stable model")
+                        print(
+                            f"   Score: {stable_score:.4f} (vs best: {best_score:.4f})"
+                        )
+                        print(
+                            f"   Stability: {stable_std:.4f} (vs best: {best_std:.4f})"
+                        )
+                        print(
+                            f"   Performance difference: {score_diff:.4f} (insignificant)"
+                        )
                         recommended_model = best_stable
                     else:
-                        print(f"✅ RECOMMENDATION: Choose best performing model")
-                        print(f"   Score: {best_score:.4f} (vs stable: {stable_score:.4f})")
-                        print(f"   Stability: {best_std:.4f} (slightly higher variance)")
+                        print("✅ RECOMMENDATION: Choose best performing model")
+                        print(
+                            f"   Score: {best_score:.4f} (vs stable: {stable_score:.4f})"
+                        )
+                        print(
+                            f"   Stability: {best_std:.4f} (slightly higher variance)"
+                        )
                         print(f"   Performance gain: {score_diff:.4f} (worth the risk)")
                         recommended_model = best_by_score
                 else:
-                    print(f"⚠️  RECOMMENDATION: No stable models found")
+                    print("⚠️  RECOMMENDATION: No stable models found")
                     print(f"   Best model: {best_score:.4f} ± {best_std:.4f}")
                     recommended_model = best_by_score
             else:
-                print(f"✅ RECOMMENDATION: Choose best performing model")
+                print("✅ RECOMMENDATION: Choose best performing model")
                 print(f"   Score: {best_score:.4f}")
                 recommended_model = best_by_score
 
             # Add practical considerations
             if "params" in recommended_model.columns:
                 recommended_params = recommended_model["params"].iloc[0]
-                print(f"\n🎯 RECOMMENDED HYPERPARAMETERS:")
+                print("\n🎯 RECOMMENDED HYPERPARAMETERS:")
                 for key, value in recommended_params.items():
                     print(f"   {key}: {value}")
             else:
@@ -259,7 +287,7 @@ def analyze_hyperparameter_results(
         recommended_model = pd.DataFrame()
 
     # 8. GENERATE VISUALIZATIONS
-    print(f"\n8. GENERATING VISUALIZATIONS...")
+    print("\n8. GENERATING VISUALIZATIONS...")
 
     # Create a figure with subplots
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
@@ -271,9 +299,14 @@ def analyze_hyperparameter_results(
         if not recommended_model.empty:
             best_score_val = recommended_model[target_metric].iloc[0]
             ax.axvline(
-                best_score_val, color="red", linestyle="--", label=f"Best: {best_score_val:.4f}"
+                best_score_val,
+                color="red",
+                linestyle="--",
+                label=f"Best: {best_score_val:.4f}",
             )
-        ax.axvline(mean_score, color="green", linestyle="--", label=f"Mean: {mean_score:.4f}")
+        ax.axvline(
+            mean_score, color="green", linestyle="--", label=f"Mean: {mean_score:.4f}"
+        )
         ax.set_title("Performance Distribution")
         ax.set_xlabel("Test Score")
         ax.set_ylabel("Frequency")
@@ -281,7 +314,12 @@ def analyze_hyperparameter_results(
         ax.grid(alpha=0.3)
     else:
         ax.text(
-            0.5, 0.5, f"No {target_metric} data", ha="center", va="center", transform=ax.transAxes
+            0.5,
+            0.5,
+            f"No {target_metric} data",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
         )
 
     # 8.2 Score vs Stability
@@ -301,7 +339,10 @@ def analyze_hyperparameter_results(
                 label="Recommended",
             )
         ax.axhline(
-            y=stability_threshold, color="orange", linestyle="--", label="Stability threshold"
+            y=stability_threshold,
+            color="orange",
+            linestyle="--",
+            label="Stability threshold",
         )
         ax.set_title("Score vs Stability")
         ax.set_xlabel("Mean Test Score")
@@ -339,7 +380,12 @@ def analyze_hyperparameter_results(
         ax.legend()
     else:
         ax.text(
-            0.5, 0.5, "Score/Time data missing", ha="center", va="center", transform=ax.transAxes
+            0.5,
+            0.5,
+            "Score/Time data missing",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
         )
 
     # 8.4-8.5 Parameter importance plots
@@ -355,7 +401,7 @@ def analyze_hyperparameter_results(
         # Try to sort if values are numeric
         try:
             param_groups = param_groups.sort_index()
-        except:
+        except Exception:
             pass
 
         if len(param_groups) <= 10:  # Only plot if reasonable number of categories
@@ -381,7 +427,12 @@ def analyze_hyperparameter_results(
             )
     else:
         ax.text(
-            0.5, 0.5, "No parameter data found", ha="center", va="center", transform=ax.transAxes
+            0.5,
+            0.5,
+            "No parameter data found",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
         )
 
     # Plot second available parameter
@@ -394,12 +445,14 @@ def analyze_hyperparameter_results(
         # Try to sort if values are numeric
         try:
             param_groups = param_groups.sort_index()
-        except:
+        except Exception:
             pass
 
         if len(param_groups) <= 10:
             if param_groups.index.dtype.kind in "iufc":  # Numeric index
-                ax.plot(param_groups.index, param_groups.values, marker="s", color="green")
+                ax.plot(
+                    param_groups.index, param_groups.values, marker="s", color="green"
+                )
             else:
                 x_positions = np.arange(len(param_groups))
                 ax.bar(x_positions, param_groups.values, color="green")
@@ -420,7 +473,12 @@ def analyze_hyperparameter_results(
             )
     else:
         ax.text(
-            0.5, 0.5, "No second parameter found", ha="center", va="center", transform=ax.transAxes
+            0.5,
+            0.5,
+            "No second parameter found",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
         )
 
     # 8.6 Fold consistency
@@ -440,7 +498,12 @@ def analyze_hyperparameter_results(
         ax.tick_params(axis="x", rotation=45)
     else:
         ax.text(
-            0.5, 0.5, "No fold data available", ha="center", va="center", transform=ax.transAxes
+            0.5,
+            0.5,
+            "No fold data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
         )
 
     plt.tight_layout()
@@ -453,17 +516,19 @@ def analyze_hyperparameter_results(
     plt.close()
 
     # 9. PRACTICAL INTERPRETATION FOR TRADING
-    print(f"\n9. PRACTICAL INTERPRETATION FOR TRADING:")
+    print("\n9. PRACTICAL INTERPRETATION FOR TRADING:")
     print("-" * 50)
 
     if target_metric in cv_results.columns and not cv_results.empty:
         best_score_val = cv_results[target_metric].max()
 
-        print(f"Expected Strategy Performance:")
+        print("Expected Strategy Performance:")
         print(f"  • Best {target_metric}: {best_score_val:.4f}")
 
         if "std_test_score" in cv_results.columns:
-            best_std_val = cv_results.loc[cv_results[target_metric].idxmax(), "std_test_score"]
+            best_std_val = cv_results.loc[
+                cv_results[target_metric].idxmax(), "std_test_score"
+            ]
             print(
                 f"  • Cross-validation Consistency: {'Good' if best_std_val < 0.03 else 'Moderate'}"
             )
@@ -481,11 +546,17 @@ def analyze_hyperparameter_results(
         "best_model": recommended_model,
         "best_score": best_score if "best_score" in locals() else 0,
         "best_std": best_std if "best_std" in locals() else 0,
-        "recommended_params": recommended_params if "recommended_params" in locals() else {},
+        "recommended_params": (
+            recommended_params if "recommended_params" in locals() else {}
+        ),
         "risk_level": (
             "HIGH"
             if best_std > 0.04
-            else "MEDIUM" if best_std > 0.02 else "LOW" if "best_std" in locals() else "UNKNOWN"
+            else (
+                "MEDIUM"
+                if best_std > 0.02
+                else "LOW" if "best_std" in locals() else "UNKNOWN"
+            )
         ),
     }
 
@@ -607,7 +678,9 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
         analysis["performance_level"] = "EXCELLENT"
     elif best_score_val < 0.65:
         print("⚠️  Performance could be improved")
-        print("   Consider: feature engineering, different model architecture, or more data")
+        print(
+            "   Consider: feature engineering, different model architecture, or more data"
+        )
         analysis["performance_level"] = "MODERATE"
     else:
         print("✅ Good baseline performance achieved")
@@ -620,7 +693,9 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
 
     if "mean_score_time" in cv_results.columns:
         avg_score_time = cv_results["mean_score_time"].mean()
-        print(f"Expected Inference Speed: ~{avg_score_time*1000:.1f}ms per prediction")
+        print(
+            f"Expected Inference Speed: ~{avg_score_time * 1000:.1f}ms per prediction"
+        )
         analysis["avg_inference_time"] = avg_score_time * 1000
 
     if "mean_fit_time" in cv_results.columns:
@@ -648,7 +723,9 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
     if "std_test_score" in best_model.index:
         stability_score = best_model["std_test_score"]
         analysis["stability"] = (
-            "HIGH" if stability_score < 0.02 else "MEDIUM" if stability_score < 0.04 else "LOW"
+            "HIGH"
+            if stability_score < 0.02
+            else "MEDIUM" if stability_score < 0.04 else "LOW"
         )
 
     return analysis
@@ -760,10 +837,12 @@ def generate_hyperparameter_markdown_report(
 
         md_content.append("### Key Findings")
         md_content.append("")
-        md_content.append(f"- **Best Model Performance**: `{best_score:.4f} ± {best_std:.4f}`")
+        md_content.append(
+            f"- **Best Model Performance**: `{best_score:.4f} ± {best_std:.4f}`"
+        )
         md_content.append(f"- **Risk Level**: `{risk_level}`")
         md_content.append(
-            f"- **Expected Accuracy**: `~{summary.get('expected_accuracy', 0)*100:.1f}%`"
+            f"- **Expected Accuracy**: `~{summary.get('expected_accuracy', 0) * 100:.1f}%`"
         )
         md_content.append("")
 
@@ -785,7 +864,7 @@ def generate_hyperparameter_markdown_report(
         md_content.append("### Hyperparameter Analysis Overview")
         md_content.append("")
         md_content.append(
-            f'<img src="data:image/png;base64,{analysis_results["plots"]["main_comparison"]}" width="800">'
+            f'<img src="data:image/png;base64,{analysis_results["plots"]["main_comparison"]}" style="width: 100%; max-width: 1400px;">'
         )
         md_content.append("")
 
@@ -808,7 +887,7 @@ def generate_hyperparameter_markdown_report(
         md_content.append("### Performance Distribution")
         md_content.append("")
         md_content.append(
-            f'<img src="data:image/png;base64,{analysis_results["plots"]["performance_dist"]}" width="600">'
+            f'<img src="data:image/png;base64,{analysis_results["plots"]["performance_dist"]}" style="width: 100%; max-width: 1400px;">'
         )
         md_content.append("")
 
@@ -819,8 +898,12 @@ def generate_hyperparameter_markdown_report(
     if "top_models" in analysis_results:
         top_models = analysis_results["top_models"].head(5)
 
-        md_content.append("| Rank | Mean Score | Std Score | Fit Time (s) | Efficiency |")
-        md_content.append("|------|------------|-----------|--------------|------------|")
+        md_content.append(
+            "| Rank | Mean Score | Std Score | Fit Time (s) | Efficiency |"
+        )
+        md_content.append(
+            "|------|------------|-----------|--------------|------------|"
+        )
 
         for i, (_, row) in enumerate(top_models.iterrows()):
             efficiency = row.get(
@@ -835,7 +918,7 @@ def generate_hyperparameter_markdown_report(
             fit_time = row.get("mean_fit_time", 0)
 
             md_content.append(
-                f"| {i+1} | `{row[target_metric]:.4f}` | `{std_score:.4f}` | `{fit_time:.2f}` | `{efficiency:.2f}` |"
+                f"| {i + 1} | `{row[target_metric]:.4f}` | `{std_score:.4f}` | `{fit_time:.2f}` | `{efficiency:.2f}` |"
             )
 
         md_content.append("")
@@ -848,13 +931,17 @@ def generate_hyperparameter_markdown_report(
         stable_models = analysis_results["stable_models"]
 
         if not stable_models.empty:
-            md_content.append(f"**Models meeting stability threshold**: `{len(stable_models)}`  ")
+            md_content.append(
+                f"**Models meeting stability threshold**: `{len(stable_models)}`  "
+            )
             md_content.append("")
 
             best_stable = stable_models.nlargest(1, target_metric)
             if not best_stable.empty:
                 md_content.append("### Best Stable Model")
-                md_content.append(f"- **Score**: `{best_stable[target_metric].iloc[0]:.4f}`  ")
+                md_content.append(
+                    f"- **Score**: `{best_stable[target_metric].iloc[0]:.4f}`  "
+                )
                 md_content.append(
                     f"- **Standard Deviation**: `{best_stable['std_test_score'].iloc[0]:.4f}`  "
                 )
@@ -894,8 +981,12 @@ def generate_hyperparameter_markdown_report(
 
             if param_stats is not None and not param_stats.empty:
                 md_content.append(f"#### {param_name}")
-                md_content.append("| Value | Mean Score | Score Std | Count | Avg Time (s) |")
-                md_content.append("|-------|------------|-----------|-------|--------------|")
+                md_content.append(
+                    "| Value | Mean Score | Score Std | Count | Avg Time (s) |"
+                )
+                md_content.append(
+                    "|-------|------------|-----------|-------|--------------|"
+                )
 
                 for value, row in param_stats.iterrows():
                     md_content.append(
@@ -966,7 +1057,9 @@ def generate_hyperparameter_markdown_report(
                     md_content.append(f"- **{key}**: `{specific_analysis[key]}`  ")
 
             if target_metric in best_model:
-                md_content.append(f"- **{target_metric}**: `{best_model[target_metric]:.4f}`  ")
+                md_content.append(
+                    f"- **{target_metric}**: `{best_model[target_metric]:.4f}`  "
+                )
 
             if "std_test_score" in best_model:
                 md_content.append(
@@ -974,7 +1067,9 @@ def generate_hyperparameter_markdown_report(
                 )
 
             if "mean_fit_time" in best_model:
-                md_content.append(f"- **Training Time**: `{best_model['mean_fit_time']:.2f}s`  ")
+                md_content.append(
+                    f"- **Training Time**: `{best_model['mean_fit_time']:.2f}s`  "
+                )
 
             md_content.append("")
 
@@ -992,11 +1087,15 @@ def generate_hyperparameter_markdown_report(
 
         expected_win_rate = best_score  # Approximation
 
-        md_content.append(f"- **Expected Win Rate**: `~{expected_win_rate*100:.1f}%`  ")
+        md_content.append(
+            f"- **Expected Win Rate**: `~{expected_win_rate * 100:.1f}%`  "
+        )
         md_content.append(
             f"- **Performance Consistency**: `{'High' if best_std < 0.02 else 'Moderate' if best_std < 0.04 else 'Low'}`  "
         )
-        md_content.append(f"- **Risk Assessment**: `{summary.get('risk_level', 'UNKNOWN')}`  ")
+        md_content.append(
+            f"- **Risk Assessment**: `{summary.get('risk_level', 'UNKNOWN')}`  "
+        )
         md_content.append("")
 
         # Trading-specific recommendations
@@ -1007,7 +1106,9 @@ def generate_hyperparameter_markdown_report(
             md_content.append("> ⚠️ **High Risk Strategy Detected**  ")
             md_content.append("> - Consider reducing position sizes  ")
             md_content.append("> - Implement strict stop-loss mechanisms  ")
-            md_content.append("> - Monitor performance closely during initial deployment  ")
+            md_content.append(
+                "> - Monitor performance closely during initial deployment  "
+            )
         elif best_std < 0.02:
             md_content.append("> ✅ **Stable Strategy Detected**  ")
             md_content.append("> - Can consider standard position sizing  ")
@@ -1035,7 +1136,7 @@ def generate_hyperparameter_markdown_report(
                 params = params[:77] + "..."
 
             md_content.append(
-                f"| {i+1} | `{row[target_metric]:.4f}` | `{row.get('std_test_score', 0):.4f}` | `{row.get('mean_fit_time', 0):.2f}s` | `{params}` |"
+                f"| {i + 1} | `{row[target_metric]:.4f}` | `{row.get('std_test_score', 0):.4f}` | `{row.get('mean_fit_time', 0):.2f}s` | `{params}` |"
             )
 
         md_content.append("")
@@ -1049,7 +1150,9 @@ def generate_hyperparameter_markdown_report(
     md_content.append("- **Mean Test Score**: Average performance across CV folds  ")
     md_content.append("- **Std Test Score**: Standard deviation across CV folds  ")
     md_content.append("- **Mean Fit Time**: Average training time per model  ")
-    md_content.append("- **Stability Threshold**: Maximum acceptable std (default: 0.03)  ")
+    md_content.append(
+        "- **Stability Threshold**: Maximum acceptable std (default: 0.03)  "
+    )
     md_content.append("- **Efficiency Score**: Performance per unit of training time  ")
     md_content.append("")
 
@@ -1240,7 +1343,9 @@ if __name__ == "__main__":
     # Create all combinations of parameters
     all_params = list(
         itertools.product(
-            param_grid["n_estimators"], param_grid["max_depth"], param_grid["min_samples_split"]
+            param_grid["n_estimators"],
+            param_grid["max_depth"],
+            param_grid["min_samples_split"],
         )
     )
 
@@ -1264,7 +1369,9 @@ if __name__ == "__main__":
 
     # Add split columns for fold analysis
     for i in range(5):
-        cv_results[f"split{i}_test_score"] = np.random.uniform(0.6, 0.8, len(all_params))
+        cv_results[f"split{i}_test_score"] = np.random.uniform(
+            0.6, 0.8, len(all_params)
+        )
 
     # Define your strategy configuration
     strategy_config = {

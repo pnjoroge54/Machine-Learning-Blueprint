@@ -27,7 +27,9 @@ def trading_session_encoded_features(
     if datetime_index.tz is not None:
         dt_utc = datetime_index.tz_convert("UTC")
     else:
-        dt_utc = datetime_index.tz_localize("UTC")  # Assume naive is UTC and localize it
+        dt_utc = datetime_index.tz_localize(
+            "UTC"
+        )  # Assume naive is UTC and localize it
 
     hours = dt_utc.hour.values  # Use NumPy array for vectorized operations
 
@@ -63,7 +65,9 @@ def trading_session_encoded_features(
             is_session = (hours >= start_hour) & (hours < end_hour)
 
         # Add the binary session flag to the results DataFrame
-        out[f"{session_name.replace('New_York', 'ny').lower()}_session"] = is_session.astype("int8")
+        out[f"{session_name.replace('New_York', 'ny').lower()}_session"] = (
+            is_session.astype("int8")
+        )
 
     out["session_overlap"] = np.where(out.sum(axis=1) > 1, 1, 0)
 
@@ -123,7 +127,9 @@ def encode_cyclical_features(
         out[f"{name}_cos"] = np.cos(radians)
 
         # Additional harmonics
-        if n_terms >= 1 and (extra_fourier_features is None or name in extra_fourier_features):
+        if n_terms >= 1 and (
+            extra_fourier_features is None or name in extra_fourier_features
+        ):
             out.rename(
                 columns={
                     f"{name}_sin": f"{name}_sin_h1",
@@ -140,7 +146,11 @@ def encode_cyclical_features(
 
 
 def get_time_features(
-    df: pd.DataFrame, timeframe: str, n_terms: int = 3, bar_type: str = "time", forex: bool = True
+    df: pd.DataFrame,
+    timeframe: str,
+    n_terms: int = 3,
+    bar_type: str = "time",
+    forex: bool = True,
 ) -> pd.DataFrame:
     """
     Creates comprehensive time features for financial data.
@@ -170,7 +180,9 @@ def get_time_features(
     # Bar duration features for non-time bars
     if bar_type != "time":
         durations = df.index.to_series(name="bar_duration").diff().dt.total_seconds()
-        duration_accel = durations.diff().rename("bar_duration_accel")  # bar duration acceleration
+        duration_accel = durations.diff().rename(
+            "bar_duration_accel"
+        )  # bar duration acceleration
         features += [durations, duration_accel]
 
     # Frequency-based feature optimization
@@ -202,6 +214,7 @@ def get_time_features(
     features = pd.concat(features, axis=1, join="inner")
     if not timeframe.startswith(("D", "W", "MN")):
         features.drop(
-            columns=["quarter_end", "month_end", "sunday_open", "friday_ny_close"], inplace=True
+            columns=["quarter_end", "month_end", "sunday_open", "friday_ny_close"],
+            inplace=True,
         )
     return features

@@ -128,7 +128,9 @@ class CacheMonitor:
 
         return result
 
-    def generate_health_report(self, top_n: int = 5, stale_days: int = 7) -> CacheHealthReport:
+    def generate_health_report(
+        self, top_n: int = 5, stale_days: int = 7
+    ) -> CacheHealthReport:
         """
         Generate comprehensive cache health report.
 
@@ -150,7 +152,9 @@ class CacheMonitor:
                 top_performers=[],
                 worst_performers=[],
                 stale_caches=[],
-                recommendations=["No cached functions found. Start using @cacheable decorators."],
+                recommendations=[
+                    "No cached functions found. Start using @cacheable decorators."
+                ],
             )
 
         # Calculate overall metrics
@@ -169,7 +173,9 @@ class CacheMonitor:
         # Find stale caches
         stale_cutoff = time.time() - (stale_days * 24 * 3600)
         stale_caches = [
-            s.function_name for s in all_stats if s.last_accessed and s.last_accessed < stale_cutoff
+            s.function_name
+            for s in all_stats
+            if s.last_accessed and s.last_accessed < stale_cutoff
         ]
 
         # Generate recommendations
@@ -218,7 +224,9 @@ class CacheMonitor:
                         f"{stats.cache_size_mb:.2f}" if stats.cache_size_mb else "N/A"
                     ),
                     "last_access": (
-                        pd.Timestamp.fromtimestamp(stats.last_accessed).strftime("%Y-%m-%d %H:%M")
+                        pd.Timestamp.fromtimestamp(stats.last_accessed).strftime(
+                            "%Y-%m-%d %H:%M"
+                        )
                         if stats.last_accessed
                         else "N/A"
                     ),
@@ -261,7 +269,10 @@ class CacheMonitor:
                 days_since_access = (time.time() - stats.last_accessed) / (24 * 3600)
                 if days_since_access > 7:
                     patterns["unused_caches"].append(
-                        {"function": stats.function_name, "days": int(days_since_access)}
+                        {
+                            "function": stats.function_name,
+                            "days": int(days_since_access),
+                        }
                     )
 
             # Large caches (> 100 MB)
@@ -304,7 +315,9 @@ class CacheMonitor:
 
         # Keep only last 100 measurements to limit memory
         if len(self.computation_times[function_name]) > 100:
-            self.computation_times[function_name] = self.computation_times[function_name][-100:]
+            self.computation_times[function_name] = self.computation_times[
+                function_name
+            ][-100:]
 
     def track_access(self, function_name: str):
         """
@@ -513,7 +526,9 @@ class CacheMonitor:
                 "or function parameter patterns."
             )
         elif overall_hit_rate > 0.9:
-            recommendations.append("Excellent hit rate (>90%)! Cache system is performing well.")
+            recommendations.append(
+                "Excellent hit rate (>90%)! Cache system is performing well."
+            )
 
         # Cache size recommendations
         if total_size > 1000:  # > 1 GB
@@ -529,16 +544,22 @@ class CacheMonitor:
             )
 
         # Function-specific recommendations
-        low_hit_rate_funcs = [s for s in all_stats if s.hit_rate < 0.3 and s.total_calls > 20]
+        low_hit_rate_funcs = [
+            s for s in all_stats if s.hit_rate < 0.3 and s.total_calls > 20
+        ]
         if low_hit_rate_funcs:
-            func_names = [f.function_name.split(".")[-1] for f in low_hit_rate_funcs[:3]]
+            func_names = [
+                f.function_name.split(".")[-1] for f in low_hit_rate_funcs[:3]
+            ]
             recommendations.append(
                 f"Functions with low hit rate: {', '.join(func_names)}. "
                 "Review cache key generation for these functions."
             )
 
         # Large cache recommendations
-        large_caches = [s for s in all_stats if s.cache_size_mb and s.cache_size_mb > 100]
+        large_caches = [
+            s for s in all_stats if s.cache_size_mb and s.cache_size_mb > 100
+        ]
         if large_caches:
             func_names = [f.function_name.split(".")[-1] for f in large_caches[:3]]
             recommendations.append(
@@ -633,7 +654,9 @@ def diagnose_cache_issues():
     all_stats = monitor.get_all_function_stats()
     print(f"   Monitor tracking: {len(all_stats)} functions")
 
-    functions_with_size = [s for s in all_stats if s.cache_size_mb and s.cache_size_mb > 0]
+    functions_with_size = [
+        s for s in all_stats if s.cache_size_mb and s.cache_size_mb > 0
+    ]
     print(f"   Functions with cache files: {len(functions_with_size)}")
 
     functions_with_timing = [s for s in all_stats if s.avg_computation_time]

@@ -25,7 +25,9 @@ FractalTrendFeatures = Dict[str, pd.Series]
 FractalSignals = Dict[str, pd.Series]
 
 
-def calculate_basic_fractals(high: pd.Series, low: pd.Series, n: int = 2) -> FractalIndicators:
+def calculate_basic_fractals(
+    high: pd.Series, low: pd.Series, n: int = 2
+) -> FractalIndicators:
     """
     Calculate basic fractal patterns in price data.
 
@@ -114,7 +116,9 @@ def calculate_enhanced_fractals(
     )
 
     fractal_low_strength = np.where(
-        basic_fractals["fractal_low"] == 1, 1 - low / low.rolling(2 * n + 1, center=True).mean(), 0
+        basic_fractals["fractal_low"] == 1,
+        1 - low / low.rolling(2 * n + 1, center=True).mean(),
+        0,
     )
 
     # Validate fractals based on strength threshold
@@ -139,7 +143,9 @@ def calculate_enhanced_fractals(
         "fractal_low": basic_fractals["fractal_low"],
         "fractal_high_strength": pd.Series(fractal_high_strength, index=high.index),
         "fractal_low_strength": pd.Series(fractal_low_strength, index=low.index),
-        "valid_fractal_high": pd.Series(valid_fractal_high.astype(int), index=high.index),
+        "valid_fractal_high": pd.Series(
+            valid_fractal_high.astype(int), index=high.index
+        ),
         "valid_fractal_low": pd.Series(valid_fractal_low.astype(int), index=low.index),
         "fractal_breakout_up": pd.Series(fractal_breakout_up, index=close.index),
         "fractal_breakout_down": pd.Series(fractal_breakout_down, index=close.index),
@@ -193,7 +199,9 @@ def calculate_fractal_levels(
     recent_low_fractals = low[valid_fractal_low == 1]
 
     # Calculate rolling resistance and support levels
-    resistance_level = recent_high_fractals.rolling(lookback_period, min_periods=1).max()
+    resistance_level = recent_high_fractals.rolling(
+        lookback_period, min_periods=1
+    ).max()
     support_level = recent_low_fractals.rolling(lookback_period, min_periods=1).min()
 
     # Forward fill to current time
@@ -254,11 +262,15 @@ def calculate_fractal_trend_features(
     fractal_ma = close.rolling(ma_period).mean()
 
     # Calculate trend strength based on fractal density
-    fractal_density = (fractal_breakout_up + fractal_breakout_down).rolling(ma_period).sum()
+    fractal_density = (
+        (fractal_breakout_up + fractal_breakout_down).rolling(ma_period).sum()
+    )
     trend_strength = fractal_density / ma_period
 
     # Determine trend direction based on fractal breakouts
-    breakout_balance = (fractal_breakout_up - fractal_breakout_down).rolling(ma_period).sum()
+    breakout_balance = (
+        (fractal_breakout_up - fractal_breakout_down).rolling(ma_period).sum()
+    )
     trend_direction = np.sign(breakout_balance)
 
     # Calculate ratio of price to fractal MA
@@ -353,7 +365,9 @@ def comprehensive_fractal_analysis(
     n: int = 2,
     lookback_period: int = 20,
     ma_period: int = 20,
-) -> Dict[str, Union[FractalIndicators, FractalLevels, FractalTrendFeatures, FractalSignals]]:
+) -> Dict[
+    str, Union[FractalIndicators, FractalLevels, FractalTrendFeatures, FractalSignals]
+]:
     """
     Perform comprehensive fractal analysis on price data.
 
@@ -395,7 +409,10 @@ def comprehensive_fractal_analysis(
     )
 
     trend_features = calculate_fractal_trend_features(
-        close, indicators["fractal_breakout_up"], indicators["fractal_breakout_down"], ma_period
+        close,
+        indicators["fractal_breakout_up"],
+        indicators["fractal_breakout_down"],
+        ma_period,
     )
 
     signals = generate_fractal_signals(
@@ -440,11 +457,17 @@ if __name__ == "__main__":
     # Example usage
     print("Fractal Analysis Module")
     print("======================")
-    print("This module provides comprehensive fractal-based features for market analysis.")
+    print(
+        "This module provides comprehensive fractal-based features for market analysis."
+    )
     print("\nAvailable functions:")
     print("- calculate_basic_fractals(): Identify basic fractal patterns")
-    print("- calculate_enhanced_fractals(): Enhanced fractals with strength measurement")
+    print(
+        "- calculate_enhanced_fractals(): Enhanced fractals with strength measurement"
+    )
     print("- calculate_fractal_levels(): Dynamic support/resistance levels")
     print("- calculate_fractal_trend_features(): Trend analysis using fractals")
-    print("- generate_fractal_signals(): Generate entry signals with whipsaw protection")
+    print(
+        "- generate_fractal_signals(): Generate entry signals with whipsaw protection"
+    )
     print("- comprehensive_fractal_analysis(): Complete fractal analysis pipeline")

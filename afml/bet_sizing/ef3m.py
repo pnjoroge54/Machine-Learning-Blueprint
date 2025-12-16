@@ -67,8 +67,12 @@ class M2N:
         self.num_workers = num_workers
         # Set moments to fit and initialize lists and errors.
         self.moments = moments
-        self.new_moments = [0 for _ in range(5)]  # Initialize the new moment list to zeroes.
-        self.parameters = [0 for _ in range(5)]  # Initialize the parameter list to zeroes.
+        self.new_moments = [
+            0 for _ in range(5)
+        ]  # Initialize the new moment list to zeroes.
+        self.parameters = [
+            0 for _ in range(5)
+        ]  # Initialize the parameter list to zeroes.
         self.error = sum([moments[i] ** 2 for i in range(len(moments))])
 
     def fit(self, mu_2):
@@ -83,9 +87,13 @@ class M2N:
         while True:
             num_iter += 1
             if self.variant == 1:
-                parameters_new = self.iter_4(mu_2, p_1)  # First variant, using the first 4 moments.
+                parameters_new = self.iter_4(
+                    mu_2, p_1
+                )  # First variant, using the first 4 moments.
             elif self.variant == 2:
-                parameters_new = self.iter_5(mu_2, p_1)  # Second variant, using all 5 moments.
+                parameters_new = self.iter_5(
+                    mu_2, p_1
+                )  # Second variant, using all 5 moments.
             else:
                 raise ValueError("Value of argument 'variant' must be either 1 or 2.")
 
@@ -96,7 +104,10 @@ class M2N:
             parameters = parameters_new.copy()
             self.get_moments(parameters)
             error = sum(
-                [(self.moments[i] - self.new_moments[i]) ** 2 for i in range(len(self.new_moments))]
+                [
+                    (self.moments[i] - self.new_moments[i]) ** 2
+                    for i in range(len(self.new_moments))
+                ]
             )
             if error < self.error:
                 # Update with new best parameters, error.
@@ -132,7 +143,9 @@ class M2N:
         p_2 = 1 - p_1  # Explicitly state p_2 for symmetry.
         m_1 = p_1 * u_1 + p_2 * u_2  # Eq. (6)
         m_2 = p_1 * (s_1**2 + u_1**2) + p_2 * (s_2**2 + u_2**2)  # Eq. (7)
-        m_3 = p_1 * (3 * s_1**2 * u_1 + u_1**3) + p_2 * (3 * s_2**2 * u_2 + u_2**3)  # Eq. (8)
+        m_3 = p_1 * (3 * s_1**2 * u_1 + u_1**3) + p_2 * (
+            3 * s_2**2 * u_2 + u_2**3
+        )  # Eq. (8)
         # Eq. (9)
         m_4 = p_1 * (3 * s_1**4 + 6 * s_1**2 * u_1**2 + u_1**4) + p_2 * (
             3 * s_2**4 + 6 * s_2**2 * u_2**2 + u_2**4
@@ -256,8 +269,12 @@ class M2N:
         for i, out_i in enumerate(output_list, 1):
             df_list.append(out_i)
             num_fill = int((i / self.n_runs) * max_prog_bar_len)
-            prog_bar_string = "|" + num_fill * "#" + (max_prog_bar_len - num_fill) * " " + "|"
-            sys.stderr.write(f"\r{prog_bar_string} Completed {i} of {self.n_runs} fitting rounds.")
+            prog_bar_string = (
+                "|" + num_fill * "#" + (max_prog_bar_len - num_fill) * " " + "|"
+            )
+            sys.stderr.write(
+                f"\r{prog_bar_string} Completed {i} of {self.n_runs} fitting rounds."
+            )
         # Close and clean up pool.
         pool.close()
         pool.join()
@@ -296,9 +313,9 @@ def raw_moment(central_moments, dist_mean):
     :return: (list) The first n+1 (0...n) raw moments.
     """
     raw_moments = [dist_mean]
-    central_moments = [
-        1
-    ] + central_moments  # Add the zeroth moment to the front of the list, just helps with indexing.
+    central_moments = (
+        [1] + central_moments
+    )  # Add the zeroth moment to the front of the list, just helps with indexing.
     for n_i in range(2, len(central_moments)):
         moment_n_parts = []
         for k in range(n_i + 1):
@@ -363,7 +380,10 @@ def iter_4_jit(mu_2, p_1, m_1, m_2, m_3, m_4):  # pragma: no cover
             break
 
         sigma_2_squared = (
-            m_3 + 2 * p_1 * mu_1**3 + (p_1 - 1) * mu_2**3 - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
+            m_3
+            + 2 * p_1 * mu_1**3
+            + (p_1 - 1) * mu_2**3
+            - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
         ) / (3 * (1 - p_1) * (mu_2 - mu_1))
         if sigma_2_squared < 0:
             # Validity check 2: Prevent potential complex values.
@@ -371,7 +391,9 @@ def iter_4_jit(mu_2, p_1, m_1, m_2, m_3, m_4):  # pragma: no cover
 
         sigma_2 = sigma_2_squared**0.5
         # Calculate sigma_1, Equation (23)
-        sigma_1_squared = (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+        sigma_1_squared = (
+            (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+        )
 
         if sigma_1_squared < 0:
             # Validity check 3: Prevent potential complex values.
@@ -429,7 +451,10 @@ def iter_5_jit(mu_2, p_1, m_1, m_2, m_3, m_4, m_5):  # pragma: no cover
 
         # Calculate sigma_2, Equation (24).
         sigma_2_squared = (
-            m_3 + 2 * p_1 * mu_1**3 + (p_1 - 1) * mu_2**3 - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
+            m_3
+            + 2 * p_1 * mu_1**3
+            + (p_1 - 1) * mu_2**3
+            - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
         ) / (3 * (1 - p_1) * (mu_2 - mu_1))
 
         if sigma_2_squared < 0:
@@ -439,7 +464,9 @@ def iter_5_jit(mu_2, p_1, m_1, m_2, m_3, m_4, m_5):  # pragma: no cover
         sigma_2 = sigma_2_squared**0.5
 
         # Calculate sigma_1, Equation (23).
-        sigma_1_squared = (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+        sigma_1_squared = (
+            (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+        )
         if sigma_1_squared < 0:
             # Validity check 3: check for upcoming complex numbers.
             break
@@ -465,7 +492,9 @@ def iter_5_jit(mu_2, p_1, m_1, m_2, m_3, m_4, m_5):  # pragma: no cover
         # Instead of np.iscomplex, check the imaginary part, this avoids using numba object mode.
         is_complex = False
         if isinstance(mu_2_squared, complex):
-            if abs(mu_2_squared.imag) > 1e-9:  # Use a tolerance for floating point errors
+            if (
+                abs(mu_2_squared.imag) > 1e-9
+            ):  # Use a tolerance for floating point errors
                 is_complex = True
 
         if is_complex or mu_2_squared < 0:

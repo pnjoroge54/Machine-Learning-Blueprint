@@ -51,7 +51,9 @@ def ml_get_train_times(t1: pd.Series, test_times: pd.Series) -> pd.Series:
 
     # Vectorized conditions using broadcasting
     # Each condition results in shape (n_train, n_test)
-    cond1 = (test_start <= train_start) & (train_start <= test_end)  # Train starts in test
+    cond1 = (test_start <= train_start) & (
+        train_start <= test_end
+    )  # Train starts in test
     cond2 = (test_start <= train_end) & (train_end <= test_end)  # Train ends in test
     cond3 = (train_start <= test_start) & (test_end <= train_end)  # Train envelops test
 
@@ -103,7 +105,9 @@ class PurgedKFold(_BaseKFold):
 
         indices = np.arange(X.shape[0])
         mbrg = int(X.shape[0] * self.pct_embargo)
-        test_starts = [(i[0], i[-1] + 1) for i in np.array_split(np.arange(len(X)), self.n_splits)]
+        test_starts = [
+            (i[0], i[-1] + 1) for i in np.array_split(np.arange(len(X)), self.n_splits)
+        ]
 
         for i, j in test_starts:
             t0 = self.t1_index[i]  # start of test set
@@ -111,7 +115,9 @@ class PurgedKFold(_BaseKFold):
             max_t1_idx = np.searchsorted(self.t1_index, self.t1[test_indices].max())
             train_indices = np.searchsorted(self.t1_index, self.t1_index[self.t1 <= t0])
             if max_t1_idx < X.shape[0]:  # right train (with embargo)
-                train_indices = np.concatenate((train_indices, indices[max_t1_idx + mbrg :]))
+                train_indices = np.concatenate(
+                    (train_indices, indices[max_t1_idx + mbrg :])
+                )
             yield train_indices, test_indices
 
 
@@ -122,7 +128,6 @@ class PurgedSplit:
         t1: pd.Series = None,
         test_size_pct=0.25,
     ):
-
         if not isinstance(t1, pd.Series):
             raise ValueError("The t1 param must be a pd.Series")
 
@@ -559,7 +564,9 @@ def analyze_cross_val_scores(
     for i, cm in enumerate(cms, 1):
         if cm.shape == (2, 2):  # Binary classification
             tn, fp, fn, tp = cm.ravel()
-            confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
+            confusion_matrix_breakdown.append(
+                {"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp}
+            )
         else:
             # For multi-class, you might want different handling
             confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
@@ -688,7 +695,9 @@ def analyze_cross_val_scores_calibrated(
     for i, cm in enumerate(cms, 1):
         if cm.shape == (2, 2):
             tn, fp, fn, tp = cm.ravel()
-            confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
+            confusion_matrix_breakdown.append(
+                {"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp}
+            )
         else:
             confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
 

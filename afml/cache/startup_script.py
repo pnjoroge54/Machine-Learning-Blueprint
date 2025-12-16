@@ -168,7 +168,9 @@ def run_startup_checks() -> bool:
     # Check 2: Port availability
     if not check_port_available(80):
         logger.error("❌ Port 80 is not available")
-        logger.info("Try: lsof -i :80  (Linux/Mac) or netstat -ano | findstr :80 (Windows)")
+        logger.info(
+            "Try: lsof -i :80  (Linux/Mac) or netstat -ano | findstr :80 (Windows)"
+        )
         return False
 
     # Check 3: Test cache functionality
@@ -305,7 +307,9 @@ def main_live_mode():
 
                 # Check if we lost connection
                 if not bridge.client_socket:
-                    logger.warning("⚠️  Lost connection to MQL5. Waiting for reconnect...")
+                    logger.warning(
+                        "⚠️  Lost connection to MQL5. Waiting for reconnect..."
+                    )
                     if wait_for_connection(bridge, timeout=30):
                         logger.success("✅ Reconnected to MQL5")
 

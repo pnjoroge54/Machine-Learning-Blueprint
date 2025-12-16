@@ -5,21 +5,14 @@ from sklearn.ensemble import BaggingClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 
+from afml.util.pipelines import MyPipeline, set_pipeline_params
+
 from ..cache.unified_cache_system import (
     cacheable,
     create_cacheable_param_grid,
     reconstruct_param_grid,
 )
 from .cross_validation import PurgedKFold
-
-
-class MyPipeline(Pipeline):
-    """Allows for a sample_weight in fit method"""
-
-    def fit(self, X, y, sample_weight=None, **fit_params):
-        if sample_weight is not None:
-            fit_params[self.steps[-1][0] + "__sample_weight"] = sample_weight
-        return super().fit(X, y, **fit_params)
 
 
 def clf_hyper_fit(
@@ -99,6 +92,9 @@ def clf_hyper_fit(
     # Clone the pipeline to avoid modifying the original
     pipe_clf = clone(pipe_clf)
 
+    # Ensures no issues with oversubscription during parallelization
+    pipe_clf = set_pipeline_params(pipe_clf, n_jobs=1)
+
     # Determine scoring metric
     if set(labels.unique()) == {0, 1}:
         scoring = "f1"  # f1 for meta-labeling
@@ -148,7 +144,7 @@ def clf_hyper_fit(
     # Handle bagging if requested
     if bagging_n_estimators > 0:
         # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
-        base_estimator = clone(best_estimator).set_params(njobs=1)
+        base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
 
         # Create and fit bagging classifier
         bag = BaggingClassifier(
@@ -172,36 +168,7 @@ def clf_hyper_fit(
         return best_estimator, cv_results
 
 
-# Helper function to safely handle n_jobs in pipelines
-def set_pipeline_n_jobs(pipeline, n_jobs_value=1):
-    """
-    Safely set n_jobs for all estimators in a pipeline.
-
-    Parameters
-    ----------
-    pipeline : sklearn.pipeline.Pipeline
-        The pipeline to modify.
-    n_jobs_value : int
-        Value to set for n_jobs.
-
-    Returns
-    -------
-    pipeline : sklearn.pipeline.Pipeline
-        Modified pipeline.
-    """
-    for step_name, estimator in pipeline.named_steps.items():
-        param_key = f"{step_name}__n_jobs"
-        try:
-            # Check if this parameter exists in the pipeline
-            current_params = pipeline.get_params()
-            if param_key in current_params:
-                pipeline.set_params(**{param_key: n_jobs_value})
-        except:
-            pass
-    return pipeline
-
-
-@cacheable()
+@cacheable(auto_versioning=False)
 def clf_hyper_fit_internal(
     features,
     labels,
@@ -221,8 +188,6 @@ def clf_hyper_fit_internal(
 ):
     """
     Cached version of clf_hyper_fit that properly handles scipy distributions.
-
-    This is the FIXED version that will cache properly.
     """
     # Reconstruct param_grid from cacheable version
     param_grid = reconstruct_param_grid(param_grid_cacheable)
@@ -314,21 +279,28 @@ def print_result(clf, n_splits):
     best_scores, best_scores_idx, mean_score_time, mean_fit_time = [], 0, 0.0, 0.0
 
     for i in np.arange(n_splits):
-        best_scores.append(clf.cv_results_["split" + str(i) + "_test_score"][clf.best_index_])
+        best_scores.append(
+            clf.cv_results_["split" + str(i) + "_test_score"][clf.best_index_]
+        )
         idx = np.where(max(best_scores) == best_scores)[0][
             0
         ]  # always + 1 because index starts from 0 as default
 
-    best_scores_idx = (clf.best_index_ + 1) + len(clf.cv_results_["mean_score_time"]) * idx
+    best_scores_idx = (clf.best_index_ + 1) + len(
+        clf.cv_results_["mean_score_time"]
+    ) * idx
     print(
-        f"Best params for estimator: {clf.best_estimator_} \nBest CV Score: {max(best_scores):.6f}\n"
+        f"Best params for estimator: {clf.best_estimator_} \n"
+        f"Best CV Score: {max(best_scores):.6f}\n"
     )
     print(
-        f"A total of {best_scores_idx} was performed before optimal CV score found! (Under split{idx}_test_score / {idx + 1}th split)\n"
+        f"A total of {best_scores_idx} was performed before optimal CV score found! \n"
+        f"(Under split{idx}_test_score / {idx + 1}th split)\n"
     )
 
     print(
-        f"Estimated time taken for entire process: {total_time:.6f} seconds \nTotal number of candidates / nodes: {num_nodes}\n"
+        f"Estimated time taken for entire process: {total_time:.6f} seconds \n"
+        f"Total number of candidates / nodes: {num_nodes}\n"
     )
 
     i = 0
@@ -338,7 +310,9 @@ def print_result(clf, n_splits):
         i += 1
     print("=" * 55)
     print(
-        f"Estimated total mean time required for optimal solution: \n\nScore Time: {mean_score_time:.6f}s \nFit Time:  {mean_fit_time:.6f}s"
+        "Estimated total mean time required for optimal solution: \n\n"
+        f"Score Time: {mean_score_time:.6f}s \n"
+        f"Fit Time:  {mean_fit_time:.6f}s"
     )
 
 

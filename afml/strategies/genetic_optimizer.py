@@ -217,7 +217,8 @@ class TripleBarrierEvaluator:
         self.target_vol_multiplier = target_vol_multiplier
         self.target_vol_params = target_vol_params
         self.target = (
-            get_period_vol(self.close, **target_vol_params).dropna() * target_vol_multiplier
+            get_period_vol(self.close, **target_vol_params).dropna()
+            * target_vol_multiplier
         )
         self.trading_days_per_year = trading_days_per_year
         self.trading_hours_per_day = trading_hours_per_day
@@ -241,8 +242,16 @@ class TripleBarrierEvaluator:
         # Strategy-specific objective weights
         # NOTE: ParetoOptimizer expects to minimize the last weight.
         self.objective_weights = {
-            "mean_reversion": {"sortino_ratio": 0.4, "win_rate": 0.3, "ulcer_index": -0.3},
-            "trend_following": {"calmar_ratio": 0.4, "profit_factor": 0.3, "ulcer_index": -0.3},
+            "mean_reversion": {
+                "sortino_ratio": 0.4,
+                "win_rate": 0.3,
+                "ulcer_index": -0.3,
+            },
+            "trend_following": {
+                "calmar_ratio": 0.4,
+                "profit_factor": 0.3,
+                "ulcer_index": -0.3,
+            },
         }
 
         # Create data fingerprint for cache invalidation
@@ -283,7 +292,9 @@ class TripleBarrierEvaluator:
         Note: data_fingerprint parameter ensures cache invalidation when data changes
         """
         # Create vertical barriers
-        vertical_barriers = add_vertical_barrier(self.t_events, self.close, num_bars=time_horizon)
+        vertical_barriers = add_vertical_barrier(
+            self.t_events, self.close, num_bars=time_horizon
+        )
 
         # Get labeled trades
         events = triple_barrier_labels(
@@ -300,7 +311,9 @@ class TripleBarrierEvaluator:
 
         return events
 
-    def evaluate_performance(self, pt: float, sl: float, time_horizon: int) -> pd.DataFrame:
+    def evaluate_performance(
+        self, pt: float, sl: float, time_horizon: int
+    ) -> pd.DataFrame:
         """
         Evaluate barrier parameters with persistent caching
 
@@ -309,7 +322,9 @@ class TripleBarrierEvaluator:
         :param time_horizon: Vertical barrier in bars
         :return: Labeled trades DataFrame
         """
-        return self._cached_evaluate_performance(pt, sl, time_horizon, self._data_fingerprint)
+        return self._cached_evaluate_performance(
+            pt, sl, time_horizon, self._data_fingerprint
+        )
 
     def _calculate_strategy_metrics_impl(
         self, events: pd.DataFrame, data_fingerprint: str
@@ -463,8 +478,12 @@ class SingleObjectiveOptimizer:
         self.toolbox = base.Toolbox()
 
         # Attribute generators
-        self.toolbox.register("attr_pt", random.uniform, self.bounds["pt"][0], self.bounds["pt"][1])
-        self.toolbox.register("attr_sl", random.uniform, self.bounds["sl"][0], self.bounds["sl"][1])
+        self.toolbox.register(
+            "attr_pt", random.uniform, self.bounds["pt"][0], self.bounds["pt"][1]
+        )
+        self.toolbox.register(
+            "attr_sl", random.uniform, self.bounds["sl"][0], self.bounds["sl"][1]
+        )
         self.toolbox.register(
             "attr_th",
             random.randint,
@@ -480,7 +499,9 @@ class SingleObjectiveOptimizer:
             (self.toolbox.attr_pt, self.toolbox.attr_sl, self.toolbox.attr_th),
             n=1,
         )
-        self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
+        self.toolbox.register(
+            "population", tools.initRepeat, list, self.toolbox.individual
+        )
 
         # Genetic operators
         self.toolbox.register("mate", tools.cxBlend, alpha=0.5)
@@ -492,12 +513,16 @@ class SingleObjectiveOptimizer:
         # Mutate profit_taking
         if random.random() < self.mutation_rate:
             individual[0] += random.gauss(0, 0.01)
-            individual[0] = np.clip(individual[0], self.bounds["pt"][0], self.bounds["pt"][1])
+            individual[0] = np.clip(
+                individual[0], self.bounds["pt"][0], self.bounds["pt"][1]
+            )
 
         # Mutate stop_loss
         if random.random() < self.mutation_rate:
             individual[1] += random.gauss(0, 0.01)
-            individual[1] = np.clip(individual[1], self.bounds["sl"][0], self.bounds["sl"][1])
+            individual[1] = np.clip(
+                individual[1], self.bounds["sl"][0], self.bounds["sl"][1]
+            )
 
         # Mutate time_horizon
         if random.random() < self.mutation_rate:
@@ -603,8 +628,12 @@ class ParetoOptimizer:
         self.toolbox = base.Toolbox()
 
         # Attribute generators
-        self.toolbox.register("attr_pt", random.uniform, self.bounds["pt"][0], self.bounds["pt"][1])
-        self.toolbox.register("attr_sl", random.uniform, self.bounds["sl"][0], self.bounds["sl"][1])
+        self.toolbox.register(
+            "attr_pt", random.uniform, self.bounds["pt"][0], self.bounds["pt"][1]
+        )
+        self.toolbox.register(
+            "attr_sl", random.uniform, self.bounds["sl"][0], self.bounds["sl"][1]
+        )
         self.toolbox.register(
             "attr_th",
             random.randint,
@@ -620,7 +649,9 @@ class ParetoOptimizer:
             (self.toolbox.attr_pt, self.toolbox.attr_sl, self.toolbox.attr_th),
             n=1,
         )
-        self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
+        self.toolbox.register(
+            "population", tools.initRepeat, list, self.toolbox.individual
+        )
 
         # Genetic operators
         self.toolbox.register("mate", tools.cxBlend, alpha=0.5)
@@ -631,11 +662,15 @@ class ParetoOptimizer:
         """Custom mutation with bounds checking"""
         if random.random() < self.mutation_rate:
             individual[0] += random.gauss(0, 0.01)
-            individual[0] = np.clip(individual[0], self.bounds["pt"][0], self.bounds["pt"][1])
+            individual[0] = np.clip(
+                individual[0], self.bounds["pt"][0], self.bounds["pt"][1]
+            )
 
         if random.random() < self.mutation_rate:
             individual[1] += random.gauss(0, 0.01)
-            individual[1] = np.clip(individual[1], self.bounds["sl"][0], self.bounds["sl"][1])
+            individual[1] = np.clip(
+                individual[1], self.bounds["sl"][0], self.bounds["sl"][1]
+            )
 
         if random.random() < self.mutation_rate:
             individual[2] += random.randint(-5, 6)
@@ -712,10 +747,14 @@ class ParetoOptimizer:
                 ind.fitness.values = fit
 
             # Combine parents and offspring
-            population = self.toolbox.select(population + offspring, self.population_size)
+            population = self.toolbox.select(
+                population + offspring, self.population_size
+            )
 
             # Check for convergence
-            front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+            front = tools.sortNondominated(
+                population, len(population), first_front_only=True
+            )[0]
             if len(front) > best_front_size:
                 best_front_size = len(front)
                 no_improve_count = 0
@@ -732,7 +771,9 @@ class ParetoOptimizer:
                 logger.info(f"Gen {gen}: Pareto front size = {len(front)}")
 
         # Extract Pareto front
-        pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+        pareto_front = tools.sortNondominated(
+            population, len(population), first_front_only=True
+        )[0]
 
         # Prepare results
         results = []
@@ -853,7 +894,9 @@ def get_optimal_triple_barrier_labels(
         strategy_name=strategy.get_strategy_name(),
         bar_size=bar_size,
         period=" to ".join(map(str, data.index[[0, -1]])),
-        strategy_params={k: v for k, v in strategy.__dict__.items() if not k.startswith("_")},
+        strategy_params={
+            k: v for k, v in strategy.__dict__.items() if not k.startswith("_")
+        },
         target_vol_params=target_vol_params,
         ga_params={
             "population_size": optimizer.population_size,

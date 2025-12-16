@@ -1,5 +1,6 @@
 """
-This module contains functionality for determining bet sizes for investments based on machine learning predictions.
+This module contains functionality for determining bet sizes for investments based on
+machine learning predictions.
 These implementations are based on bet sizing approaches described in Chapter 10.
 """
 
@@ -81,7 +82,12 @@ def bet_size_dynamic(
     :return: (pandas.DataFrame) Bet size (bet_size), target position (t_pos), and limit price (l_p).
     """
     # Create a dictionary of bet size variables for easier handling.
-    d_vars = {"pos": current_pos, "max_pos": max_pos, "m_p": market_price, "f": forecast_price}
+    d_vars = {
+        "pos": current_pos,
+        "max_pos": max_pos,
+        "m_p": market_price,
+        "f": forecast_price,
+    }
     events_0 = confirm_and_cast_to_df(d_vars)
 
     # Calibrate w.
@@ -95,7 +101,9 @@ def bet_size_dynamic(
         lambda x: limit_price(x.t_pos, x.pos, x.f, w_param, x.max_pos, func), axis=1
     )
     # Compute the bet size.
-    events_0["bet_size"] = events_0.apply(lambda x: bet_size(w_param, x.f - x.m_p, func), axis=1)
+    events_0["bet_size"] = events_0.apply(
+        lambda x: bet_size(w_param, x.f - x.m_p, func), axis=1
+    )
 
     return events_0[["bet_size", "t_pos", "l_p"]]
 
@@ -120,8 +128,12 @@ def bet_size_budget(events_t1, sides):
         events_1["active_long"].max(),
         events_1["active_short"].max(),
     )
-    frac_active_long = events_1["active_long"] / active_long_max if active_long_max > 0 else 0
-    frac_active_short = events_1["active_short"] / active_short_max if active_short_max > 0 else 0
+    frac_active_long = (
+        events_1["active_long"] / active_long_max if active_long_max > 0 else 0
+    )
+    frac_active_short = (
+        events_1["active_short"] / active_short_max if active_short_max > 0 else 0
+    )
     events_1["bet_size"] = frac_active_long - frac_active_short
 
     return events_1
@@ -156,7 +168,7 @@ def bet_size_reserve(
     :param fit_runs: (int) Number of runs to execute when trying to fit the distribution.
     :param epsilon: (float) Error tolerance.
     :param factor: (float) Lambda factor from equations.
-    :param variant: (int) Which algorithm variant to use, 1 or 2.
+    :param variant: (int) The EF3M variant to execute, options are 1: EF3M using first 4 moments, 2: EF3M using first 5 moments.
     :param max_iter: (int) Maximum number of iterations after which to terminate loop.
     :param num_workers: (int) Number of CPU cores to use for multiprocessing execution, set to -1 to use all
      CPU cores. Default is 1.
@@ -169,8 +181,12 @@ def bet_size_reserve(
     # Calculate the concurrent difference in active bets: c_t = <current active long> - <current active short>
     events_active["c_t"] = events_active["active_long"] - events_active["active_short"]
     # Calculate the first 5 centered and raw moments from the c_t distribution.
-    central_mmnts = [moment(events_active["c_t"].to_numpy(), moment=i) for i in range(1, 6)]
-    raw_mmnts = raw_moment(central_moments=central_mmnts, dist_mean=events_active["c_t"].mean())
+    central_mmnts = [
+        moment(events_active["c_t"].to_numpy(), moment=i) for i in range(1, 6)
+    ]
+    raw_mmnts = raw_moment(
+        central_moments=central_mmnts, dist_mean=events_active["c_t"].mean()
+    )
     # Fit the mixture of distributions.
     m2n = M2N(
         raw_mmnts,
@@ -183,7 +199,9 @@ def bet_size_reserve(
     )
     df_fit_results = m2n.mp_fit()
     fit_params = most_likely_parameters(df_fit_results)
-    params_list = [fit_params[key] for key in ["mu_1", "mu_2", "sigma_1", "sigma_2", "p_1"]]
+    params_list = [
+        fit_params[key] for key in ["mu_1", "mu_2", "sigma_1", "sigma_2", "p_1"]
+    ]
     # Calculate the bet size.
     events_active["bet_size"] = events_active["c_t"].apply(
         lambda c: single_bet_size_mixed(c, params_list)
@@ -226,7 +244,9 @@ def confirm_and_cast_to_df(d_vars):
     if any_series and not all_series:
         for k in d_vars:
             if not isinstance(d_vars[k], pd.Series):
-                d_vars[k] = pd.Series(data=np.array([d_vars[k] for i in range(ser_len)]), index=idx)
+                d_vars[k] = pd.Series(
+                    data=np.array([d_vars[k] for i in range(ser_len)]), index=idx
+                )
 
     # Combine Series to form a DataFrame.
     events = pd.concat(list(d_vars.values()), axis=1)
@@ -282,7 +302,9 @@ def cdf_mixture(x_val, parameters):
     :return: (float) CDF of the mixture.
     """
     mu_1, mu_2, sigma_1, sigma_2, p_1 = parameters  # Parameters reassigned for clarity.
-    return p_1 * norm.cdf(x_val, mu_1, sigma_1) + (1 - p_1) * norm.cdf(x_val, mu_2, sigma_2)
+    return p_1 * norm.cdf(x_val, mu_1, sigma_1) + (1 - p_1) * norm.cdf(
+        x_val, mu_2, sigma_2
+    )
 
 
 def single_bet_size_mixed(c_t, parameters):
@@ -295,11 +317,11 @@ def single_bet_size_mixed(c_t, parameters):
     :return: (float) Bet size.
     """
     if c_t >= 0:
-        single_bet_size = (cdf_mixture(c_t, parameters) - cdf_mixture(0, parameters)) / (
-            1 - cdf_mixture(0, parameters)
-        )
+        single_bet_size = (
+            cdf_mixture(c_t, parameters) - cdf_mixture(0, parameters)
+        ) / (1 - cdf_mixture(0, parameters))
     else:
-        single_bet_size = (cdf_mixture(c_t, parameters) - cdf_mixture(0, parameters)) / cdf_mixture(
-            0, parameters
-        )
+        single_bet_size = (
+            cdf_mixture(c_t, parameters) - cdf_mixture(0, parameters)
+        ) / cdf_mixture(0, parameters)
     return single_bet_size

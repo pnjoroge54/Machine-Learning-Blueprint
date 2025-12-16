@@ -1,21 +1,21 @@
+import json
+import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-import joblib
 import numpy as np
 import pandas as pd
-import torch
 from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
 from loguru import logger
 from numba import njit, prange
 from scipy.stats import uniform
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
-from tqdm import tqdm
 
 from ..cache import (
     cacheable,
@@ -23,16 +23,13 @@ from ..cache import (
     log_data_access,
     print_contamination_report,
 )
-from ..cross_validation import (
-    MyPipeline,
-    PurgedKFold,
-    clf_hyper_fit_cached,
-    ml_cross_val_score,
+from ..cross_validation import PurgedKFold, clf_hyper_fit_cached
+from ..cross_validation.hyper_fit_analysis import (
+    generate_hyperparameter_markdown_report,
 )
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
-from ..features.meta_labeling_features import add_meta_label_features
-from ..features.time import get_time_features
+from ..features.trading_session import get_time_features
 from ..labeling.triple_barrier import (
     add_vertical_barrier,
     get_event_weights,
@@ -43,7 +40,9 @@ from ..sample_weights.optimized_attribution import get_weights_by_time_decay_opt
 from ..strategies.signal_processing import get_entries
 from ..strategies.signals import BaseStrategy
 from ..util.misc import value_counts_data
+from ..util.pipelines import make_custom_pipeline, set_pipeline_params
 from ..util.volatility import get_daily_vol
+from .utils import ModelDevelopmentLogger, ModelFileManager
 
 
 class TickDataLoader:
@@ -73,11 +72,20 @@ class TickDataLoader:
         max_cached_symbols : int, optional
             Maximum number of symbols to keep in cache (default: 20)
         """
-        self._cache: Dict[Tuple[str, str], pd.DataFrame] = {}  # (symbol, account_name) -> DataFrame
-        self._cache_metadata: Dict[Tuple[str, str], Dict] = {}  # (symbol, account_name) -> metadata
+        self._cache: Dict[Tuple[str, str], pd.DataFrame] = (
+            {}
+        )  # (symbol, account_name) -> DataFrame
+        self._cache_metadata: Dict[Tuple[str, str], Dict] = (
+            {}
+        )  # (symbol, account_name) -> metadata
         self.max_cache_size_mb = max_cache_size_mb
         self.max_cached_symbols = max_cached_symbols
-        self.cache_stats = {"hits": 0, "misses": 0, "partial_hits": 0, "total_loaded": 0}
+        self.cache_stats = {
+            "hits": 0,
+            "misses": 0,
+            "partial_hits": 0,
+            "total_loaded": 0,
+        }
 
     def get_tick_data(
         self, symbol: str, start_date: str, end_date: str, account_name: str
@@ -138,7 +146,9 @@ class TickDataLoader:
         # No cache hit, load all data
         self.cache_stats["misses"] += 1
         logger.debug(f"Cache miss for {symbol} {start_date} to {end_date}")
-        return self._load_and_cache_data(symbol, start_date, end_date, account_name, cache_key)
+        return self._load_and_cache_data(
+            symbol, start_date, end_date, account_name, cache_key
+        )
 
     def _load_with_partial_cache(
         self,
@@ -175,12 +185,16 @@ class TickDataLoader:
 
         # Check if we need data after cached range
         if end_dt > cached_end:
-            load_ranges.append(((cached_end + timedelta(days=1)).strftime("%Y-%m-%d"), end_date))
+            load_ranges.append(
+                ((cached_end + timedelta(days=1)).strftime("%Y-%m-%d"), end_date)
+            )
 
         # Load missing data ranges
         new_data = []
         for load_start, load_end in load_ranges:
-            logger.info(f"Loading additional data for {symbol}: {load_start} to {load_end}")
+            logger.info(
+                f"Loading additional data for {symbol}: {load_start} to {load_end}"
+            )
             df_part = self._load_data(symbol, load_start, load_end, account_name)
             if not df_part.empty:
                 new_data.append(df_part)
@@ -275,7 +289,9 @@ class TickDataLoader:
         # Check if we have too many symbols
         if len(self._cache) > self.max_cached_symbols:
             # Remove least recently used
-            lru_items = sorted(self._cache_metadata.items(), key=lambda x: x[1]["last_accessed"])
+            lru_items = sorted(
+                self._cache_metadata.items(), key=lambda x: x[1]["last_accessed"]
+            )
 
             for key, _ in lru_items[: len(self._cache) - self.max_cached_symbols]:
                 del self._cache[key]
@@ -288,7 +304,9 @@ class TickDataLoader:
         if total_size > self.max_cache_size_mb:
             # Remove largest items until under limit
             items_by_size = sorted(
-                self._cache_metadata.items(), key=lambda x: x[1]["size_mb"], reverse=True
+                self._cache_metadata.items(),
+                key=lambda x: x[1]["size_mb"],
+                reverse=True,
             )
 
             removed_size = 0
@@ -299,9 +317,13 @@ class TickDataLoader:
                 removed_size += meta["size_mb"]
                 del self._cache[key]
                 del self._cache_metadata[key]
-                logger.debug(f"Removed {key} from cache (size: {meta['size_mb']:.2f}MB)")
+                logger.debug(
+                    f"Removed {key} from cache (size: {meta['size_mb']:.2f}MB)"
+                )
 
-    def clear_cache(self, symbol: Optional[str] = None, account_name: Optional[str] = None):
+    def clear_cache(
+        self, symbol: Optional[str] = None, account_name: Optional[str] = None
+    ):
         """
         Clear cache for specific symbol/account or all cache.
 
@@ -348,7 +370,11 @@ class TickDataLoader:
         """
         total_size = sum(meta["size_mb"] for meta in self._cache_metadata.values())
         total_requests = self.cache_stats["hits"] + self.cache_stats["misses"]
-        hit_rate = (self.cache_stats["hits"] / total_requests * 100) if total_requests > 0 else 0
+        hit_rate = (
+            (self.cache_stats["hits"] / total_requests * 100)
+            if total_requests > 0
+            else 0
+        )
 
         cached_symbols_info = []
         for (symbol, account), meta in self._cache_metadata.items():
@@ -372,7 +398,9 @@ class TickDataLoader:
             "cached_symbols": cached_symbols_info,
         }
 
-    def preload_data(self, symbols: List[str], start_date: str, end_date: str, account_name: str):
+    def preload_data(
+        self, symbols: List[str], start_date: str, end_date: str, account_name: str
+    ):
         """
         Preload data for multiple symbols into cache.
 
@@ -394,63 +422,6 @@ class TickDataLoader:
                 logger.debug(f"Preloaded {symbol}")
             except Exception as e:
                 logger.warning(f"Failed to preload {symbol}: {e}")
-
-    """
-    Loader for tick-level bid/ask data with local caching.
-
-    Notes
-    -----
-    - Uses in-memory cache keyed by (symbol, start_date, end_date, account_name).
-    - Falls back to MT5 fetch if parquet data is missing.
-    """
-
-    def __init__(self):
-        self._cache = {}
-
-    def get_tick_data(self, symbol, start_date, end_date, account_name):
-        """
-        Retrieve tick-level bid/ask data with local caching.
-
-        Parameters
-        ----------
-        symbol : str
-            Trading instrument symbol (e.g., 'EURUSD').
-        start_date : str
-            Start date in 'YYYY-MM-DD' format.
-        end_date : str
-            End date in 'YYYY-MM-DD' format.
-        account_name : str
-            MT5 account identifier for data retrieval.
-
-        Returns
-        -------
-        pd.DataFrame
-            Tick data with columns ['bid', 'ask'] indexed by timestamp.
-
-        Notes
-        -----
-        - Typical performance: ~0.5s for cached retrieval.
-        """
-        key = (symbol, start_date, end_date, account_name)
-        if key in self._cache:
-            return self._cache[key]
-
-        tick_params = dict(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-            account_name=account_name,
-            columns=["bid", "ask"],
-            verbose=False,
-        )
-        df = load_tick_data(**tick_params)
-        if df.empty:
-            logger.info("Data not found on drive, fetching from MT5...")
-            save_data_to_parquet(symbol, start_date, end_date, account_name)
-            df = load_tick_data(**tick_params)
-
-        self._cache[key] = df
-        return df
 
 
 loader = TickDataLoader()
@@ -482,7 +453,7 @@ loader = TickDataLoader()
 #     }
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def get_bar_size(tick_df, bar_size):
     """
     Compute tick-based bar size.
@@ -492,7 +463,7 @@ def get_bar_size(tick_df, bar_size):
     tick_df : pd.DataFrame
         Tick data with bid/ask prices.
     bar_size : str
-        Bar size specification (e.g., '1min', '5min').
+        Bar size specification (e.g., 'M1', 'M5').
 
     Returns
     -------
@@ -573,6 +544,13 @@ def create_feature_engineering_pipeline(
             Function that computes features from a DataFrame.
         - params : dict
             Parameters passed to `func`.
+    data_config:
+        Data configuration.
+        Expected keys:
+        - bar_size : str
+            Bar size using MT5 naming conventions, e.g., M1, H1, D1.
+        - bar_type : str
+            Bar type should be one of "time", "tick", "volume", "dollar"
 
     Returns
     -------
@@ -721,33 +699,11 @@ def weighted_estimator(base_estimator, events, data_index):
     return EstimatorWithWeights()
 
 
-@cacheable()
-def get_best_weighting_scheme(
-    classifier, X, y, cv_gen, sample_weight, scheme, best_scheme, best_score
-):
-    cv_scores = ml_cross_val_score(
-        classifier,
-        X,
-        y,
-        cv_gen,
-        sample_weight_train=sample_weight,
-        sample_weight_score=sample_weight,
-        scoring="f1",
-    )
-    score = cv_scores.mean()
-    best_score = max(score, best_score)
-    if best_scheme is None or score == best_score:
-        best_scheme = scheme
-    return best_scheme, best_score
-
-
-# Use the weighted estimator to perform a RandomizedSearchCV
 @cacheable(time_aware=True)
-def get_best_sample_weight(
+def find_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
     features: pd.DataFrame,
-    cv_splits: int,
 ) -> pd.Series:
     """
     Compute best sample weight with time decay.
@@ -760,8 +716,6 @@ def get_best_sample_weight(
         Event labels with uniqueness weights.
     features: pd.DataFrame
         Training features
-    cv_splits: int
-        Cross-validation splits
 
     Returns
     -------
@@ -774,40 +728,55 @@ def get_best_sample_weight(
 
     X = features.loc[valid_index]
     y = cont["bin"]
+    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
 
     classifier = RandomForestClassifier(
         criterion="entropy",
         class_weight="balanced_subsample",
-        max_samples=cont["tW"].mean().round(6),
+        max_samples=cont["tW"].mean(),
         max_depth=6,
         min_weight_fraction_leaf=0.05,
         random_state=7,
     )
-
     est = weighted_estimator(classifier, cont, data_index)
+
+    cv_gen = PurgedKFold(n_splits=3, t1=cont["t1"], pct_embargo=0.01)
+    gs = GridSearchCV(
+        est,
+        param_grid={"scheme": ["unweighted", "return", "uniqueness"]},
+        cv=cv_gen,
+        scoring=scoring,
+        n_jobs=-1,
+        refit=False,
+    )
+    gs.fit(X, y)
+
     param_distributions = {
-        "scheme": ["unweighted", "return", "uniqueness"],
+        "scheme": [gs.best_params_["scheme"]],
         "decay": uniform(0, 1),  # decay factor between 0 and 1 inclusive
         "linear": [True, False],
     }
-    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
-    # cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
-    search = RandomizedSearchCV(
+    gs = RandomizedSearchCV(
         est,
         param_distributions,
-        n_iter=20,
-        cv=cv_splits,  # The overhead isn't worth purging the data
-        random_state=42,
+        n_iter=10,
+        cv=cv_gen,
         scoring=scoring,
         n_jobs=-1,
+        random_state=42,
+        refit=False,
     )
-    search.fit(X, y)
-    params = search.best_params_
+    gs.fit(X, y)
+
+    params = gs.best_params_
     scheme = params["scheme"]
     decay = params["decay"]
     linear = params["linear"]
-    best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay:.6f}"
-    logger.info(f"Best Weighting Scheme: {' '.join(best_scheme.split('_')).title()}")
+    best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay}"
+    msg = " ".join(best_scheme.split("_")).title()[
+        : 7 - len(str(decay))
+    ]  # Display to 6 decimal places
+    logger.info(f"Best Weighting Scheme: {msg}")
 
     decay_vec = get_weights_by_time_decay_optimized(
         triple_barrier_events=cont,
@@ -824,7 +793,14 @@ def get_best_sample_weight(
     else:
         weights = decay_vec
 
-    return weights, best_scheme
+    cv_results = {
+        "best_params": gs.best_params_,
+        "best_score": gs.best_score_,
+        "cv_results": pd.DataFrame(gs.cv_results_),
+        "scoring": scoring,
+    }
+
+    return weights, cv_results, best_scheme
 
 
 @njit(parallel=True, fastmath=True, cache=True)
@@ -888,7 +864,9 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
         if window > len(y_true):
             continue
 
-        accuracy, precision, recall, f1 = _rolling_metrics_numba(y_true, y_pred, weights, window)
+        accuracy, precision, recall, f1 = _rolling_metrics_numba(
+            y_true, y_pred, weights, window
+        )
 
         metrics[f"rolling_accuracy_{window}"] = accuracy
         metrics[f"rolling_precision_{window}"] = precision
@@ -989,347 +967,6 @@ def train_model_with_cv(
     return best_model, cv_results
 
 
-def make_custom_pipeline(pipe_clf):
-    if not isinstance(pipe_clf, Pipeline):
-        return MyPipeline([("clf", pipe_clf)])
-    elif isinstance(pipe_clf, Pipeline):
-        return MyPipeline(pipe_clf.steps)
-    else:
-        return pipe_clf
-
-
-def generate_metadata(config, metrics, features_columns):
-    """Metadata for saved model"""
-
-    metadata = {}
-    metadata.update(config)
-    metadata.update(metrics)
-    metadata["features_columns"] = features_columns
-    return metadata
-
-
-def develop_production_model(
-    symbol: str,
-    train_start: str,
-    train_end: str,
-    strategy: BaseStrategy,
-    data_config: Dict,
-    feature_config: Dict,
-    label_config: Dict,
-    model_params: Dict,
-    cache_reports: bool = False,
-    save: bool = True,
-) -> Tuple[RandomForestClassifier, List[str], Dict]:
-    """
-    End-to-end production model development pipeline with aggressive caching.
-
-    Parameters
-    ----------
-    symbol : str
-        Trading instrument symbol.
-    train_start : str
-        Training start date ('YYYY-MM-DD').
-    train_end : str
-        Training end date ('YYYY-MM-DD').
-    strategy: BaseStrategy
-        signal generating strategy
-    data_config : dict
-        Bar construction config. Keys:
-        - bar_type : str ('tick', 'volume', 'time')
-        - bar_size : int or str
-        - price : str ('bid', 'ask', 'mid')
-    feature_config : dict
-        Feature engineering config. Keys:
-        - func : callable
-        - params : dict
-    label_config : dict
-        Triple-barrier labeling config. Keys:
-        - target_lookback : int
-        - strategy : BaseStrategy
-        - profit_target : float
-        - stop_loss : float
-        - max_holding_period : dict
-        - min_ret : float
-        - vertical_barrier_zero : bool
-        - filter_as_series : bool
-    model_params : dict
-        Configuration for model training and cross-validation.
-        Expected keys:
-        - pipe_clf : sklearn.Pipeline
-            Pipeline including classifier named as "clf", e.g., Pipeline([("clf", RandomForestClassifier)]).
-        - param_grid : dict
-            Hyperparameter grid for search.
-        - cv_splits : int, optional (default=5)
-            Number of CV splits.
-        - bagging_n_estimators : int, optional (default=0)
-            Number of bagging estimators.
-        - bagging_max_samples : float, optional (default=1.0)
-            Max samples for bagging.
-        - bagging_max_features : float, optional (default=1.0)
-            Max features for bagging.
-        - rnd_search_iter : int, optional (default=0)
-            Randomized search iterations.
-        - n_jobs : int, optional (default=-1)
-            Parallel jobs.
-        - pct_embargo : float, optional (default=0.01)
-            Embargo percentage for purging CV splits.
-        - random_state : int, optional
-            Random seed.
-    cache_reports : bool, optional (default=False)
-        Display cache reports.
-    save : bool, optional (default=True)
-        Save model and metadata.
-
-    Returns
-    -------
-    model : RandomForestClassifier
-        Trained best model.
-    features : list of str
-        Names of engineered features.
-    metrics : dict
-        Dictionary containing:
-        - 'cv_results' : cross-validation results
-        - 'feature_importance' : ranked feature importance DataFrame
-        - 'training_samples' : number of samples used
-        - 'feature_count' : number of features generated
-
-    Notes
-    -----
-    Config dictionaries must include the following keys:
-
-    - data_config : {'bar_type', 'bar_size', 'price'}
-    - feature_config : {'func', 'params'}
-    - label_config : {'target_lookback', 'strategy', 'profit_target', 'stop_loss', ...}
-    - model_params : {'pipe_clf', 'param_grid', 'cv_splits', ...}
-
-    See individual function docstrings for detailed argument descriptions.
-    """
-
-    print("\n" + "=" * 70)
-    print("PRODUCTION MODEL DEVELOPMENT PIPELINE")
-    print("=" * 70)
-
-    print("\nConfiguration")
-    print("-" * 50)
-    config = {
-        "strategy": strategy,
-        "strategy_name": strategy.get_strategy_name(),
-        "symbol": symbol,
-        "train_start": train_start,
-        "train_end": train_end,
-    }
-    config.update(data_config)
-    config.update(label_config)
-    print(pd.Series(config).to_string())
-
-    # Step 1: Load data (tracked for contamination)
-    print("\n[Step 1/7] Loading training data...")
-    data = load_and_prepare_training_data(symbol, train_start, train_end, **data_config)
-    print(f"✓ Loaded {len(data):,} samples from {train_start} to {train_end}")
-
-    # Step 2: Feature engineering  (cached)
-    print("\n[Step 2/7] Computing features...")
-    features = create_feature_engineering_pipeline(data, feature_config, data_config)
-    print(f"✓ Generated {len(features.columns)} features")
-
-    # Step 3: Label generation (cached)
-    print("\n[Step 3/7] Generating events...")
-    events = generate_events_triple_barrier(data, strategy, **label_config)
-    print(f"✓ Generated events: \n{value_counts_data(events['bin'])}")
-    print(f"\nAverage Uniqueness: {events['tW'].mean():.4f}")
-
-    # Step 4: Sample weights (cached)
-    print("\n[Step 4/7] Computing sample weights...")
-    sample_weight, best_weighting_scheme = get_best_sample_weight(data, events, features)
-
-    # Step 5: Rolling meta-label features (cached)
-    print("\n[Step 5/7] Computing rolling meta-label features...")
-    meta_features = calculate_rolling_metrics(events, sample_weight)
-    features = features.join(meta_features, how="inner").dropna()
-    preprocessor = Pipeline(
-        [
-            ("dcf", DropConstantFeatures()),
-            ("ddf", DropDuplicateFeatures()),
-        ]
-    )
-    features = preprocessor.fit_transform(features)
-    events = events.reindex(features.index)  # Align indices
-    print(f"✓ Computed rolling meta-label features")
-
-    # Step 6: Model training with CV (cached)
-    print("\n[Step 6/7] Training model with cross-validation...")
-
-    # Set max_samples to average uniqueness for tree-based classifiers
-    pipe = model_params["pipe_clf"]
-    av_uniqueness = events["tW"].mean().round(6)
-    if isinstance(pipe, Pipeline) and is_tree(pipe):
-        pipe.set_params(**{f"{pipe.steps[-1][0]}_max_samples": av_uniqueness})
-    elif is_tree(pipe):
-        pipe.set_params(max_samples=av_uniqueness)
-
-    if isinstance(pipe, SequentiallyBootstrappedBaggingClassifier):
-        pipe.set_params(samples_info_sets=events["t1"], price_bars_index=data.index)
-
-    model_params["pipe_clf"] = make_custom_pipeline(pipe)
-
-    best_model, cv_results = train_model_with_cv(features, events, sample_weight, **model_params)
-    best_model.steps[-1][1].set_params(n_jobs=-1)
-    print(f"✓ Best CV score: {cv_results['best_score']:.4f}")
-    print(f"✓ Best params: {cv_results['best_params']}")
-
-    # Step 6: Feature importance analysis
-    print("\n[Step 7/7] Analyzing feature importance...")
-    features_columns = (
-        best_model[:-1].get_feature_names_out()
-        if len(best_model) > 1
-        else features.columns.to_list()
-    )
-    feature_importance = pd.DataFrame(
-        {
-            "feature": features_columns,
-            "importance": best_model.steps[-1][1].feature_importances_,
-        }
-    ).sort_values("importance", ascending=False)
-    print("\nTop 10 Features:")
-    print(feature_importance.head(10).to_string(index=False))
-
-    if cache_reports:
-        # Cache performance report
-        print("\n" + "=" * 70)
-        print("CACHE PERFORMANCE REPORT")
-        print("=" * 70)
-        monitor = get_cache_monitor()
-        monitor.print_health_report()
-
-        # Data contamination check
-        print("\n" + "=" * 70)
-        print("DATA CONTAMINATION CHECK")
-        print("=" * 70)
-        print_contamination_report()
-
-    metrics = {
-        "cv_results": cv_results,
-        "feature_importance": feature_importance,
-        "training_samples": len(data),
-        "feature_count": len(features_columns),
-        "best_weighting_scheme": best_weighting_scheme,
-    }
-    if save:
-        root = Path.home()
-        save_path = (
-            root / "Models" / config["strategy"] / symbol / config["bar_type"] / config["bar_size"]
-        )
-        metadata = generate_metadata(config, metrics, features_columns)
-        save_model(best_model, metadata, save_path)
-
-    return best_model, features_columns, metrics, config
-
-
-def save_model(model, metadata=None, path="models"):
-    """
-    Save a trained model with reproducible metadata using pathlib.
-    """
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
-
-    try:
-        name = type(model.steps[-1][1]).__name__
-        framework = type(model.steps[-1][1]).__module__.split(".")[0].lower()
-    except:
-        name = type(model).__name__
-        framework = type(model).__module__.split(".")[0].lower()
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{name}_{framework}_{timestamp}"
-
-    if framework == "sklearn":
-        filepath = path / f"{filename}.pkl"
-        joblib.dump({"model": model, "metadata": metadata}, filepath)
-    elif framework == "pytorch":
-        filepath = path / f"{filename}.pth"
-        torch.save({"state_dict": model.state_dict(), "metadata": metadata}, filepath)
-    elif framework == "keras":
-        filepath = path / f"{filename}.keras"
-        model.save(filepath)
-        if metadata:
-            meta_path = path / f"{filename}_meta.pkl"
-            joblib.dump(metadata, meta_path)
-    else:
-        raise ValueError("Unsupported framework")
-
-    logger.success(f"Saved model to {filepath}")
-    return filepath
-
-
-def load_model(filepath, model_class=None):
-    """
-    Load a previously saved machine learning model using pathlib.
-
-    This function infers the framework (scikit-learn, PyTorch, or Keras)
-    from the filename convention (e.g., "name_framework_timestamp.ext"),
-    then loads the corresponding model and any associated metadata.
-
-    Parameters
-    ----------
-    filepath : str or pathlib.Path
-        Path to the saved model file. The filename must follow the convention
-        "<name>_<framework>_<timestamp>.<ext>", where <framework> is one of
-        {"sklearn", "pytorch", "keras"}.
-    model_class : callable, optional
-        Required only for PyTorch models. A class or factory function that
-        instantiates the model architecture before loading weights.
-
-    Returns
-    -------
-    tuple
-        (model, metadata) where:
-        - model : the loaded model object (scikit-learn estimator,
-          PyTorch nn.Module, or Keras Model).
-        - metadata : dict or None, containing any auxiliary information
-          saved alongside the model (e.g., hyperparameters, dataset version).
-
-    Raises
-    ------
-    ValueError
-        If the framework cannot be determined or is unsupported.
-    RuntimeError
-        If loading a Keras model fails; the original exception is chained.
-
-    Notes
-    -----
-    - Scikit-learn models are loaded via joblib and include metadata inline.
-    - PyTorch models require `model_class` to reconstruct the architecture
-      before loading the saved state_dict.
-    - Keras models are loaded via `keras.models.load_model`; metadata is
-      stored separately in a "<stem>_meta.pkl" file if present.
-    - For reproducibility, ensure filenames are generated consistently
-      during saving (see `save_model` helper).
-    """
-    framework = str(filepath).split("_")[1]
-    filepath = Path(filepath)
-
-    if framework == "sklearn":
-        obj = joblib.load(filepath)
-        return obj["model"], obj.get("metadata")
-    elif framework == "pytorch":
-        checkpoint = torch.load(filepath)
-        model = model_class()
-        model.load_state_dict(checkpoint["state_dict"])
-        return model, checkpoint.get("metadata")
-    elif framework == "keras":
-        try:
-            from tensorflow import keras
-
-            model = keras.models.load_model(filepath)
-            meta_path = filepath.with_name(filepath.stem + "_meta.pkl")
-            metadata = joblib.load(meta_path) if meta_path.exists() else None
-            return model, metadata
-        except Exception as e:
-            raise RuntimeError("Pipeline failed") from e
-    else:
-        raise ValueError("Unsupported framework")
-
-
 class ModelDevelopmentPipeline:
     """
     Encapsulates the entire production model development pipeline,
@@ -1341,7 +978,7 @@ class ModelDevelopmentPipeline:
         symbol: str,
         train_start: str,
         train_end: str,
-        strategy,
+        strategy: BaseStrategy,
         data_config: dict,
         feature_config: dict,
         label_config: dict,
@@ -1369,8 +1006,8 @@ class ModelDevelopmentPipeline:
             Triple-barrier labeling configuration.
         model_params : dict
             Model training configuration.
-        account_name : str, optional
-            MT5 account identifier (default: "default").
+        base_dir: str
+            Path to save pipeline data
         """
         # Configuration
         self.symbol = symbol
@@ -1381,9 +1018,7 @@ class ModelDevelopmentPipeline:
         self.feature_config = feature_config
         self.label_config = label_config
         self.model_params = model_params
-
-        # File management
-        self.file_manager = ModelFileManager(base_dir)
+        self.account_name = data_config.get("account_name", "default")
 
         # Build complete config
         self.config = {
@@ -1391,16 +1026,21 @@ class ModelDevelopmentPipeline:
             "symbol": symbol,
             "training_start": train_start,
             "training_end": train_end,
-            "account_name": data_config.get("account_name", "default"),
+            "account_name": self.account_name,
         }
         self.config.update(data_config)
         self.config.update(label_config)
 
-        # Set up directory structure
+        # Initialize file management and logging
+        self.file_manager = ModelFileManager(base_dir)
         self.file_paths = self.file_manager.setup_model_directory(self.config)
 
+        # Initialize structured logger (for pipeline steps only)
+        self.step_logger = ModelDevelopmentLogger(
+            f"pipeline_{self.symbol}_{train_start}_{train_end}"
+        )
+
         # Storage for intermediate results
-        self.tick_data = None
         self.bar_data = None
         self.features = None
         self.events = None
@@ -1411,6 +1051,7 @@ class ModelDevelopmentPipeline:
         self.preprocessed_features = None
         self.best_model = None
         self.cv_results = None
+        self.weight_cv_results = None
         self.feature_importance = None
         self.metrics = None
         self.training_metadata = None
@@ -1426,49 +1067,62 @@ class ModelDevelopmentPipeline:
             "analysis": False,
         }
 
-        # Log file
+        # Log file setup
         self.log_file = self.file_paths["logs"] / "pipeline.log"
         self._setup_logging()
 
-        # Ensure CV is not done on the same splits to prevent overfitting
         self.cv_splits = model_params["cv_splits"]
 
-        # Ensure we don't overfit by performing CV on the same data
-        if self.cv_splits > 3:
-            self.cv_splits_weights = self.cv_splits + 1
-            self.cv_splits_calibration = self.cv_splits - 1
-        else:
-            self.cv_splits_weights = self.cv_splits + 2
-            self.cv_splits_calibration = self.cv_splits + 1
-
     def _setup_logging(self):
-        """Set up logging to file."""
-        import logging
+        """Set up logging to file using loguru with colors in console."""
 
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[logging.FileHandler(self.log_file), logging.StreamHandler()],
+        logger.remove()
+
+        # File sink (no colors, structured logs)
+        logger.add(
+            self.log_file,
+            level="INFO",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}",
+            rotation="10 MB",
+            retention="7 days",
+            enqueue=True,
         )
-        self.logger = logging.getLogger(self.__class__.__name__)
 
-        # Log configuration
+        # Console sink (colors enabled automatically)
+        logger.add(
+            sys.stdout,
+            level="INFO",
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<cyan>{name}</cyan> | "
+            "<level>{level}</level> | "
+            "<yellow>{message}</yellow>",
+            colorize=True,
+        )
+
+        self.logger = logger.bind(context=self.__class__.__name__)
+
         self.logger.info(f"Starting pipeline for {self.symbol}")
         self.logger.info(f"Training period: {self.train_start} to {self.train_end}")
         self.logger.info(f"Output directory: {self.file_paths['base_dir']}")
 
-    def run_full_pipeline(
-        self, cache_reports: bool = False, save_artifacts: bool = True, verbose: bool = True
+    def run(
+        self,
+        generate_reports: bool = True,
+        cache_reports: bool = False,
+        save: bool = True,
+        verbose: bool = True,
     ) -> Tuple[RandomForestClassifier, List[str], Dict]:
         """
-        Run the complete model development pipeline.
+        Run the complete model development pipeline with integrated reporting.
 
         Parameters
         ----------
+        generate_reports : bool, optional
+            Generate analysis reports (default: True).
         cache_reports : bool, optional
-            Display cache reports (default: False).
-        save_artifacts : bool, optional
-            Save model and metadata (default: True).
+            Display cache performance reports (default: False).
+        save : bool, optional
+            Save model and artifacts (default: True).
         verbose : bool, optional
             Print progress information (default: True).
 
@@ -1477,100 +1131,536 @@ class ModelDevelopmentPipeline:
         tuple
             (best_model, features_columns, metrics, config)
         """
+        time0 = time.time()
+
         if verbose:
             print("\n" + "=" * 70)
             print("PRODUCTION MODEL DEVELOPMENT PIPELINE")
             print("=" * 70)
-            print(f"\nConfiguration")
+            print("\nConfiguration")
             print("-" * 50)
-
-        # Create configuration summary
-        self.config = {
-            "strategy": self.strategy.get_strategy_name(),
-            "symbol": self.symbol,
-            "account_name": self.account_name,
-            "train_start": self.train_start,
-            "train_end": self.train_end,
-        }
-        self.config.update(self.data_config)
-        self.config.update(self.label_config)
-
-        if verbose:
             print(pd.Series(self.config).to_string())
 
-        # Step 1: Load data
-        if verbose:
-            print("\n[Step 1/7] Loading training data...")
-        self.load_training_data()
-        if verbose:
-            print(
-                f"✓ Loaded {len(self.bar_data):,} samples from {self.train_start} to {self.train_end}"
+        # Log pipeline start
+        self.step_logger.log_step_start(
+            "pipeline_start",
+            {
+                "symbol": self.symbol,
+                "train_period": f"{self.train_start}_{self.train_end}",
+                "strategy": self.config["strategy"],
+            },
+        )
+
+        try:
+            # Step 1: Load data
+            if verbose:
+                print("\n[Step 1/7] Loading training data...")
+            step_time = time.time()
+            self.load_training_data()
+            step_duration = time.time() - step_time
+            self.step_logger.log_step_complete(
+                "data_loading",
+                metrics={"samples": len(self.bar_data)},
+                duration=step_duration,
+            )
+            if verbose:
+                print(f"✓ Loaded {len(self.bar_data):,} samples")
+
+            # Step 2: Feature engineering
+            if verbose:
+                print("\n[Step 2/7] Computing features...")
+            step_time = time.time()
+            self.engineer_features()
+            step_duration = time.time() - step_time
+            self.step_logger.log_step_complete(
+                "feature_engineering",
+                metrics={"features_generated": len(self.features.columns)},
+                duration=step_duration,
+            )
+            if verbose:
+                print(f"✓ Generated {len(self.features.columns)} features")
+
+            # Step 3: Label generation
+            if verbose:
+                print("\n[Step 3/7] Generating events...")
+            step_time = time.time()
+            self.generate_labels()
+            step_duration = time.time() - step_time
+            self.step_logger.log_step_complete(
+                "label_generation",
+                metrics={
+                    "events_generated": len(self.events),
+                    "label_distribution": value_counts_data(self.events["bin"]),
+                    "average_uniqueness": float(self.events["tW"].mean()),
+                },
+                duration=step_duration,
+            )
+            if verbose:
+                print(f"✓ Generated events: \n{value_counts_data(self.events['bin'])}")
+                print(f"\nAverage Uniqueness: {self.events['tW'].mean():.4f}")
+
+            # Step 4: Sample weights
+            if verbose:
+                print("\n[Step 4/7] Computing sample weights...")
+            step_time = time.time()
+            self.compute_sample_weights()
+            step_duration = time.time() - step_time
+            self.step_logger.log_step_complete(
+                "weight_computation",
+                metrics={
+                    "weighting_scheme": self.best_weighting_scheme,
+                    "weight_cv_score": self.weight_cv_results["best_score"],
+                },
+                duration=step_duration,
+            )
+            if verbose:
+                print(f"✓ Best weighting scheme: {self.best_weighting_scheme}")
+
+            # Step 5: Rolling meta-label features
+            if verbose:
+                print("\n[Step 5/7] Computing rolling meta-label features...")
+            step_time = time.time()
+            self.add_meta_features()
+            self.preprocess_features()
+            step_duration = time.time() - step_time
+            self.step_logger.log_step_complete(
+                "meta_features_preprocessing",
+                metrics={
+                    "meta_features_added": len(self.meta_features.columns),
+                    "features_after_preprocessing": len(
+                        self.preprocessed_features.columns
+                    ),
+                    "features_removed": len(self.features.columns)
+                    - len(self.preprocessed_features.columns),
+                },
+                duration=step_duration,
+            )
+            if verbose:
+                print("✓ Computed rolling meta-label features")
+                print(
+                    f"✓ Preprocessed features: {len(self.preprocessed_features.columns)} features retained"
+                )
+
+            # Step 6: Model training
+            if verbose:
+                print("\n[Step 6/7] Training model with cross-validation...")
+            step_time = time.time()
+            self.train_model()
+            step_duration = time.time() - step_time
+            self.step_logger.log_step_complete(
+                "model_training",
+                metrics={
+                    "cv_score": self.cv_results["best_score"],
+                    "best_params": self.cv_results["best_params"],
+                    "n_splits": self.cv_splits,
+                },
+                duration=step_duration,
+            )
+            if verbose:
+                print(f"✓ Best CV score: {self.cv_results['best_score']:.4f}")
+                print(f"✓ Best params: {self.cv_results['best_params']}")
+
+            # Step 7: Feature importance analysis
+            if verbose:
+                print("\n[Step 7/7] Analyzing feature importance...")
+            step_time = time.time()
+            self.analyze_features()
+            step_duration = time.time() - step_time
+            self.step_logger.log_step_complete(
+                "feature_analysis",
+                metrics={"top_feature": self.feature_importance.iloc[0]["feature"]},
+                duration=step_duration,
+            )
+            if verbose:
+                print("\nTop 10 Features:")
+                print(self.feature_importance.head(10).to_string(index=False), "\n")
+
+            # Compile metrics
+            self._compile_metrics()
+
+            # Generate reports if requested
+            if generate_reports:
+                if verbose:
+                    print("\n[Generating Reports] Creating analysis reports...")
+                step_time = time.time()
+                self._generate_analysis_reports()
+                step_duration = time.time() - step_time
+                if verbose:
+                    print(f"✓ Reports generated in {step_duration:.2f}s")
+
+            # Cache reports (optional)
+            if cache_reports:
+                self._display_cache_reports()
+
+            # Save artifacts
+            if save and self.best_model is not None:
+                if verbose:
+                    print("\n[Saving] Writing artifacts to disk...")
+                self._save_all_artifacts()
+                if verbose:
+                    print(f"✓ Saved to {self.file_paths['base_dir']}")
+
+            # Log pipeline completion
+            pipeline_duration = time.time() - time0
+            self.step_logger.log_step_complete(
+                "pipeline_complete",
+                metrics={
+                    "total_duration": pipeline_duration,
+                    "model_trained": True,
+                    "reports_generated": generate_reports,
+                },
+                duration=pipeline_duration,
             )
 
-        # Step 2: Feature engineering
-        if verbose:
-            print("\n[Step 2/7] Computing features...")
-        self.engineer_features()
-        if verbose:
-            print(f"✓ Generated {len(self.features.columns)} features")
+            if verbose:
+                duration_str = pd.Timedelta(seconds=pipeline_duration).round("1s")
+                duration_str = str(duration_str).replace("0 days ", "")
+                print(f"\n✓ Pipeline completed in {duration_str}")
+                print("=" * 70)
 
-        # Step 3: Label generation
-        if verbose:
-            print("\n[Step 3/7] Generating events...")
-        self.generate_labels()
-        if verbose:
-            print(f"✓ Generated events: \n{value_counts_data(self.events['bin'])}")
-            print(f"\nAverage Uniqueness: {self.events['tW'].mean():.4f}")
-
-        # Step 4: Sample weights
-        if verbose:
-            print("\n[Step 4/7] Computing sample weights...")
-        self.compute_sample_weights()
-
-        # Step 5: Rolling meta-label features
-        if verbose:
-            print("\n[Step 5/7] Computing rolling meta-label features...")
-        self.add_meta_features()
-        self.preprocess_features()
-        if verbose:
-            print(f"✓ Computed rolling meta-label features")
-            print(
-                f"✓ Preprocessed features: {len(self.preprocessed_features.columns)} features retained"
+            return (
+                self.best_model,
+                self._get_feature_names(),
+                self.metrics,
+                self.config,
             )
 
-        # Step 6: Model training
-        if verbose:
-            print("\n[Step 6/7] Training model with cross-validation...")
-        self.train_model()
-        if verbose:
-            print(f"✓ Best CV score: {self.cv_results['best_score']:.4f}")
-            print(f"✓ Best params: {self.cv_results['best_params']}")
+        except Exception as e:
+            self.step_logger.logger.error(
+                "pipeline_failed",
+                error=str(e),
+                traceback=str(e),
+            )
+            logger.error(f"Pipeline failed: {e}")
+            raise
 
-        # Step 7: Feature importance analysis
-        if verbose:
-            print("\n[Step 7/7] Analyzing feature importance...")
-        self.analyze_features()
-        if verbose:
-            print("\nTop 10 Features:")
-            print(self.feature_importance.head(10).to_string(index=False))
+    def _generate_analysis_reports(self):
+        """Generate comprehensive analysis reports."""
+        try:
+            # 1. Generate hyperparameter analysis report
+            if self.cv_results and "cv_results" in self.cv_results:
+                cv_results_df = pd.DataFrame(self.cv_results["cv_results"])
 
-        # Cache reports
-        if cache_reports:
-            self._display_cache_reports()
+                report_path = (
+                    self.file_paths["reports"] / "hyperparameter_analysis_report.md"
+                )
 
-        # Compile metrics
-        self._compile_metrics()
+                generate_hyperparameter_markdown_report(
+                    cv_results=cv_results_df,
+                    strategy_config=self.config,
+                    filename=report_path,
+                    target_metric="mean_test_score",
+                    stability_threshold=0.03,
+                )
 
-        if save_artifacts and self.best_model is not None:
-            # Save model
+                logger.info(f"Generated hyperparameter report: {report_path}")
+
+            # 2. Generate feature importance plot
+            if self.feature_importance is not None:
+                import matplotlib.pyplot as plt
+
+                plt.style.use("dark_background")
+                fig, ax = plt.subplots(figsize=(12, 8))
+
+                top_features = self.feature_importance.head(20)
+
+                ax.barh(range(len(top_features)), top_features["importance"][::-1])
+                ax.set_yticks(range(len(top_features)))
+                ax.set_yticklabels(top_features["feature"][::-1])
+                ax.set_xlabel("Importance")
+                ax.set_title(f"Top 20 Feature Importance - {self.symbol}")
+                plt.tight_layout()
+
+                plot_path = self.file_paths["plots"] / "feature_importance.png"
+                plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+                plt.close()
+
+                logger.info(f"Generated feature importance plot: {plot_path}")
+
+            # 3. Generate training summary HTML
+            self._generate_training_summary_html()
+
+        except Exception as e:
+            logger.warning(f"Report generation failed: {e}")
+
+    def _generate_training_summary_html(self):
+        """Generate comprehensive HTML training summary."""
+        try:
+            # Safely get counts
+            def safe_len(obj):
+                """Safely get length of an object."""
+                if obj is None:
+                    return 0
+                if isinstance(obj, (list, tuple)):
+                    return len(obj)
+                if isinstance(obj, (pd.DataFrame, pd.Series)):
+                    return len(obj)
+                if isinstance(obj, np.ndarray):
+                    return obj.shape[0] if len(obj.shape) > 0 else 0
+                try:
+                    return len(obj)
+                except:
+                    return 0
+
+            # Get safe values
+            n_bar_data = safe_len(self.bar_data)
+            n_events = safe_len(self.events)
+            n_features = len(self._get_feature_names()) if self.best_model else 0
+            cv_score = (
+                self.cv_results.get("best_score", 0.0) if self.cv_results else 0.0
+            )
+
+            # Safe config access
+            strategy_name = self.config.get("strategy", "Unknown")
+
+            html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Training Summary - {self.symbol}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+        }}
+        .header {{
+            background-color: #2d2d30;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }}
+        .section {{
+            background-color: #252526;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }}
+        th, td {{
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #3e3e42;
+        }}
+        th {{
+            background-color: #2d2d30;
+            font-weight: bold;
+        }}
+        .metric {{
+            display: inline-block;
+            margin: 10px 20px 10px 0;
+        }}
+        .metric-label {{
+            color: #808080;
+            font-size: 0.9em;
+        }}
+        .metric-value {{
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #4ec9b0;
+        }}
+        h1, h2 {{ color: #4ec9b0; }}
+        .success {{ color: #4ec9b0; }}
+        .warning {{ color: #ce9178; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Training Summary: {self.symbol}</h1>
+        <p><strong>Strategy:</strong> {strategy_name}</p>
+        <p><strong>Training Period:</strong> {self.train_start} to {self.train_end}</p>
+        <p><strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+    </div>
+
+    <div class="section">
+        <h2>Key Metrics</h2>
+        <div class="metric">
+            <div class="metric-label">CV Score</div>
+            <div class="metric-value">{cv_score:.4f}</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Features</div>
+            <div class="metric-value">{n_features}</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Training Samples</div>
+            <div class="metric-value">{n_bar_data:,}</div>
+        </div>
+        <div class="metric">
+            <div class="metric-label">Events</div>
+            <div class="metric-value">{n_events:,}</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Configuration</h2>
+        <table>
+            <tr><th>Parameter</th><th>Value</th></tr>
+"""
+
+            # Safely iterate config
+            for key, value in self.config.items():
+                # Handle complex types
+                if isinstance(value, (dict, list, tuple)):
+                    value_str = str(value)[:100]  # Truncate long values
+                else:
+                    value_str = str(value)
+                html_content += (
+                    f"            <tr><td>{key}</td><td>{value_str}</td></tr>\n"
+                )
+
+            html_content += """
+        </table>
+    </div>
+"""
+
+            # Best model parameters (if available)
+            if self.cv_results and "best_params" in self.cv_results:
+                html_content += """
+    <div class="section">
+        <h2>Best Model Parameters</h2>
+        <table>
+            <tr><th>Parameter</th><th>Value</th></tr>
+"""
+                for key, value in self.cv_results["best_params"].items():
+                    value_str = str(value)[:100]  # Truncate long values
+                    html_content += (
+                        f"            <tr><td>{key}</td><td>{value_str}</td></tr>\n"
+                    )
+
+                html_content += """
+        </table>
+    </div>
+"""
+
+            # Feature importance (if available)
+            if self.feature_importance is not None and len(self.feature_importance) > 0:
+                html_content += """
+    <div class="section">
+        <h2>Top 10 Features</h2>
+        <table>
+            <tr><th>Rank</th><th>Feature</th><th>Importance</th></tr>
+"""
+                for i, row in self.feature_importance.head(10).iterrows():
+                    html_content += f"""            <tr>
+                <td>{i+1}</td>
+                <td>{row['feature']}</td>
+                <td>{row['importance']:.6f}</td>
+            </tr>
+"""
+                html_content += """
+        </table>
+    </div>
+"""
+
+            # Label distribution (if events available)
+            if self.events is not None and len(self.events) > 0:
+                html_content += """
+    <div class="section">
+        <h2>Label Distribution</h2>
+        <table>
+            <tr><th>Label</th><th>Count</th><th>Percentage</th></tr>
+"""
+                try:
+                    label_counts = self.events["bin"].value_counts()
+                    total_labels = label_counts.values.sum()
+                    for label, count in label_counts.sort_index().items():
+                        pct = (count / total_labels) if total_labels > 0 else 0
+                        html_content += f"""            <tr>
+                <td>{label}</td>
+                <td>{count:,}</td>
+                <td>{pct:.1%}</td>
+            </tr>
+"""
+                except Exception as e:
+                    logger.debug(f"Could not generate label distribution: {e}")
+                    html_content += """            <tr>
+                <td colspan="3">Label distribution unavailable</td>
+            </tr>
+"""
+
+                html_content += """
+        </table>
+    </div>
+"""
+
+            # Sample weighting (if available)
+            if self.best_weighting_scheme and self.events is not None:
+                html_content += f"""
+    <div class="section">
+        <h2>Sample Weighting</h2>
+        <p><strong>Best Scheme:</strong> <span class="success">{self.best_weighting_scheme}</span></p>
+"""
+                try:
+                    avg_uniqueness = (
+                        self.events["tW"].mean() if "tW" in self.events.columns else 0
+                    )
+                    html_content += f"        <p><strong>Average Uniqueness:</strong> {avg_uniqueness:.4f}</p>\n"
+                except:
+                    pass
+
+                if self.weight_cv_results:
+                    weight_score = self.weight_cv_results.get("best_score", 0)
+                    html_content += f"        <p><strong>Weight CV Score:</strong> {weight_score:.4f}</p>\n"
+
+                html_content += """
+    </div>
+"""
+
+            # Pipeline steps
+            html_content += """
+    <div class="section">
+        <h2>Pipeline Steps</h2>
+        <table>
+            <tr><th>Step</th><th>Status</th></tr>
+"""
+
+            for step, completed in self.completed_steps.items():
+                status = (
+                    '<span class="success">✅ Completed</span>'
+                    if completed
+                    else '<span class="warning">❌ Not Run</span>'
+                )
+                step_name = step.replace("_", " ").title()
+                html_content += (
+                    f"            <tr><td>{step_name}</td><td>{status}</td></tr>\n"
+                )
+
+            html_content += """
+        </table>
+    </div>
+</body>
+</html>
+"""
+
+            html_path = self.file_paths["reports"] / "training_summary.html"
+            html_path.write_text(html_content)
+
+            logger.info(f"Generated training summary: {html_path}")
+
+        except Exception as e:
+            logger.warning(f"HTML summary generation failed: {e}")
+            import traceback
+
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+
+    def _save_all_artifacts(self):
+        """Save all pipeline artifacts using ModelFileManager."""
+        try:
+            # Save model with metadata
             metadata = {
                 "cv_results": self.cv_results,
                 "feature_importance": self.feature_importance.to_dict("records"),
-                "training_samples": len(self.bar_data) if self.bar_data is not None else 0,
+                "training_samples": len(self.bar_data),
                 "best_weighting_scheme": self.best_weighting_scheme,
-                "pipeline_version": "1.0",
+                "pipeline_version": "2.0",
+                "weight_cv_results": self.weight_cv_results,
             }
-
             self.file_manager.save_model(self.best_model, metadata)
 
             # Save metrics
@@ -1585,27 +1675,29 @@ class ModelDevelopmentPipeline:
                 self.events.to_parquet(self.file_paths["events"])
 
             if self.feature_importance is not None:
-                self.feature_importance.to_csv(self.file_paths["feature_importance"], index=False)
+                self.feature_importance.to_csv(
+                    self.file_paths["feature_importance"], index=False
+                )
 
-            self.logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
+            # Save sample weights
+            if self.sample_weight is not None:
+                self.sample_weight.to_frame("weight").to_parquet(
+                    self.file_paths["weights"]
+                )
 
-        return (self.best_model, self._get_feature_names(), self.metrics, self.config)
+            logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
+
+        except Exception as e:
+            logger.error(f"Failed to save artifacts: {e}")
+            raise
 
     def load_training_data(self):
         """Step 1: Load tick data and construct bars."""
-        self.tick_data = loader.get_tick_data(
-            self.symbol, self.train_start, self.train_end, self.account_name
-        )
-
         self.bar_data = load_and_prepare_training_data(
             symbol=self.symbol,
             start_date=self.train_start,
             end_date=self.train_end,
             **self.data_config,
-            # account_name=self.account_name,
-            # bar_type=self.data_config["bar_type"],
-            # bar_size=self.data_config["bar_size"],
-            # price=self.data_config["price"],
         )
         self.completed_steps["data_loading"] = True
 
@@ -1625,8 +1717,8 @@ class ModelDevelopmentPipeline:
 
     def compute_sample_weights(self):
         """Step 4: Compute optimal sample weights."""
-        self.sample_weight, self.best_weighting_scheme = get_best_sample_weight(
-            self.bar_data.index, self.events, self.features, self.cv_splits_weights
+        self.sample_weight, self.weight_cv_results, self.best_weighting_scheme = (
+            find_optimal_sample_weight(self.bar_data.index, self.events, self.features)
         )
         self.completed_steps["weight_computation"] = True
 
@@ -1655,43 +1747,34 @@ class ModelDevelopmentPipeline:
     def train_model(self):
         """Step 6: Train model with cross-validation."""
         # Configure pipeline
+        self.model_params["pipe_clf"] = make_custom_pipeline(
+            self.model_params["pipe_clf"]
+        )
         pipe = self.model_params["pipe_clf"]
+        self.base_estimator = pipe.steps[-1][1]
 
-        if is_tree(pipe):
-            av_uniqueness = self.events["tW"].mean().round(4)
-            pipe.set_params(max_samples=av_uniqueness)
+        if is_tree(self.base_estimator):
+            av_uniqueness = self.events["tW"].mean()
+            pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
 
         if isinstance(pipe, SequentiallyBootstrappedBaggingClassifier):
-            pipe.set_params(
-                samples_info_sets=self.events["t1"], price_bars_index=self.bar_data.index
+            pipe = set_pipeline_params(
+                samples_info_sets=self.events["t1"],
+                price_bars_index=self.bar_data.index,
             )
 
-        # Set max_samples distribution in param_grid from average uniqueness to 1
-        elif isinstance(pipe, Pipeline) and isinstance(
-            pipe.steps[-1][1], SequentiallyBootstrappedBaggingClassifier
-        ):
-            name = pipe.steps[-1][0]
-            pipe.set_params(
-                **{
-                    f"{name}__samples_info_sets": self.events["t1"],
-                    f"{name}__price_bars_index": self.bar_data.index,
-                }
-            )
-
-            # if self.model_params["rnd_search_iter"] > 0:
-            #     self.model_params["param_grid"][f"{name}__max_samples"] = uniform(loc=av_uniqueness, scale=1 - av_uniqueness)
-            # else:
-            #     self.model_params["param_grid"][f"{name}__max_samples"] = np.linspace(av_uniqueness, 1, 3).tolist()
-
-        self.model_params["pipe_clf"] = make_custom_pipeline(pipe)
+        self.model_params["pipe_clf"] = pipe
 
         # Train model
         self.best_model, self.cv_results = train_model_with_cv(
-            self.preprocessed_features, self.events, self.sample_weight, **self.model_params
+            self.preprocessed_features,
+            self.events,
+            self.sample_weight,
+            **self.model_params,
         )
 
         # Set n_jobs for production use
-        self.best_model.steps[-1][1].set_params(n_jobs=-1)
+        self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
         self.completed_steps["model_training"] = True
 
     def analyze_features(self):
@@ -1722,7 +1805,9 @@ class ModelDevelopmentPipeline:
             "label_distribution": value_counts_data(self.events["bin"]),
             "average_uniqueness": self.events["tW"].mean(),
             "sample_weight_stats": (
-                self.sample_weight.describe().to_dict() if self.sample_weight is not None else None
+                self.sample_weight.describe().to_dict()
+                if self.sample_weight is not None
+                else None
             ),
             "events_count": len(self.events),
             "features_shape": self.preprocessed_features.shape,
@@ -1752,43 +1837,11 @@ class ModelDevelopmentPipeline:
         print("=" * 70)
         print_contamination_report()
 
-    def _save_model(self):
-        """Save the trained model and metadata."""
-        if self.best_model is None:
-            logger.warning("No model to save. Run the pipeline first.")
-            return
-
-        # Create metadata
-        metadata = generate_metadata(self.config, self.metrics, self._get_feature_names())
-
-        # Determine save path
-        root = Path.home()
-        save_path = (
-            root
-            / "Models"
-            / self.config["strategy"]
-            / self.symbol
-            / self.config["bar_type"]
-            / self.config["bar_size"]
-        )
-
-        # Save model
-        save_model(self.best_model, metadata, save_path)
-
     def get_data_summary(self) -> pd.DataFrame:
-        """
-        Get a summary of all stored data.
-
-        Returns
-        -------
-        pd.DataFrame
-            Summary of data dimensions and types.
-        """
+        """Get a summary of all stored data."""
         summary_data = []
 
-        # Add each data component
         components = [
-            ("tick_data", self.tick_data),
             ("bar_data", self.bar_data),
             ("features", self.features),
             ("preprocessed_features", self.preprocessed_features),
@@ -1818,7 +1871,9 @@ class ModelDevelopmentPipeline:
                         "Type": dtype,
                         "Rows": shape[0] if isinstance(shape, tuple) else shape,
                         "Columns": (
-                            shape[1] if isinstance(shape, tuple) and len(shape) > 1 else columns
+                            shape[1]
+                            if isinstance(shape, tuple) and len(shape) > 1
+                            else columns
                         ),
                         "Memory (MB)": (
                             data.memory_usage(deep=True).sum() / (1024**2)
@@ -1831,14 +1886,7 @@ class ModelDevelopmentPipeline:
         return pd.DataFrame(summary_data)
 
     def get_performance_metrics(self) -> Dict:
-        """
-        Get comprehensive performance metrics.
-
-        Returns
-        -------
-        dict
-            Dictionary containing all performance metrics.
-        """
+        """Get comprehensive performance metrics."""
         return {
             "model_performance": self.cv_results,
             "feature_analysis": self.feature_importance.to_dict(orient="records"),
@@ -1852,14 +1900,7 @@ class ModelDevelopmentPipeline:
         }
 
     def plot_feature_importance(self, top_n: int = 20):
-        """
-        Plot feature importance.
-
-        Parameters
-        ----------
-        top_n : int, optional
-            Number of top features to plot (default: 20).
-        """
+        """Plot feature importance."""
         if self.feature_importance is None:
             raise ValueError("Feature importance not computed. Run the pipeline first.")
 
@@ -1867,6 +1908,7 @@ class ModelDevelopmentPipeline:
 
         top_features = self.feature_importance.head(top_n)
 
+        plt.style.use("dark_background")
         plt.figure(figsize=(12, 8))
         plt.barh(range(len(top_features)), top_features["importance"][::-1])
         plt.yticks(range(len(top_features)), top_features["feature"][::-1])
@@ -1876,14 +1918,7 @@ class ModelDevelopmentPipeline:
         plt.show()
 
     def export_results(self, export_dir: Union[str, Path]):
-        """
-        Export all pipeline results to files.
-
-        Parameters
-        ----------
-        export_dir : str or Path
-            Directory to export results to.
-        """
+        """Export all pipeline results to files."""
         export_dir = Path(export_dir)
         export_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1895,19 +1930,18 @@ class ModelDevelopmentPipeline:
             self.features.to_parquet(export_dir / "features.parquet")
 
         if self.preprocessed_features is not None:
-            self.preprocessed_features.to_parquet(export_dir / "preprocessed_features.parquet")
+            self.preprocessed_features.to_parquet(
+                export_dir / "preprocessed_features.parquet"
+            )
 
         if self.events is not None:
             self.events.to_parquet(export_dir / "events.parquet")
 
         # Export metadata
-        import json
-
         with open(export_dir / "config.json", "w") as f:
             json.dump(self.config, f, indent=2, default=str)
 
         with open(export_dir / "metrics.json", "w") as f:
-            # Convert non-serializable objects
             metrics_serializable = {}
             for key, value in self.metrics.items():
                 if isinstance(value, pd.DataFrame):
@@ -1920,824 +1954,8 @@ class ModelDevelopmentPipeline:
 
         # Export feature importance
         if self.feature_importance is not None:
-            self.feature_importance.to_csv(export_dir / "feature_importance.csv", index=False)
-
-        logger.success(f"Exported all results to {export_dir}")
-
-
-# Example usage:
-def develop_production_model_with_class(
-    symbol: str,
-    train_start: str,
-    train_end: str,
-    strategy: BaseStrategy,
-    data_config: Dict,
-    feature_config: Dict,
-    label_config: Dict,
-    model_params: Dict,
-    cache_reports: bool = False,
-    save: bool = True,
-    account_name: str = "default",
-) -> Tuple[RandomForestClassifier, List[str], Dict]:
-    """
-    Wrapper function for backward compatibility.
-
-    Uses the ModelDevelopmentPipeline class internally.
-    """
-    pipeline = ModelDevelopmentPipeline(
-        symbol=symbol,
-        train_start=train_start,
-        train_end=train_end,
-        strategy=strategy,
-        data_config=data_config,
-        feature_config=feature_config,
-        label_config=label_config,
-        model_params=model_params,
-        account_name=account_name,
-    )
-
-    return pipeline.run_full_pipeline(cache_reports=cache_reports, save_model=save, verbose=True)
-
-
-class ModelDevelopmentCache:
-    """
-    Cache for model development pipeline with dictionary-based keys.
-    """
-
-    def __init__(self):
-        self._pipelines = {}  # config key -> ModelDevelopmentPipeline
-        self._results = {}  # config key -> results
-
-    @staticmethod
-    def create_config_key(base_config, param_grid):
-        """
-        Create a hashable key from configuration.
-
-        Parameters
-        ----------
-        base_config : dict
-            Base configuration dictionary
-        param_grid : dict
-            Parameter grid with lists of values
-
-        Returns
-        -------
-        tuple
-            Hashable key
-        """
-        import json
-
-        def normalize_value(v):
-            """Normalize values for hashing."""
-            if isinstance(v, (list, tuple)):
-                return tuple(normalize_value(x) for x in v)
-            elif isinstance(v, dict):
-                return tuple(sorted((k, normalize_value(v2)) for k, v2 in v.items()))
-            elif hasattr(v, "__dict__"):
-                # For objects, use class name and string representation
-                return (type(v).__name__, str(v))
-            else:
-                return v
-
-        # Normalize both dictionaries
-        normalized_base = normalize_value(base_config)
-        normalized_grid = normalize_value(param_grid)
-
-        # Create tuple key
-        return (normalized_base, normalized_grid)
-
-    def store_pipeline(self, base_config, param_grid, pipeline):
-        """Store a pipeline in cache."""
-        key = self.create_config_key(base_config, param_grid)
-        self._pipelines[key] = pipeline
-
-    def get_pipeline(self, base_config, param_grid):
-        """Retrieve pipeline from cache."""
-        key = self.create_config_key(base_config, param_grid)
-        return self._pipelines.get(key)
-
-    def store_results(self, base_config, param_grid, results):
-        """Store results in cache."""
-        key = self.create_config_key(base_config, param_grid)
-        self._results[key] = results
-
-    def get_results(self, base_config, param_grid):
-        """Retrieve results from cache."""
-        key = self.create_config_key(base_config, param_grid)
-        return self._results.get(key)
-
-    def find_similar_configs(self, base_config, param_grid, threshold=0.8):
-        """
-        Find configurations similar to the given one.
-        Useful for parameter analysis.
-        """
-        from difflib import SequenceMatcher
-
-        current_key_str = str(self.create_config_key(base_config, param_grid))
-        similar = []
-
-        for key in self._pipelines.keys():
-            key_str = str(key)
-            similarity = SequenceMatcher(None, current_key_str, key_str).ratio()
-            if similarity >= threshold:
-                similar.append((key, similarity, self._pipelines[key]))
-
-        return sorted(similar, key=lambda x: x[1], reverse=True)
-
-
-class ConfigPathGenerator:
-    """
-    Generates filenames and directory structures based on configuration parameters.
-    Creates human-readable, navigable paths for model storage and analysis.
-    """
-
-    def __init__(self, base_dir: str = "Models"):
-        """
-        Initialize the path generator.
-
-        Parameters
-        ----------
-        base_dir : str, optional
-            Base directory for all models (default: "Models").
-        """
-        self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-
-    def sanitize_filename(self, text: str) -> str:
-        """
-        Sanitize text to be safe for filenames.
-
-        Parameters
-        ----------
-        text : str
-            Text to sanitize.
-
-        Returns
-        -------
-        str
-            Sanitized filename-safe string.
-        """
-        # Replace problematic characters
-        replacements = {
-            "/": "_",
-            "\\": "_",
-            ":": "-",
-            "*": "",
-            "?": "",
-            '"': "",
-            "<": "",
-            ">": "",
-            "|": "",
-            " ": "_",
-            ".": "_",
-        }
-
-        result = str(text)
-        for old, new in replacements.items():
-            result = result.replace(old, new)
-
-        # Limit length
-        if len(result) > 100:
-            result = result[:100]
-
-        return result
-
-    def create_config_hash(self, config: dict) -> str:
-        """
-        Create a short hash from configuration for unique identification.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary.
-
-        Returns
-        -------
-        str
-            8-character hash string.
-        """
-        config_str = json.dumps(config, sort_keys=True, default=str)
-        return hashlib.md5(config_str.encode()).hexdigest()[:8]
-
-    def format_date_range(self, start_date: str, end_date: str) -> str:
-        """
-        Format date range for directory names.
-
-        Parameters
-        ----------
-        start_date : str
-            Start date in 'YYYY-MM-DD' format.
-        end_date : str
-            End date in 'YYYY-MM-DD' format.
-
-        Returns
-        -------
-        str
-            Formatted date range string.
-        """
-        # Convert to YYYYMMDD format
-        start_clean = start_date.replace("-", "")
-        end_clean = end_date.replace("-", "")
-        return f"{start_clean}_{end_clean}"
-
-    def create_directory_structure(self, config: dict) -> Path:
-        """
-        Create directory structure based on configuration.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary. Expected keys:
-            - strategy : str (strategy name)
-            - symbol : str (trading symbol)
-            - bar_type : str (bar type)
-            - bar_size : str or int (bar size)
-            - training_start : str (start date)
-            - training_end : str (end date)
-            - [optional] account_name : str
-            - [optional] price : str
-            - [optional] target_lookback : int
-            - [optional] profit_target : float
-            - [optional] stop_loss : float
-
-        Returns
-        -------
-        Path
-            Path object for the created directory.
-        """
-        # Extract key parameters
-        strategy = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
-        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
-        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
-        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
-        account_name = self.sanitize_filename(config.get("account_name", "default"))
-
-        # Create date range string
-        date_range = self.format_date_range(
-            config.get("training_start", "UnknownStart"), config.get("training_end", "UnknownEnd")
-        )
-
-        # Create config hash for uniqueness
-        config_hash = self.create_config_hash(config)
-
-        # Build directory path
-        dir_path = (
-            self.base_dir
-            / strategy
-            / symbol
-            / account_name
-            / bar_type
-            / bar_size
-            / date_range
-            / config_hash
-        )
-
-        # Create directory
-        dir_path.mkdir(parents=True, exist_ok=True)
-
-        return dir_path
-
-    def generate_filename(
-        self,
-        config: dict,
-        file_type: str,
-        include_timestamp: bool = True,
-        include_config_summary: bool = True,
-    ) -> str:
-        """
-        Generate descriptive filename based on configuration.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary.
-        file_type : str
-            Type of file (e.g., 'model', 'features', 'events', 'metrics', 'config').
-        include_timestamp : bool, optional
-            Include timestamp in filename (default: True).
-        include_config_summary : bool, optional
-            Include config summary in filename (default: True).
-
-        Returns
-        -------
-        str
-            Generated filename.
-        """
-        # Extract key parameters
-        strategy = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
-        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
-        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
-        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
-
-        # Create config summary if requested
-        if include_config_summary:
-            # Include key parameters in filename
-            summary_parts = [
-                f"sym-{symbol}",
-                f"bar-{bar_type}-{bar_size}",
-            ]
-
-            # Add optional parameters if they exist
-            optional_params = ["price", "target_lookback", "profit_target", "stop_loss"]
-            for param in optional_params:
-                if param in config:
-                    value = self.sanitize_filename(str(config[param]))
-                    summary_parts.append(f"{param}-{value}")
-
-            summary = "_".join(summary_parts)
-        else:
-            summary = f"{strategy}_{symbol}"
-
-        # Add timestamp if requested
-        if include_timestamp:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{file_type}_{summary}_{timestamp}"
-        else:
-            filename = f"{file_type}_{summary}"
-
-        # Add appropriate extension
-        extensions = {
-            "model": ".pkl",
-            "features": ".parquet",
-            "events": ".parquet",
-            "metrics": ".json",
-            "config": ".json",
-            "feature_importance": ".csv",
-            "weights": ".parquet",
-            "plot": ".png",
-            "report": ".html",
-            "log": ".log",
-        }
-
-        extension = extensions.get(file_type, ".dat")
-        return filename + extension
-
-    def create_model_filename(self, config: dict, model_type: str = "rf") -> str:
-        """
-        Create filename for model files.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary.
-        model_type : str, optional
-            Type of model (default: "rf" for RandomForest).
-
-        Returns
-        -------
-        str
-            Model filename.
-        """
-        # Create comprehensive model filename
-        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
-        strategy = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
-        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
-        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
-
-        # Date range
-        date_range = self.format_date_range(
-            config.get("training_start", "UnknownStart"), config.get("training_end", "UnknownEnd")
-        )
-
-        # Optional parameters
-        param_parts = []
-        optional_params = ["profit_target", "stop_loss", "target_lookback"]
-        for param in optional_params:
-            if param in config:
-                value = self.sanitize_filename(str(config[param]))
-                param_parts.append(f"{param[0:2]}-{value}")
-
-        params_str = "_".join(param_parts) if param_parts else "default"
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        filename = f"{model_type}_{strategy}_{symbol}_{bar_type}_{bar_size}_{date_range}_{params_str}_{timestamp}.pkl"
-
-        return filename
-
-    def create_summary_filename(self, config: dict, analysis_type: str = "summary") -> str:
-        """
-        Create filename for summary/analysis files.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary.
-        analysis_type : str, optional
-            Type of analysis (default: "summary").
-
-        Returns
-        -------
-        str
-            Summary filename.
-        """
-        symbol = self.sanitize_filename(config.get("symbol", "UnknownSymbol")).upper()
-        bar_type = self.sanitize_filename(config.get("bar_type", "UnknownBarType"))
-        bar_size = self.sanitize_filename(str(config.get("bar_size", "UnknownSize")))
-
-        date_range = self.format_date_range(
-            config.get("training_start", "UnknownStart"), config.get("training_end", "UnknownEnd")
-        )
-
-        timestamp = datetime.now().strftime("%Y%m%d")
-
-        return f"{analysis_type}_{symbol}_{bar_type}_{bar_size}_{date_range}_{timestamp}.html"
-
-    def get_standard_file_paths(self, config: dict) -> dict:
-        """
-        Get standard file paths for all model artifacts.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary.
-
-        Returns
-        -------
-        dict
-            Dictionary with standard file paths.
-        """
-        # Create directory structure
-        base_dir = self.create_directory_structure(config)
-
-        # Generate filenames
-        model_filename = self.create_model_filename(config)
-        config_filename = self.generate_filename(config, "config", include_timestamp=False)
-        metrics_filename = self.generate_filename(config, "metrics")
-        features_filename = self.generate_filename(config, "features")
-        events_filename = self.generate_filename(config, "events")
-        feature_importance_filename = self.generate_filename(config, "feature_importance")
-        weights_filename = self.generate_filename(config, "weights")
-
-        return {
-            "base_dir": base_dir,
-            "model": base_dir / model_filename,
-            "config": base_dir / config_filename,
-            "metrics": base_dir / metrics_filename,
-            "features": base_dir / features_filename,
-            "events": base_dir / events_filename,
-            "feature_importance": base_dir / feature_importance_filename,
-            "weights": base_dir / weights_filename,
-            "logs": base_dir / "logs",
-            "plots": base_dir / "plots",
-            "reports": base_dir / "reports",
-        }
-
-    def create_navigation_index(self, config: dict, file_paths: dict = None) -> str:
-        """
-        Create HTML navigation index for easy browsing of model artifacts.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary.
-        file_paths : dict, optional
-            Dictionary of file paths.
-
-        Returns
-        -------
-        str
-            HTML index content.
-        """
-        if file_paths is None:
-            file_paths = self.get_standard_file_paths(config)
-
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Model Artifacts - {config.get('symbol', 'Unknown')}</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                .header {{ background-color: #f4f4f4; padding: 20px; border-radius: 5px; }}
-                .config {{ background-color: #e8f4f8; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-                .files {{ background-color: #f9f9f9; padding: 15px; border-radius: 5px; }}
-                .file-item {{ margin: 10px 0; padding: 10px; border-left: 4px solid #007bff; }}
-                h1 {{ color: #333; }}
-                h2 {{ color: #555; }}
-                pre {{ background-color: #f8f9fa; padding: 10px; border-radius: 3px; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>Model Artifacts</h1>
-                <p>Generated on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-            </div>
-            
-            <div class="config">
-                <h2>Configuration</h2>
-                <pre>{json.dumps(config, indent=2, default=str)}</pre>
-            </div>
-            
-            <div class="files">
-                <h2>Files</h2>
-        """
-
-        # Add file links
-        for file_type, file_path in file_paths.items():
-            if isinstance(file_path, Path):
-                if file_path.is_dir():
-                    html += f'<div class="file-item"><strong>{file_type}:</strong> {file_path.name}/ (directory)</div>'
-                else:
-                    html += f'<div class="file-item"><strong>{file_type}:</strong> <a href="{file_path.name}">{file_path.name}</a></div>'
-
-        html += """
-            </div>
-        </body>
-        </html>
-        """
-
-        # Save HTML index
-        index_path = file_paths["base_dir"] / "index.html"
-        index_path.write_text(html)
-
-        return html
-
-
-class ModelFileManager:
-    """
-    Manages file operations for model development with organized structure.
-    """
-
-    def __init__(self, base_dir: str = "Models"):
-        """
-        Initialize file manager.
-
-        Parameters
-        ----------
-        base_dir : str, optional
-            Base directory for all models (default: "Models").
-        """
-        self.path_generator = ConfigPathGenerator(base_dir)
-        self.current_paths = None
-
-    def setup_model_directory(self, config: dict) -> dict:
-        """
-        Set up directory structure for a model.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary.
-
-        Returns
-        -------
-        dict
-            Dictionary of file paths.
-        """
-        self.current_paths = self.path_generator.get_standard_file_paths(config)
-
-        # Create subdirectories
-        for subdir in ["logs", "plots", "reports"]:
-            self.current_paths[subdir].mkdir(exist_ok=True)
-
-        # Save configuration
-        self.save_config(config)
-
-        # Create navigation index
-        self.path_generator.create_navigation_index(config, self.current_paths)
-
-        return self.current_paths
-
-    def save_config(self, config: dict):
-        """Save configuration to file."""
-        if self.current_paths:
-            config_path = self.current_paths["config"]
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2, default=str)
-
-    def save_model(self, model, metadata: dict = None):
-        """Save model with metadata."""
-        if self.current_paths:
-            import joblib
-
-            save_data = {
-                "model": model,
-                "metadata": metadata or {},
-                "save_timestamp": datetime.now().isoformat(),
-                "config_path": str(self.current_paths["config"]),
-            }
-
-            joblib.dump(save_data, self.current_paths["model"])
-
-    def save_metrics(self, metrics: dict):
-        """Save metrics to file."""
-        if self.current_paths:
-            import json
-
-            with open(self.current_paths["metrics"], "w") as f:
-                json.dump(metrics, f, indent=2, default=str)
-
-    def save_dataframe(self, df, name: str):
-        """Save DataFrame to appropriate format."""
-        if self.current_paths and name in self.current_paths:
-            df.to_parquet(self.current_paths[name])
-
-    def get_model_info(self, model_path: Path) -> dict:
-        """
-        Get information about a saved model.
-
-        Parameters
-        ----------
-        model_path : Path
-            Path to model file.
-
-        Returns
-        -------
-        dict
-            Model information.
-        """
-        # Extract info from filename and directory structure
-        parts = model_path.parts
-
-        info = {
-            "file_path": str(model_path),
-            "file_name": model_path.name,
-            "strategy": parts[-7] if len(parts) >= 7 else "Unknown",
-            "symbol": parts[-6] if len(parts) >= 6 else "Unknown",
-            "account": parts[-5] if len(parts) >= 5 else "Unknown",
-            "bar_type": parts[-4] if len(parts) >= 4 else "Unknown",
-            "bar_size": parts[-3] if len(parts) >= 3 else "Unknown",
-            "date_range": parts[-2] if len(parts) >= 2 else "Unknown",
-            "config_hash": parts[-1] if len(parts) >= 1 else "Unknown",
-        }
-
-        # Parse filename for more details
-        filename_parts = model_path.stem.split("_")
-        if len(filename_parts) >= 6:
-            info.update(
-                {
-                    "model_type": filename_parts[0],
-                    "strategy_from_file": filename_parts[1],
-                    "symbol_from_file": filename_parts[2],
-                    "bar_type_from_file": filename_parts[3],
-                    "bar_size_from_file": filename_parts[4],
-                    "date_range_from_file": filename_parts[5],
-                }
+            self.feature_importance.to_csv(
+                export_dir / "feature_importance.csv", index=False
             )
 
-        return info
-
-    def find_models(self, search_criteria: dict = None, base_dir: str = None) -> list:
-        """
-        Find models matching search criteria.
-
-        Parameters
-        ----------
-        search_criteria : dict, optional
-            Dictionary of search criteria.
-        base_dir : str, optional
-            Base directory to search (default: configured base_dir).
-
-        Returns
-        -------
-        list
-            List of matching model files with their info.
-        """
-        if base_dir is None:
-            base_dir = self.path_generator.base_dir
-
-        search_dir = Path(base_dir)
-        model_files = list(search_dir.rglob("*.pkl"))
-
-        results = []
-        for model_file in model_files:
-            info = self.get_model_info(model_file)
-
-            # Apply search criteria if provided
-            if search_criteria:
-                match = True
-                for key, value in search_criteria.items():
-                    if key in info and info[key] != value:
-                        match = False
-                        break
-                if not match:
-                    continue
-
-            results.append(info)
-
-        return results
-
-
-# Updated ModelDevelopmentPipeline with integrated file management
-class ModelDevelopmentPipeline:
-    """
-    Enhanced pipeline with integrated file management.
-    """
-
-    def __init__(
-        self,
-        symbol: str,
-        train_start: str,
-        train_end: str,
-        strategy,
-        data_config: dict,
-        feature_config: dict,
-        label_config: dict,
-        model_params: dict,
-        base_dir: str = "Models",
-    ):
-        """
-        Initialize pipeline with configuration and file management.
-        """
-        # Configuration
-        self.symbol = symbol
-        self.train_start = train_start
-        self.train_end = train_end
-        self.strategy = strategy
-        self.data_config = data_config
-        self.feature_config = feature_config
-        self.label_config = label_config
-        self.model_params = model_params
-
-        # File management
-        self.file_manager = ModelFileManager(base_dir)
-
-        # Build complete config
-        self.config = {
-            "strategy": strategy.get_strategy_name(),
-            "symbol": symbol,
-            "training_start": train_start,
-            "training_end": train_end,
-            "account_name": data_config.get("account_name", "default"),
-        }
-        self.config.update(data_config)
-        self.config.update(label_config)
-
-        # Set up directory structure
-        self.file_paths = self.file_manager.setup_model_directory(self.config)
-
-        # Storage for intermediate results
-        self.tick_data = None
-        self.bar_data = None
-        self.features = None
-        self.events = None
-        self.sample_weight = None
-        self.best_weighting_scheme = None
-        self.weighting_schemes = None
-        self.meta_features = None
-        self.preprocessed_features = None
-        self.best_model = None
-        self.cv_results = None
-        self.feature_importance = None
-        self.metrics = None
-
-        # Log file
-        self.log_file = self.file_paths["logs"] / "pipeline.log"
-        self._setup_logging()
-
-    def _setup_logging(self):
-        """Set up logging to file."""
-        import logging
-
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[logging.FileHandler(self.log_file), logging.StreamHandler()],
-        )
-        self.logger = logging.getLogger(self.__class__.__name__)
-
-        # Log configuration
-        self.logger.info(f"Starting pipeline for {self.symbol}")
-        self.logger.info(f"Training period: {self.train_start} to {self.train_end}")
-        self.logger.info(f"Output directory: {self.file_paths['base_dir']}")
-
-    def run_full_pipeline(
-        self, cache_reports: bool = False, save_artifacts: bool = True, verbose: bool = True
-    ) -> tuple:
-        """
-        Run the complete model development pipeline.
-        """
-        # Your existing pipeline code here...
-        # (Same as before, but using self.file_manager for saving)
-
-        # Example of saving artifacts:
-        if save_artifacts and self.best_model is not None:
-            # Save model
-            metadata = {
-                "cv_results": self.cv_results,
-                "feature_importance": self.feature_importance.to_dict("records"),
-                "training_samples": len(self.bar_data) if self.bar_data is not None else 0,
-                "best_weighting_scheme": self.best_weighting_scheme,
-                "pipeline_version": "1.0",
-            }
-
-            self.file_manager.save_model(self.best_model, metadata)
-
-            # Save metrics
-            if self.metrics:
-                self.file_manager.save_metrics(self.metrics)
-
-            # Save dataframes
-            if self.features is not None:
-                self.features.to_parquet(self.file_paths["features"])
-
-            if self.events is not None:
-                self.events.to_parquet(self.file_paths["events"])
-
-            if self.feature_importance is not None:
-                self.feature_importance.to_csv(self.file_paths["feature_importance"], index=False)
-
-            self.logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
-
-        return (self.best_model, self._get_feature_names(), self.metrics, self.config)
+        logger.info(f"Exported all results to {export_dir}")

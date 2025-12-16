@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 from numba import njit, prange
 
-from afml.cache.unified_cache_system import cacheable
-from afml.time import get_time_features
+from ..cache import cacheable
+from .trading_session import get_time_features
 
 
 @njit(parallel=True, fastmath=True, cache=True)
@@ -114,7 +114,13 @@ def _calculate_rolling_directional_metrics(
             short_win_rate[i] = np.nan
             short_signal_freq[i] = 0.0
 
-    return long_win_rate, short_win_rate, signal_frequency, long_signal_freq, short_signal_freq
+    return (
+        long_win_rate,
+        short_win_rate,
+        signal_frequency,
+        long_signal_freq,
+        short_signal_freq,
+    )
 
 
 @njit(fastmath=True, cache=True)
@@ -174,7 +180,7 @@ def calculate_rolling_metrics(
     Enhanced rolling metrics calculation for meta-labelling.
 
     Incorporates suggestions from the meta-labelling guide while maintaining
-    compatibility with AFML-style triple barrier labeling.
+    compatibility with -style triple barrier labeling.
 
     Parameters
     ----------
@@ -257,7 +263,9 @@ def calculate_rolling_metrics(
         # 3. Calculate directional metrics if signals are available
         if signals is not None:
             long_win_rate, short_win_rate, signal_freq, long_freq, short_freq = (
-                _calculate_rolling_directional_metrics(y_true, signal_array, weights, window)
+                _calculate_rolling_directional_metrics(
+                    y_true, signal_array, weights, window
+                )
             )
 
             metrics_df[f"rolling_long_win_rate_{window}"] = long_win_rate
@@ -310,7 +318,9 @@ def calculate_rolling_metrics(
                     if aligned_total > 0:
                         trend_aligned_win_rate[i] = aligned_wins / aligned_total
 
-                metrics_df[f"rolling_trend_aligned_win_rate_{window}"] = trend_aligned_win_rate
+                metrics_df[f"rolling_trend_aligned_win_rate_{window}"] = (
+                    trend_aligned_win_rate
+                )
 
         # 6. Calculate drawdown and performance persistence metrics
         if window >= 30:
@@ -318,14 +328,18 @@ def calculate_rolling_metrics(
             returns = np.diff(np.log(price_array[-window:]))
             if len(returns) > 1:
                 sharpe_ratio = np.mean(returns) / (np.std(returns) + 1e-10)
-                metrics_df.loc[events.index[-1], f"rolling_sharpe_{window}"] = sharpe_ratio
+                metrics_df.loc[events.index[-1], f"rolling_sharpe_{window}"] = (
+                    sharpe_ratio
+                )
 
             # Maximum drawdown in the window
             if len(price_array) >= window:
                 rolling_max = np.maximum.accumulate(price_array[-window:])
                 drawdown = (price_array[-window:] - rolling_max) / rolling_max
                 max_drawdown = np.min(drawdown)
-                metrics_df.loc[events.index[-1], f"rolling_max_drawdown_{window}"] = max_drawdown
+                metrics_df.loc[events.index[-1], f"rolling_max_drawdown_{window}"] = (
+                    max_drawdown
+                )
 
     # 7. Calculate cross-window metrics (pattern recognition features)
     if len(window_sizes) >= 2:
@@ -338,9 +352,9 @@ def calculate_rolling_metrics(
                     f"rolling_win_rate_{w1}" in metrics_df.columns
                     and f"rolling_win_rate_{w2}" in metrics_df.columns
                 ):
-
                     divergence = (
-                        metrics_df[f"rolling_win_rate_{w1}"] - metrics_df[f"rolling_win_rate_{w2}"]
+                        metrics_df[f"rolling_win_rate_{w1}"]
+                        - metrics_df[f"rolling_win_rate_{w2}"]
                     )
                     metrics_df[f"performance_divergence_{w1}_{w2}"] = divergence
 
@@ -350,7 +364,6 @@ def calculate_rolling_metrics(
                         f"rolling_signal_frequency_{w1}" in metrics_df.columns
                         and f"rolling_signal_frequency_{w2}" in metrics_df.columns
                     ):
-
                         freq_trend = (
                             metrics_df[f"rolling_signal_frequency_{w1}"]
                             - metrics_df[f"rolling_signal_frequency_{w2}"]
@@ -375,7 +388,7 @@ def add_meta_label_features(
     events: pd.DataFrame,
     prices: pd.DataFrame,
     sample_weights: pd.Series,
-    config: Dict,
+    config: Dict = {},
 ) -> pd.DataFrame:
     """
     Enhanced feature engineering for meta-labelling that incorporates
@@ -420,15 +433,17 @@ def add_meta_label_features(
     )
 
     # Add market regime features
-    regime_features = calculate_market_regime_features(prices, config)
+    regime_features = calculate_market_regime_features(prices)
 
     # Combine all features
-    all_features = pd.concat([features, rolling_metrics, regime_features], axis=1).dropna()
+    all_features = pd.concat(
+        [features, rolling_metrics, regime_features], axis=1
+    ).dropna()
 
     return all_features
 
 
-def calculate_market_regime_features(prices: pd.DataFrame, config: Dict) -> pd.DataFrame:
+def calculate_market_regime_features(prices: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate market regime features for meta-labelling context.
 
@@ -453,7 +468,7 @@ def calculate_market_regime_features(prices: pd.DataFrame, config: Dict) -> pd.D
     features["trend_direction"] = np.sign(features["trend_strength"])
 
     # Mean reversion/extreme price position
-    zscore_20 = (close - close.rolling(20).mean()) / close.rolling(20).std()
+    zscore_20 = (close - sma_20) / close.rolling(20).std()
     features["price_position"] = zscore_20.fillna(0)
     features["extreme_price"] = (abs(zscore_20) > 2).astype(int)
 
@@ -462,12 +477,9 @@ def calculate_market_regime_features(prices: pd.DataFrame, config: Dict) -> pd.D
         volume = prices["volume"]
         volume_ratio = volume / volume.rolling(20).mean()
         features["volume_surge"] = (volume_ratio > 1.5).astype(int)
-
-    # Time-based features
-    if hasattr(prices.index, "hour"):
-        time_features = get_time_features(
-            prices, timeframe=config["bar_size"], bar_type=config["bar_type"]
-        )
-        features = features.join(time_features)
+    elif "tick_volume" in prices.columns:
+        volume = prices["tick_volume"]
+        volume_ratio = volume / volume.rolling(20).mean()
+        features["tick_volume_surge"] = (volume_ratio > 1.5).astype(int)
 
     return features

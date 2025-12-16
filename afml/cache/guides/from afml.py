@@ -8,6 +8,7 @@ from afml.cache import (
     time_aware_cacheable,
 )
 
+
 @robust_cacheable
 def my_function(df):
     # Expensive computation

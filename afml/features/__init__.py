@@ -29,7 +29,7 @@ from .returns import (
     rolling_autocorr_numba,
 )
 from .stationary import is_stationary
-from .time import (
+from .trading_session import (
     encode_cyclical_features,
     get_time_features,
     trading_session_encoded_features,

@@ -1,6 +1,12 @@
+from itertools import product
+from pathlib import Path
+from typing import Union
+
+import numpy as np
 import pandas as pd
 
 from ..strategies.signals import BaseStrategy
+from .model_development import ModelDevelopmentPipeline
 
 
 class ParameterGridSearch:
@@ -28,7 +34,6 @@ class ParameterGridSearch:
         list
             List of dictionaries with all parameter combinations.
         """
-        import itertools
 
         # Flatten the parameter dictionary
         keys = []
@@ -43,7 +48,7 @@ class ParameterGridSearch:
 
         # Generate all combinations
         combinations = []
-        for combo in itertools.product(*values):
+        for combo in product(*values):
             param_combo = dict(zip(keys, combo))
             combinations.append(param_combo)
 
@@ -54,7 +59,7 @@ class ParameterGridSearch:
         base_config: dict,
         param_grid: dict,
         cache_reports: bool = False,
-        save_models: bool = True,
+        save: bool = True,
         parallel: bool = False,
         n_jobs: int = -1,
         verbose: bool = True,
@@ -84,7 +89,7 @@ class ParameterGridSearch:
             }
         cache_reports : bool, optional
             Display cache reports (default: False).
-        save_models : bool, optional
+        save : bool, optional
             Save individual models (default: True).
         parallel : bool, optional
             Run combinations in parallel (default: False).
@@ -128,7 +133,7 @@ class ParameterGridSearch:
                 base_model_params,
                 self.combinations,
                 cache_reports,
-                save_models,
+                save,
                 n_jobs,
                 verbose,
             )
@@ -142,7 +147,7 @@ class ParameterGridSearch:
                 base_model_params,
                 self.combinations,
                 cache_reports,
-                save_models,
+                save,
                 verbose,
             )
 
@@ -151,9 +156,10 @@ class ParameterGridSearch:
 
         return self.summary_df
 
-    def _generate_all_combinations(self, param_grid, base_data_config, base_label_config):
+    def _generate_all_combinations(
+        self, param_grid, base_data_config, base_label_config
+    ):
         """Generate all parameter combinations from grid."""
-        import itertools
 
         combinations = []
 
@@ -172,7 +178,7 @@ class ParameterGridSearch:
 
             # Generate combinations for data_config
             data_combinations = []
-            for combo in itertools.product(*data_values):
+            for combo in product(*data_values):
                 data_dict = dict(zip(data_keys, combo))
                 data_combinations.append(data_dict)
 
@@ -201,7 +207,7 @@ class ParameterGridSearch:
 
             # Generate combinations for label_config
             label_combinations = []
-            for combo in itertools.product(*label_values):
+            for combo in product(*label_values):
                 label_dict = dict(zip(label_keys, combo))
                 label_combinations.append(label_dict)
 
@@ -218,7 +224,9 @@ class ParameterGridSearch:
         # Combine data and label configs
         for data_config in data_config_combos:
             for label_config in label_config_combos:
-                combinations.append({"data_config": data_config, "label_config": label_config})
+                combinations.append(
+                    {"data_config": data_config, "label_config": label_config}
+                )
 
         return combinations
 
@@ -232,7 +240,7 @@ class ParameterGridSearch:
         base_model_params,
         combinations,
         cache_reports,
-        save_models,
+        save,
         verbose,
     ):
         """Run combinations sequentially."""
@@ -257,8 +265,8 @@ class ParameterGridSearch:
                 )
 
                 # Run pipeline
-                model, features, metrics, config = pipeline.run_full_pipeline(
-                    cache_reports=False, save_model=save_models, verbose=False
+                model, features, metrics, config = pipeline.run(
+                    cache_reports=False, save=save, verbose=False
                 )
 
                 # Store results
@@ -278,7 +286,9 @@ class ParameterGridSearch:
                 results.append(result)
 
                 if verbose:
-                    print(f"  ✓ Success - CV Score: {metrics['cv_results']['best_score']:.4f}")
+                    print(
+                        f"  ✓ Success - CV Score: {metrics['cv_results']['best_score']:.4f}"
+                    )
 
             except Exception as e:
                 if verbose:
@@ -311,7 +321,7 @@ class ParameterGridSearch:
         base_model_params,
         combinations,
         cache_reports,
-        save_models,
+        save,
         n_jobs,
         verbose,
     ):
@@ -329,12 +339,14 @@ class ParameterGridSearch:
                 base_model_params,
                 combinations,
                 cache_reports,
-                save_models,
+                save,
                 verbose,
             )
 
         if verbose:
-            print(f"Running {len(combinations)} combinations in parallel (n_jobs={n_jobs})...")
+            print(
+                f"Running {len(combinations)} combinations in parallel (n_jobs={n_jobs})..."
+            )
 
         def run_single_combo(i, combo):
             """Run a single parameter combination."""
@@ -350,8 +362,8 @@ class ParameterGridSearch:
                     model_params=base_model_params,
                 )
 
-                model, features, metrics, config = pipeline.run_full_pipeline(
-                    cache_reports=False, save_model=save_models, verbose=False
+                model, features, metrics, config = pipeline.run(
+                    cache_reports=False, save=save, verbose=False
                 )
 
                 return {
@@ -382,7 +394,8 @@ class ParameterGridSearch:
 
         # Run in parallel
         results = Parallel(n_jobs=n_jobs, verbose=10 if verbose else 0)(
-            delayed(run_single_combo)(i, combo) for i, combo in enumerate(combinations, 1)
+            delayed(run_single_combo)(i, combo)
+            for i, combo in enumerate(combinations, 1)
         )
 
         return results
@@ -390,7 +403,11 @@ class ParameterGridSearch:
     def _print_combo_summary(self, combo):
         """Print summary of a parameter combination."""
         data_str = ", ".join(
-            [f"{k}: {v}" for k, v in combo["data_config"].items() if k not in ["account_name"]]
+            [
+                f"{k}: {v}"
+                for k, v in combo["data_config"].items()
+                if k not in ["account_name"]
+            ]
         )
         label_str = ", ".join([f"{k}: {v}" for k, v in combo["label_config"].items()])
 
@@ -470,7 +487,7 @@ class ParameterGridSearch:
         x_param: str,
         y_metric: str = "cv_score",
         group_by: str = None,
-        figsize: Tuple = (12, 8),
+        figsize: tuple = (12, 8),
     ):
         """
         Plot results of parameter grid search.
@@ -521,7 +538,9 @@ class ParameterGridSearch:
         # Scatter plot matrix for top parameters
         # Find top 3 parameters with most variation
         numeric_cols = plot_df.select_dtypes(include=[np.number]).columns
-        param_cols = [col for col in plot_df.columns if col.startswith(("data_", "label_"))]
+        param_cols = [
+            col for col in plot_df.columns if col.startswith(("data_", "label_"))
+        ]
 
         if len(param_cols) > 1:
             # Select top varied parameters
@@ -634,7 +653,7 @@ class MultiConfigPipeline:
         model_params: dict,
         run_now: bool = True,
         cache_reports: bool = False,
-        save_model: bool = True,
+        save: bool = True,
         verbose: bool = False,
     ):
         """
@@ -664,7 +683,7 @@ class MultiConfigPipeline:
             Run pipeline immediately (default: True).
         cache_reports : bool, optional
             Display cache reports (default: False).
-        save_model : bool, optional
+        save : bool, optional
             Save model and metadata (default: True).
         verbose : bool, optional
             Print progress information (default: False).
@@ -688,8 +707,8 @@ class MultiConfigPipeline:
             print(f"\nRunning pipeline: {name}")
             print("-" * 50)
 
-            model, features, metrics, config = pipeline.run_full_pipeline(
-                cache_reports=cache_reports, save_model=save_model, verbose=verbose
+            model, features, metrics, config = pipeline.run(
+                cache_reports=cache_reports, save=save, verbose=verbose
             )
 
             self.results[name] = {
@@ -700,15 +719,17 @@ class MultiConfigPipeline:
                 "config": config,
             }
 
-    def run_all(self, cache_reports: bool = False, save_model: bool = True, verbose: bool = True):
+    def run_all(
+        self, cache_reports: bool = False, save: bool = True, verbose: bool = True
+    ):
         """Run all pipelines that haven't been run yet."""
         for name, pipeline in self.pipelines.items():
             if name not in self.results:
                 print(f"\nRunning pipeline: {name}")
                 print("-" * 50)
 
-                model, features, metrics, config = pipeline.run_full_pipeline(
-                    cache_reports=cache_reports, save_model=save_model, verbose=verbose
+                model, features, metrics, config = pipeline.run(
+                    cache_reports=cache_reports, save=save, verbose=verbose
                 )
 
                 self.results[name] = {
@@ -745,7 +766,7 @@ class MultiConfigPipeline:
         self.comparison_df = pd.DataFrame(comparison_data)
         return self.comparison_df
 
-    def plot_comparison(self, metric: str = "cv_score", figsize: Tuple = (12, 6)):
+    def plot_comparison(self, metric: str = "cv_score", figsize: tuple = (12, 6)):
         """Plot comparison of pipeline results."""
         import matplotlib.pyplot as plt
 
@@ -764,7 +785,9 @@ class MultiConfigPipeline:
 
         # Feature importance comparison (top 5 pipelines)
         top_n = min(5, len(self.comparison_df))
-        top_pipelines = self.comparison_df.nlargest(top_n, metric)["pipeline_name"].tolist()
+        top_pipelines = self.comparison_df.nlargest(top_n, metric)[
+            "pipeline_name"
+        ].tolist()
 
         # Collect top features from each pipeline
         top_features = {}
@@ -780,7 +803,13 @@ class MultiConfigPipeline:
             colors = plt.cm.Set3(np.linspace(0, 1, len(top_features)))
 
             for (name, fi_df), color in zip(top_features.items(), colors):
-                ax.plot(range(len(fi_df)), fi_df["importance"], marker="o", label=name, color=color)
+                ax.plot(
+                    range(len(fi_df)),
+                    fi_df["importance"],
+                    marker="o",
+                    label=name,
+                    color=color,
+                )
 
             ax.set_xlabel("Feature Rank")
             ax.set_ylabel("Importance")
@@ -808,7 +837,9 @@ class MultiConfigPipeline:
 
         # Export comparison DataFrame
         if self.comparison_df is not None:
-            self.comparison_df.to_csv(export_dir / "pipeline_comparison.csv", index=False)
+            self.comparison_df.to_csv(
+                export_dir / "pipeline_comparison.csv", index=False
+            )
 
         # Export each pipeline's results
         for name, result in self.results.items():
@@ -886,7 +917,7 @@ def run_parameter_analysis():
         base_config=base_config,
         param_grid=param_grid,
         cache_reports=False,
-        save_models=True,
+        save=True,
         parallel=True,  # Run in parallel
         n_jobs=-1,  # Use all cores
         verbose=True

@@ -127,7 +127,9 @@ def train_model(
         model = clone(model)
         model.set_params(max_samples=av_uniqueness)
     elif isinstance(model, (BaggingClassifier, RandomForestClassifier)):
-        logger.warning("Warning: 'tW' column not found in labels. Using default max_samples.")
+        logger.warning(
+            "Warning: 'tW' column not found in labels. Using default max_samples."
+        )
 
     logger.info(f"Training on {X_train.shape[0]:,} samples...")
     fit = model.fit(X_train, y_train, sample_weight=w_train)
@@ -196,7 +198,9 @@ def train_model_with_trend(
         X = X.loc[mask]
 
     # Combined meta-label: could be agreement, or any custom logic
-    y = cont["bin"]  # or pd.Series(np.sign(cont["tb_bin"] + cont["ts_bin"]), index=cont.index)
+    y = cont[
+        "bin"
+    ]  # or pd.Series(np.sign(cont["tb_bin"] + cont["ts_bin"]), index=cont.index)
 
     # --- Sample weights ---
     w = pd.Series(1, index=y.index, name="w")

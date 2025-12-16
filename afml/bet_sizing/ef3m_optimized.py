@@ -42,7 +42,14 @@ class M2N:
     ]
 
     def __init__(
-        self, moments, epsilon=1e-5, factor=5, n_runs=1, variant=1, max_iter=100_000, num_workers=-1
+        self,
+        moments,
+        epsilon=1e-5,
+        factor=5,
+        n_runs=1,
+        variant=1,
+        max_iter=100_000,
+        num_workers=-1,
     ):
         """Optimized constructor with pre-calculated values"""
         # Use __slots__ for memory efficiency
@@ -95,7 +102,9 @@ class M2N:
 
             # Calculate error directly without creating intermediate arrays
             get_moments_fast(new_params, self.new_moments)
-            error = calculate_error_fast(self.moments, self.new_moments, len(moments_subset))
+            error = calculate_error_fast(
+                self.moments, self.new_moments, len(moments_subset)
+            )
 
             if error < self.error:
                 self.parameters[:] = new_params
@@ -236,7 +245,10 @@ def iter_4_optimized(mu_2, p_1, moments):
         return False, np.zeros(5)
 
     numerator = (
-        m_3 + 2 * p_1 * mu_1**3 + (p_1 - 1) * mu_2**3 - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
+        m_3
+        + 2 * p_1 * mu_1**3
+        + (p_1 - 1) * mu_2**3
+        - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
     )
     sigma_2_squared = numerator / denominator
 
@@ -246,7 +258,9 @@ def iter_4_optimized(mu_2, p_1, moments):
     sigma_2 = sigma_2_squared**0.5
 
     # Calculate sigma_1
-    sigma_1_squared = (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+    sigma_1_squared = (
+        (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+    )
 
     if sigma_1_squared < 0:
         return False, np.zeros(5)
@@ -291,7 +305,10 @@ def iter_5_optimized(mu_2, p_1, moments):
 
     # Calculate sigma_2
     numerator = (
-        m_3 + 2 * p_1 * mu_1**3 + (p_1 - 1) * mu_2**3 - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
+        m_3
+        + 2 * p_1 * mu_1**3
+        + (p_1 - 1) * mu_2**3
+        - 3 * mu_1 * (m_2 + mu_2**2 * (p_1 - 1))
     )
     sigma_2_squared = numerator / denominator
 
@@ -301,7 +318,9 @@ def iter_5_optimized(mu_2, p_1, moments):
     sigma_2 = sigma_2_squared**0.5
 
     # Calculate sigma_1
-    sigma_1_squared = (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+    sigma_1_squared = (
+        (m_2 - sigma_2**2 - mu_2**2) / p_1 + sigma_2**2 + mu_2**2 - mu_1**2
+    )
 
     if sigma_1_squared < 0:
         return False, np.zeros(5)

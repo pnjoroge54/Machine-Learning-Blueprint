@@ -38,7 +38,6 @@ def _get_s_n_for_t(series: pd.Series, test_type: str, molecule: list) -> pd.Seri
 
     s_n_t_series = pd.DataFrame(index=molecule, columns=["stat", "critical_value"])
     for index in molecule:
-
         series_t = series.loc[:index]
         squared_diff = series_t.diff().dropna() ** 2
         integer_index = series_t.index.get_loc(index)
@@ -52,19 +51,29 @@ def _get_s_n_for_t(series: pd.Series, test_type: str, molecule: list) -> pd.Seri
         for ind in series_t.index[:-1]:
             values_diff = _get_values_diff(test_type, series, index, ind)
             temp_integer_index = series_t.index.get_loc(ind)
-            s_n_t = 1 / (sigma_sq_t * np.sqrt(integer_index - temp_integer_index)) * values_diff
+            s_n_t = (
+                1
+                / (sigma_sq_t * np.sqrt(integer_index - temp_integer_index))
+                * values_diff
+            )
             if s_n_t > max_s_n_value:
                 max_s_n_value = s_n_t
                 max_s_n_critical_value = np.sqrt(
                     4.6 + np.log(integer_index - temp_integer_index)
                 )  # 4.6 is b_a estimate derived via Monte-Carlo
 
-        s_n_t_series.loc[index, ["stat", "critical_value"]] = max_s_n_value, max_s_n_critical_value
+        s_n_t_series.loc[index, ["stat", "critical_value"]] = (
+            max_s_n_value,
+            max_s_n_critical_value,
+        )
     return s_n_t_series
 
 
 def get_chu_stinchcombe_white_statistics(
-    series: pd.Series, test_type: str = "one_sided", num_threads: int = 8, verbose: bool = True
+    series: pd.Series,
+    test_type: str = "one_sided",
+    num_threads: int = 8,
+    verbose: bool = True,
 ) -> pd.Series:
     """
     Multithread Chu-Stinchcombe-White test implementation, p.251

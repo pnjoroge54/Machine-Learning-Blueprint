@@ -316,7 +316,7 @@ def get_weights_by_return_optimized(
         # Verify index compatibility
         missing_in_close = processed_ce.index.difference(close.index)
         assert missing_in_close.empty, (
-            f"num_conc_events contains {len(missing_in_close)} " "indices not in close"
+            f"num_conc_events contains {len(missing_in_close)} indices not in close"
         )
 
     # Compute weights using optimized parallel processing

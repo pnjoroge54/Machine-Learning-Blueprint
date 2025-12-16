@@ -31,7 +31,9 @@ def calculate_ticks_per_period(
         int: Rounded number of ticks per period.
     """
     freq = set_resampling_freq(timeframe)
-    resampled = df.resample(freq).size().values  # Count all rows, not just non-NaN values
+    resampled = (
+        df.resample(freq).size().values
+    )  # Count all rows, not just non-NaN values
     fn = getattr(np, method)  # function used for getting ticks in period
     num_ticks = fn(resampled)
     num_rounded = int(round(num_ticks))
@@ -158,7 +160,9 @@ def make_bars(
             raise KeyError(f"'volume' column required for {bar_type} bars")
         price_cols.append("volume")  # Add volume for dollar- and volume- bars
 
-    bar_group, bar_size, bar_id = _make_bar_type_grouper(tick_df[price_cols], bar_type, bar_size)
+    bar_group, bar_size, bar_id = _make_bar_type_grouper(
+        tick_df[price_cols], bar_type, bar_size
+    )
 
     if price != "bid_ask":
         ohlc_df = bar_group[price].ohlc()
@@ -211,7 +215,11 @@ def make_bars(
     ohlc_df = optimize_dtypes(ohlc_df)  # Save memory
 
     if verbose:
-        bar_info = f"{bar_type}-{bar_size:,}" if (bar_type != "time") else f"{bar_size.upper()}"
+        bar_info = (
+            f"{bar_type}-{bar_size:,}"
+            if (bar_type != "time")
+            else f"{bar_size.upper()}"
+        )
         logger.info(f"{bar_info} bars contain {ohlc_df.shape[0]:,} rows.")
         logger.info(f"Tick data contains {tick_df.shape[0]:,} rows.")
         log_df_info(ohlc_df)

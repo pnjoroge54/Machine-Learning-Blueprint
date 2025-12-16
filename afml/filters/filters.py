@@ -56,7 +56,9 @@ def _cusum_filter_numba_core(
 
 
 def cusum_filter(
-    raw_time_series: pd.Series, threshold: Union[float, int, pd.Series], time_stamps: bool = True
+    raw_time_series: pd.Series,
+    threshold: Union[float, int, pd.Series],
+    time_stamps: bool = True,
 ):
     """
     Advances in Financial Machine Learning, Snippet 2.4, page 39.
@@ -110,10 +112,14 @@ def cusum_filter(
     log_returns = np.log(ts).diff()
 
     # Prepare indices and log_returns numpy array (dropping the initial NaN)
-    valid_indices = log_returns.index[1:]  # Indices corresponding to actual log return values
+    valid_indices = log_returns.index[
+        1:
+    ]  # Indices corresponding to actual log return values
     log_returns_np = log_returns.dropna().to_numpy()
 
-    if len(log_returns_np) == 0:  # If series had 0 or 1 element (so no valid log returns)
+    if (
+        len(log_returns_np) == 0
+    ):  # If series had 0 or 1 element (so no valid log returns)
         return pd.DatetimeIndex([]) if time_stamps else []
 
     # Prepare thresholds numpy array
@@ -147,7 +153,9 @@ def cusum_filter(
     index_values_np = valid_indices.to_numpy()
 
     # Call the Numba-jitted core function 🚀
-    event_indices_values = _cusum_filter_numba_core(log_returns_np, thresholds_np, index_values_np)
+    event_indices_values = _cusum_filter_numba_core(
+        log_returns_np, thresholds_np, index_values_np
+    )
     logger.info(f"{len(event_indices_values):,} CUSUM-filtered events")
 
     if time_stamps:

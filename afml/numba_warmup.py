@@ -41,7 +41,11 @@ def _default_dummy_for_dispatcher() -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
     Very small default dummy args commonly compatible with simple array-based signatures.
     Adjust or register explicit dummies for functions with different signatures.
     """
-    return (np.array([np.int64(0)]), np.array([np.int64(0)]), np.array([np.int64(0)])), {}
+    return (
+        np.array([np.int64(0)]),
+        np.array([np.int64(0)]),
+        np.array([np.int64(0)]),
+    ), {}
 
 
 def lazy_warmup(numba_dispatcher: CPUDispatcher):

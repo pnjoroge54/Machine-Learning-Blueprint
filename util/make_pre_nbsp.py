@@ -38,7 +38,8 @@ def wrap_adjacent_code_in_pre(html):
     # Pattern to find standalone code blocks in paragraphs
     # (code blocks that contain box-drawing characters or ASCII art)
     code_block_pattern = re.compile(
-        r"<p>\s*<code>([^<]*[╔║╠╚═─┌┐└┘│├┤┬┴┼▼▲►◄][^<]*)</code>\s*</p>", re.IGNORECASE | re.DOTALL
+        r"<p>\s*<code>([^<]*[╔║╠╚═─┌┐└┘│├┤┬┴┼▼▲►◄][^<]*)</code>\s*</p>",
+        re.IGNORECASE | re.DOTALL,
     )
 
     def has_adjacent_code_blocks(match, html):
@@ -125,7 +126,9 @@ def simplify_pandoc_code_block(html):
 
         for pandoc_class, simple_class in class_map.items():
             code_content = re.sub(
-                rf'<span\s+class="{pandoc_class}">', f'<span class="{simple_class}">', code_content
+                rf'<span\s+class="{pandoc_class}">',
+                f'<span class="{simple_class}">',
+                code_content,
             )
 
         code_content = unescape(code_content)
@@ -140,7 +143,8 @@ def simplify_pandoc_code_block(html):
 def simplify_text_code_block(html):
     """Convert <pre class="text"><code>...</code></pre> to <pre class="text">...</pre>"""
     text_pattern = re.compile(
-        r'<pre\s+class="text"[^>]*>\s*<code>(.*?)</code>\s*</pre>', re.IGNORECASE | re.DOTALL
+        r'<pre\s+class="text"[^>]*>\s*<code>(.*?)</code>\s*</pre>',
+        re.IGNORECASE | re.DOTALL,
     )
 
     def process_text_block(match):

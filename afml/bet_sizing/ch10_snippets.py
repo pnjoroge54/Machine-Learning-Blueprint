@@ -43,12 +43,13 @@ def get_signal(prob, num_classes, pred=None):
         # signal = size only
         bet_sizes = pd.Series(2 * norm.cdf(bet_sizes) - 1, index=prob.index)
 
-    # Note 1: In the book, this function contains a conditional statement checking for a column named 'side',
-    # then executes what is essentially the above line. This has been removed as it appears to be redundant
-    # and simplifies the function.
+    # Note 1: In the book, this function contains a conditional statement checking for a
+    # column named 'side', then executes what is essentially the above line. This has
+    # been removed as it appears to be redundant and simplifies the function.
 
-    # Note 2: In the book, this function includes the averaging and discretization steps, which are omitted here.
-    # The functions for performing these are included in this file, and can be applied as options in the user-level
+    # Note 2: In the book, this function includes the averaging and discretization
+    # steps, which are omitted here. The functions for performing these are included
+    # in this file, and can be applied as options in the user-level
     # functions in bet_sizing.py.
 
     return bet_sizes
@@ -57,7 +58,8 @@ def get_signal(prob, num_classes, pred=None):
 def avg_active_signals(signals):
     """
     SNIPPET 10.2 - BETS ARE AVERAGED AS LONG AS THEY ARE STILL ACTIVE
-    Function averages the bet sizes of all concurrently active bets. This function makes use of multiprocessing.
+    Function averages the bet sizes of all concurrently active bets. This function makes
+    use of multiprocessing.
 
     :param signals: (pandas.DataFrame) Contains at least the following columns:
     - **signal** - the bet size
@@ -76,10 +78,14 @@ def avg_active_signals(signals):
     end_times = np.where(signals["t1"].isna(), MAX_TIME, signals["t1"].view(np.int64))
 
     # Get all unique evaluation times
-    eval_times = np.unique(np.concatenate((signal_times, signals["t1"].dropna().view(np.int64))))
+    eval_times = np.unique(
+        np.concatenate((signal_times, signals["t1"].dropna().view(np.int64)))
+    )
 
     # Calculate results
-    results = _calculate_active_signals(signal_times, end_times, signal_values, eval_times)
+    results = _calculate_active_signals(
+        signal_times, end_times, signal_values, eval_times
+    )
 
     # Convert back to datetime index
     return pd.Series(results, index=pd.to_datetime(eval_times), name="signal")
@@ -312,7 +318,9 @@ def get_w_power(price_div, m_bet_size):
 
     w_calc = np.log(m_bet_size / np.sign(price_div)) / np.log(abs(price_div))
     if w_calc < 0:
-        warnings.warn("'w' parameter evaluates to less than zero. Zero is returned.", UserWarning)
+        warnings.warn(
+            "'w' parameter evaluates to less than zero. Zero is returned.", UserWarning
+        )
 
     return max(0, w_calc)
 
@@ -331,7 +339,9 @@ def bet_size(w_param, price_div, func):
     :param func: (string) Function to use for dynamic calculation. Valid options are: 'sigmoid', 'power'.
     :return: (float) The bet size.
     """
-    return {"sigmoid": bet_size_sigmoid, "power": bet_size_power}[func](w_param, price_div)
+    return {"sigmoid": bet_size_sigmoid, "power": bet_size_power}[func](
+        w_param, price_div
+    )
 
 
 def get_target_pos(w_param, forecast_price, market_price, max_pos, func):

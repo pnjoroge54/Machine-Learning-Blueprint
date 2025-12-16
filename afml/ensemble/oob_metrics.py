@@ -42,7 +42,9 @@ def compute_custom_oob_metrics(clf, X, y, sample_weight=None):
         return _compute_rf_oob_metrics(clf, X, y, sample_weight, n_samples, n_classes)
     else:
         # Use BaggingClassifier approach
-        return _compute_bagging_oob_metrics(clf, X, y, sample_weight, n_samples, n_classes)
+        return _compute_bagging_oob_metrics(
+            clf, X, y, sample_weight, n_samples, n_classes
+        )
 
 
 def _compute_rf_oob_metrics(clf, X, y, sample_weight, n_samples, n_classes):
@@ -50,7 +52,9 @@ def _compute_rf_oob_metrics(clf, X, y, sample_weight, n_samples, n_classes):
 
     # Use RandomForest's built-in OOB predictions
     if not hasattr(clf, "oob_decision_function_"):
-        raise ValueError("RandomForestClassifier must have oob_score=True for OOB metrics")
+        raise ValueError(
+            "RandomForestClassifier must have oob_score=True for OOB metrics"
+        )
 
     oob_proba = clf.oob_decision_function_
     oob_pred = np.argmax(oob_proba, axis=1)
@@ -81,8 +85,12 @@ def _compute_bagging_oob_metrics(clf, X, y, sample_weight, n_samples, n_classes)
     """Compute OOB metrics for BaggingClassifier with custom implementation."""
 
     # Check for required attributes
-    if not hasattr(clf, "_estimators_samples") and not hasattr(clf, "estimators_samples_"):
-        raise ValueError("BaggingClassifier must have sample indices available for OOB computation")
+    if not hasattr(clf, "_estimators_samples") and not hasattr(
+        clf, "estimators_samples_"
+    ):
+        raise ValueError(
+            "BaggingClassifier must have sample indices available for OOB computation"
+        )
 
     # Get sample indices
     if hasattr(clf, "_estimators_samples") and clf._estimators_samples:
@@ -148,11 +156,15 @@ def _compute_bagging_oob_metrics(clf, X, y, sample_weight, n_samples, n_classes)
     )
 
 
-def _compute_metrics(y_oob, pred_oob, proba_oob, sample_weight_oob, classes, oob_mask, n_samples):
+def _compute_metrics(
+    y_oob, pred_oob, proba_oob, sample_weight_oob, classes, oob_mask, n_samples
+):
     """Compute metrics from OOB predictions."""
 
     metrics = {
-        "f1": f1_score(y_oob, pred_oob, average="weighted", sample_weight=sample_weight_oob),
+        "f1": f1_score(
+            y_oob, pred_oob, average="weighted", sample_weight=sample_weight_oob
+        ),
         "precision": precision_score(
             y_oob, pred_oob, average="weighted", sample_weight=sample_weight_oob
         ),
@@ -170,7 +182,9 @@ def _compute_metrics(y_oob, pred_oob, proba_oob, sample_weight_oob, classes, oob
     # Add AUC for binary classification
     if len(classes) == 2:
         try:
-            metrics["auc"] = roc_auc_score(y_oob, proba_oob[:, 1], sample_weight=sample_weight_oob)
+            metrics["auc"] = roc_auc_score(
+                y_oob, proba_oob[:, 1], sample_weight=sample_weight_oob
+            )
         except ValueError:
             metrics["auc"] = 0.5
 

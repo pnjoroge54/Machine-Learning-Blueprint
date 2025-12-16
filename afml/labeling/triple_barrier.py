@@ -177,11 +177,15 @@ def get_events(
         side = pd.Series(1.0, index=target.index)
         pt_sl = [pt_sl[0], pt_sl[0]]
     else:
-        side = side_prediction.reindex(target.index)  # Subset side_prediction on target index.
+        side = side_prediction.reindex(
+            target.index
+        )  # Subset side_prediction on target index.
         pt_sl = pt_sl[:2]
 
     # Create a new df with [v_barrier, target, side] and drop rows that are NA in target
-    events = pd.concat({"t1": vertical_barrier_times, "trgt": target, "side": side}, axis=1)
+    events = pd.concat(
+        {"t1": vertical_barrier_times, "trgt": target, "side": side}, axis=1
+    )
     events = events.dropna(subset=["trgt"])
     events[["pt", "sl"]] = np.full((events.shape[0], 2), pt_sl, dtype="int8")
 
@@ -359,7 +363,9 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
     if vertical_barrier_zero:
         # Label 0 when vertical barrier reached
         pt_sl = events[["pt", "sl"]].iloc[0].values
-        out_df["bin"] = barrier_touched(out_df["ret"].values, out_df["trgt"].values, pt_sl)
+        out_df["bin"] = barrier_touched(
+            out_df["ret"].values, out_df["trgt"].values, pt_sl
+        )
     else:
         # Label is the sign of the return
         out_df["bin"] = np.where(out_df["ret"] > 0, 1, -1).astype("int8")
@@ -394,7 +400,9 @@ def drop_labels(triple_barrier_events, min_pct=0.05):
             break
 
         logger.info(f"Dropped label: {df0.idxmin()} - {df0.min():.4%}")
-        triple_barrier_events = triple_barrier_events[triple_barrier_events["bin"] != df0.idxmin()]
+        triple_barrier_events = triple_barrier_events[
+            triple_barrier_events["bin"] != df0.idxmin()
+        ]
 
     return triple_barrier_events
 
@@ -452,12 +460,16 @@ def triple_barrier_labels(
         side_prediction,
     )
     if verbose:
-        print(f"get_events done after {timedelta(seconds=round(time.perf_counter() - time0))}.")
+        print(
+            f"get_events done after {timedelta(seconds=round(time.perf_counter() - time0))}."
+        )
         time1 = time.perf_counter()
 
     events = get_bins(events, close, vertical_barrier_zero)
     if verbose:
-        print(f"get_bins done after {timedelta(seconds=round(time.perf_counter() - time1))}.")
+        print(
+            f"get_bins done after {timedelta(seconds=round(time.perf_counter() - time1))}."
+        )
         time1 = time.perf_counter()
 
     if drop:
@@ -479,7 +491,9 @@ def triple_barrier_labels(
     return events
 
 
-def get_event_weights(triple_barrier_events: pd.DataFrame, close: pd.Series, verbose: bool = False):
+def get_event_weights(
+    triple_barrier_events: pd.DataFrame, close: pd.Series, verbose: bool = False
+):
     """Calculate event weights and average uniqueness for triple-barrier events.
     Args:
         triple_barrier_events (pd.DataFrame): Triple-barrier events DataFrame with the following structure:

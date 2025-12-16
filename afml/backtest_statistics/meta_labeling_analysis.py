@@ -14,9 +14,209 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from loguru import logger
 from scipy import stats
 
-from .performance_analysis import analyze_trading_behavior
+from ..bet_sizing.bet_sizing import (
+    bet_size_budget,
+    bet_size_probability,
+    bet_size_reserve,
+)
+from ..cross_validation.cross_validation import PurgedSplit
+from ..production.model_development import (
+    ModelDevelopmentPipeline,
+    calculate_rolling_metrics,
+    create_feature_engineering_pipeline,
+    generate_events_triple_barrier,
+    load_and_prepare_training_data,
+)
+from .performance_analysis import (
+    analyze_trading_behavior,
+    calculate_performance_metrics,
+)
+
+
+def evaluate_meta_labeling_performance(
+    events: pd.DataFrame,
+    meta_probabilities: pd.Series,
+    close: pd.Series,
+    confidence_threshold: float = 0.5,
+    trading_days_per_year: int = 252,
+    trading_hours_per_day: int = 24,
+    strategy_name: str = "Strategy",
+    bet_sizing: str = None,
+    **kwargs,
+) -> dict:
+    """
+    Evaluates and compares the performance of a primary strategy against a
+    meta-labeled version of that strategy.
+
+    This function simulates two strategies:
+    1.  The primary strategy, which takes all signals.
+    2.  The meta-labeled strategy, which filters trades based on a confidence
+        threshold and sizes them according to the meta-model's probability.
+
+    Args:
+        events: A DataFrame of trade events that contains at least the columns 't1' and 'side'.
+            - index: Event start times
+            - t1: Event end times, i.e., the time of first barrier touch
+            - side: Trade direction
+        meta_probabilities: A Series or array of probabilities from the meta-model.
+        close: A Series of prices that cover the period encapsulated in events.
+        confidence_threshold: The minimum probability required to take a trade.
+        trading_days_per_year: The number of trading days in a year.
+        trading_hours_per_day: The number of trading hours per day.
+        strategy_name: The name of the strategy for reporting.
+        Bet-sizing: One of None, "budget", "probability", "reserve"
+        kwargs: Bet-sizing arguments for "reserve" method that do not relate to events data.
+            Expected keys:
+            - fit_runs : int
+                Number of runs to execute when trying to fit the distribution.
+            - epsilon : float
+                Error tolerance.
+            - factor : int
+                Lambda factor from equations.
+            - variant : int
+                 The EF3M variant to execute, options are 1: EF3M using first 4 moments, 2: EF3M using first 5 moments.
+            - max_iter : int
+                Maximum number of iterations after which to terminate loop.
+            - num_workers : int
+                Number of CPU cores to use for multiprocessing execution, set to -1 to use all CPU cores. Default is 1.
+            - return_parameters : bool
+                 If True, function also returns a dictionary of the fited mixture parameters.
+
+    Returns:
+        A dictionary containing the performance metrics for both strategies,
+        their return series, and other comparison metadata.
+    """
+    # Calculate base returns (price changes without side)
+    events = events.dropna(subset=["t1"])
+    t1 = events["t1"]
+    side = events["side"]
+    all_dates = events.index.union(other=t1.array).drop_duplicates()
+    prices = close.reindex(all_dates, method="bfill")
+
+    # Base returns (price movements)
+    base_returns = prices.loc[t1.array].array / prices.loc[events.index] - 1
+
+    # Primary strategy: apply side to get directional returns
+    primary_returns = pd.Series(base_returns * side.values, index=events.index)
+    data_index = close.loc[: t1.iloc[-1]].index
+
+    # Filter trades based on confidence threshold
+    aligned_probs = meta_probabilities.reindex(events.index, fill_value=0.5)
+    confident_trades = aligned_probs > confidence_threshold
+    meta_prob = aligned_probs[confident_trades]
+    meta_events = events[confident_trades]
+    meta_side = meta_events["side"]
+    meta_t1 = meta_events["t1"]
+
+    # --- Bet Sizing Logic ---
+    if bet_sizing is None:
+        bets = meta_side.copy()
+        bet_sizing = "none"
+    elif bet_sizing == "probability":
+        bets = bet_size_probability(
+            meta_events, meta_prob, num_classes=2, pred=meta_side, **kwargs
+        )
+    elif bet_sizing == "budget":
+        result = bet_size_budget(meta_t1, meta_side)
+        bets = result["bet_size"]
+    elif bet_sizing == "reserve":
+        result = bet_size_reserve(meta_t1, meta_side, **kwargs)
+        bets = result["bet_size"]
+    else:
+        raise ValueError(f"Unknown bet_sizing method: {bet_sizing}")
+
+    msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
+    msg = msg + f"\n{kwargs}" if kwargs else msg
+    logger.info(msg)
+
+    # Apply bet sizes to base returns for filtered trades
+    meta_base_returns = base_returns[confident_trades]
+
+    meta_returns = (meta_base_returns * bets).dropna()
+
+    # --- Performance Calculation ---
+    # Don't pass positions - calculate trade stats separately for events
+    primary_metrics = calculate_performance_metrics(
+        primary_returns,
+        data_index,
+        positions=None,  # Don't pass positions for event-based data
+        trading_days_per_year=trading_days_per_year,
+        trading_hours_per_day=trading_hours_per_day,
+    )
+
+    meta_metrics = calculate_performance_metrics(
+        meta_returns,
+        data_index,
+        positions=None,  # Don't pass positions for event-based data
+        trading_days_per_year=trading_days_per_year,
+        trading_hours_per_day=trading_hours_per_day,
+    )
+
+    # --- Add Event-Specific Metrics Manually ---
+    # Calculate trade duration directly from events
+    primary_durations = (events["t1"] - events.index).dt.total_seconds() / 86400  # days
+    meta_durations = (meta_events["t1"] - meta_events.index).dt.total_seconds() / 86400
+
+    primary_metrics["avg_trade_duration"] = (
+        pd.Timedelta(days=primary_durations.mean()).round("1s")
+        if not primary_durations.empty
+        else 0
+    )
+    meta_metrics["avg_trade_duration"] = (
+        pd.Timedelta(days=meta_durations.mean()).round("1s")
+        if not meta_durations.empty
+        else 0
+    )
+
+    # Calculate bet frequency
+    primary_metrics["bet_frequency"] = len(events)
+    meta_metrics["bet_frequency"] = len(meta_events)
+
+    total_periods = len(data_index)
+    periods_per_year = trading_days_per_year  # Simplified
+
+    primary_metrics["bets_per_year"] = int(
+        len(events) * (periods_per_year / total_periods) if total_periods > 0 else 0
+    )
+    meta_metrics["bets_per_year"] = int(
+        len(meta_events) * (periods_per_year / total_periods)
+        if total_periods > 0
+        else 0
+    )
+
+    # --- Meta-Specific Metrics ---
+    total_signals = len(events)
+    filtered_signals = len(meta_events)
+
+    meta_metrics["signal_filter_rate"] = (
+        1 - (filtered_signals / total_signals) if total_signals > 0 else 0
+    )
+    meta_metrics["confidence_threshold"] = confidence_threshold
+
+    if len(meta_returns) > 1:
+        duration_days = (meta_returns.index[-1] - meta_returns.index[0]).days
+        actual_trades_per_year = (
+            len(meta_returns) * (365.25 / duration_days)
+            if duration_days > 0
+            else len(meta_returns)
+        )
+    else:
+        actual_trades_per_year = 1
+
+    meta_metrics["actual_trades_per_year"] = int(actual_trades_per_year)
+
+    return {
+        "strategy_name": strategy_name,
+        "primary_metrics": primary_metrics,
+        "meta_metrics": meta_metrics,
+        "primary_returns": primary_returns,
+        "meta_returns": meta_returns,
+        "total_primary_signals": total_signals,
+        "filtered_signals": filtered_signals,
+    }
 
 
 def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
@@ -61,7 +261,9 @@ def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
 
     # Calculate improvement
     comparison["Improvement"] = comparison["Meta"] - comparison["Primary"]
-    comparison["Improvement %"] = (comparison["Meta"] / comparison["Primary"] - 1) * 100
+    comparison["Improvement %"] = (
+        (comparison["Meta"] - comparison["Primary"]) / abs(comparison["Primary"]) * 100
+    )
 
     # Mark which strategy is better for each metric
     comparison["Better"] = "Meta"
@@ -73,18 +275,18 @@ def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
             )
 
     if verbose:
-        print(f"\n{'='*100}")
+        print(f"\n{'=' * 100}")
         print(f"STRATEGY COMPARISON: {results['strategy_name']}")
-        print(f"{'='*100}\n")
+        print(f"{'=' * 100}\n")
 
-        print(f"Signal Filtering:")
+        print("Signal Filtering:")
         print(f"  Total Signals:     {results['total_primary_signals']:,}")
         print(f"  Filtered Signals:  {results['filtered_signals']:,}")
-        print(f"  Filter Rate:       {meta['signal_filter_rate']:,.1%}")
+        print(f"  Filter Rate:       {meta['signal_filter_rate']:.1%}")
         print(f"  Confidence Thresh: {meta['confidence_threshold']:.2f}\n")
 
         print(comparison.to_string())
-        print(f"\n{'='*100}\n")
+        print(f"\n{'=' * 100}\n")
 
     return comparison
 
@@ -136,18 +338,30 @@ def calculate_risk_adjusted_metrics(results: dict) -> pd.DataFrame:
                     if primary["avg_loss"] != 0
                     else 0
                 ),
-                primary["expectancy"] / primary["volatility"] if primary["volatility"] > 0 else 0,
+                (
+                    primary["expectancy"] / primary["volatility"]
+                    if primary["volatility"] > 0
+                    else 0
+                ),
             ],
             "Meta": [
                 omega_ratio(meta_returns),
                 tail_ratio(meta_returns),
-                meta["sharpe_ratio"] / meta["max_drawdown"] if meta["max_drawdown"] > 0 else 0,
+                (
+                    meta["sharpe_ratio"] / meta["max_drawdown"]
+                    if meta["max_drawdown"] > 0
+                    else 0
+                ),
                 (
                     meta["win_rate"] * meta["avg_win"] / abs(meta["avg_loss"])
                     if meta["avg_loss"] != 0
                     else 0
                 ),
-                meta["expectancy"] / meta["volatility"] if meta["volatility"] > 0 else 0,
+                (
+                    meta["expectancy"] / meta["volatility"]
+                    if meta["volatility"] > 0
+                    else 0
+                ),
             ],
         },
         index=[
@@ -197,7 +411,11 @@ def analyze_signal_quality(results: dict) -> Dict:
     precision = (meta_returns > 0).mean() if accepted_signals > 0 else 0
     total_winners = (primary_returns > 0).sum()
     recall = ((meta_returns > 0).sum() / total_winners) if total_winners > 0 else 0
-    f1_score = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0
+    f1_score = (
+        (2 * precision * recall / (precision + recall))
+        if (precision + recall) > 0
+        else 0
+    )
 
     # --- Quality metrics ---
     analysis = {
@@ -214,7 +432,9 @@ def analyze_signal_quality(results: dict) -> Dict:
             else 0
         ),
         # Rejected signals quality
-        "rejected_win_rate": (filtered_returns > 0).mean() if rejected_signals > 0 else 0,
+        "rejected_win_rate": (
+            (filtered_returns > 0).mean() if rejected_signals > 0 else 0
+        ),
         "rejected_avg_return": filtered_returns.mean() if rejected_signals > 0 else 0,
         "rejected_sharpe": (
             filtered_returns.mean() / filtered_returns.std() * np.sqrt(252)
@@ -223,7 +443,9 @@ def analyze_signal_quality(results: dict) -> Dict:
         ),
         # Filter effectiveness
         "avoided_losses": (
-            (filtered_returns < 0).sum() / rejected_signals if rejected_signals > 0 else 0
+            (filtered_returns < 0).sum() / rejected_signals
+            if rejected_signals > 0
+            else 0
         ),
         # Classification-style framing
         "precision": precision,
@@ -233,7 +455,9 @@ def analyze_signal_quality(results: dict) -> Dict:
 
     # --- Statistical test: accepted vs rejected ---
     if rejected_signals > 0 and accepted_signals > 0:
-        t_stat, p_value = stats.ttest_ind(meta_returns, filtered_returns, equal_var=False)
+        t_stat, p_value = stats.ttest_ind(
+            meta_returns, filtered_returns, equal_var=False
+        )
         analysis["ttest_pvalue"] = p_value
         analysis["significantly_better"] = p_value < 0.05
     else:
@@ -254,7 +478,9 @@ def analyze_signal_quality(results: dict) -> Dict:
             else primary_common
         )
         meta_equal = (
-            meta_common / meta_common.abs().mean() if meta_common.abs().mean() != 0 else meta_common
+            meta_common / meta_common.abs().mean()
+            if meta_common.abs().mean() != 0
+            else meta_common
         )
 
         analysis["aligned_primary_mean_equal"] = primary_equal.mean()
@@ -278,14 +504,21 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
     meta_metrics = results["meta_metrics"]
 
     fig, axes = plt.subplots(2, 3, figsize=figsize)
-    fig.suptitle(f"Strategy Comparison: {results['strategy_name']}", fontsize=16, fontweight="bold")
+    fig.suptitle(
+        f"Strategy Comparison: {results['strategy_name']} {results['symbol']} "
+        f"{results['bar_size']} {results['bar_type'].title()}-Bars",
+        fontsize=16,
+        fontweight="bold",
+    )
 
     # 1. Cumulative Returns
     ax = axes[0, 0]
     primary_cum = (1 + primary_returns).cumprod()
     meta_cum = (1 + meta_returns).cumprod()
 
-    ax.plot(primary_cum.index, primary_cum.values, label="Primary", alpha=0.7, linewidth=1.5)
+    ax.plot(
+        primary_cum.index, primary_cum.values, label="Primary", alpha=0.7, linewidth=1.5
+    )
     ax.plot(meta_cum.index, meta_cum.values, label="Meta", alpha=0.7, linewidth=1.5)
     ax.set_title("Cumulative Returns")
     ax.set_ylabel("Cumulative Return")
@@ -306,7 +539,13 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
 
     # 3. Key Metrics Comparison
     ax = axes[0, 2]
-    metrics_to_plot = ["sharpe_ratio", "sortino_ratio", "calmar_ratio", "win_rate", "profit_factor"]
+    metrics_to_plot = [
+        "sharpe_ratio",
+        "sortino_ratio",
+        "calmar_ratio",
+        "win_rate",
+        "profit_factor",
+    ]
     x = np.arange(len(metrics_to_plot))
     width = 0.35
 
@@ -357,7 +596,9 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
             * np.sqrt(252)
         )
         meta_rolling_sharpe = (
-            meta_returns.rolling(window).mean() / meta_returns.rolling(window).std() * np.sqrt(252)
+            meta_returns.rolling(window).mean()
+            / meta_returns.rolling(window).std()
+            * np.sqrt(252)
         )
 
         ax.plot(
@@ -415,7 +656,7 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
         ax.text(
             bar.get_x() + bar.get_width() / 2.0,
             height,
-            f"{val:.2%}",
+            f"{val:,.2%}",
             ha="center",
             va="bottom",
             fontsize=9,
@@ -451,7 +692,7 @@ def generate_summary_report(results: dict) -> str:
     report.append(f"Total Primary Signals:    {results['total_primary_signals']:,}")
     report.append(f"Accepted by Meta Model:   {results['filtered_signals']:,}")
     report.append(f"Rejected by Meta Model:   {signal_analysis['rejected_signals']:,}")
-    report.append(f"Filter Rate:              {signal_analysis['filter_rate']:,.1%}")
+    report.append(f"Filter Rate:              {signal_analysis['filter_rate']:.1%}")
     report.append(f"Confidence Threshold:     {meta['confidence_threshold']:.2f}")
     report.append("")
 
@@ -460,22 +701,22 @@ def generate_summary_report(results: dict) -> str:
     report.append("-" * 40)
 
     metrics = [
-        ("Total Return", "total_return", "{:.2%}"),
-        ("Annualized Return", "annualized_return", "{:.2%}"),
-        ("Sharpe Ratio", "sharpe_ratio", "{:.2f}"),
-        ("Sortino Ratio", "sortino_ratio", "{:.2f}"),
-        ("Calmar Ratio", "calmar_ratio", "{:.2f}"),
-        ("Max Drawdown", "max_drawdown", "{:.2%}"),
-        ("Volatility", "volatility", "{:.2%}"),
-        ("Win Rate", "win_rate", "{:,.1%}"),
-        ("Profit Factor", "profit_factor", "{:.2f}"),
-        ("Kelly Criterion", "kelly_criterion", "{:.2%}"),
+        ("Total Return", "total_return", "{:,.2%}"),
+        ("Annualized Return", "annualized_return", "{:,.2%}"),
+        ("Sharpe Ratio", "sharpe_ratio", "{:,.2f}"),
+        ("Sortino Ratio", "sortino_ratio", "{:,.2f}"),
+        ("Calmar Ratio", "calmar_ratio", "{:,.2f}"),
+        ("Max Drawdown", "max_drawdown", "{:,.2%}"),
+        ("Volatility", "volatility", "{:,.2%}"),
+        ("Win Rate", "win_rate", "{:.1%}"),
+        ("Profit Factor", "profit_factor", "{:,.2f}"),
+        ("Kelly Criterion", "kelly_criterion", "{:,.2%}"),
     ]
 
     for name, key, fmt in metrics:
         p_val = primary.get(key, 0)
         m_val = meta.get(key, 0)
-        change = ((m_val / p_val - 1) * 100) if p_val != 0 else 0
+        change = ((m_val - p_val) / abs(p_val)) if p_val != 0 else 0
 
         better = (
             "✅"
@@ -488,7 +729,7 @@ def generate_summary_report(results: dict) -> str:
 
         report.append(
             f"{name:.<25} Primary: {fmt.format(p_val):<10} "
-            f"Meta: {fmt.format(m_val):<10} ({change:+.1f}%) {better}"
+            f"Meta: {fmt.format(m_val):<10} ({change:+,.1%}) {better}"
         )
 
     report.append("")
@@ -496,24 +737,31 @@ def generate_summary_report(results: dict) -> str:
     # Signal Quality
     report.append("SIGNAL QUALITY ANALYSIS")
     report.append("-" * 40)
-    report.append(f"Accepted Signal Win Rate: {signal_analysis['accepted_win_rate']:,.1%}")
-    report.append(f"Rejected Signal Win Rate: {signal_analysis['rejected_win_rate']:,.1%}")
-    report.append(f"Filter Precision:         {signal_analysis['precision']:,.1%}")
-    report.append(f"Avoided Losses:           {signal_analysis['avoided_losses']:,.1%}")
+    report.append(
+        f"Accepted Signal Win Rate: {signal_analysis['accepted_win_rate']:.1%}"
+    )
+    report.append(
+        f"Rejected Signal Win Rate: {signal_analysis['rejected_win_rate']:.1%}"
+    )
+    report.append(f"Filter Precision:         {signal_analysis['precision']:.1%}")
+    report.append(f"Avoided Losses:           {signal_analysis['avoided_losses']:.1%}")
 
     if not np.isnan(signal_analysis["ttest_pvalue"]):
-        report.append(f"T-Test P-Value:           {signal_analysis['ttest_pvalue']:.4f}")
+        report.append(
+            f"T-Test P-Value:           {signal_analysis['ttest_pvalue']:.4f}"
+        )
         report.append(
             f"Statistically Better:     {'Yes' if signal_analysis['significantly_better'] else 'No'}"
         )
 
     report.append("")
+    n = len(str(primary["avg_trade_duration"]))
 
     # Trade Statistics
     report.append("TRADE STATISTICS")
     report.append("-" * 40)
     report.append(
-        f"Number of Trades:         Primary: {primary['num_trades']:,}  "
+        f"Number of Trades:         Primary: {primary['num_trades']:<{n},}  "
         f"Meta: {meta['num_trades']:,}"
     )
     report.append(
@@ -521,20 +769,20 @@ def generate_summary_report(results: dict) -> str:
         f"Meta: {meta['avg_trade_duration']}"
     )
     report.append(
-        f"Best Trade:               Primary: {primary['best_trade']:.2%}  "
-        f"Meta: {meta['best_trade']:.2%}"
+        f"Best Trade:               Primary: {primary['best_trade']:<{n},.2%}  "
+        f"Meta: {meta['best_trade']:,.2%}"
     )
     report.append(
-        f"Worst Trade:              Primary: {primary['worst_trade']:.2%}  "
-        f"Meta: {meta['worst_trade']:.2%}"
+        f"Worst Trade:              Primary: {primary['worst_trade']:<{n},.2%}  "
+        f"Meta: {meta['worst_trade']:,.2%}"
     )
     report.append(
-        f"Consecutive Wins:         Primary: {primary['consecutive_wins']}  "
-        f"Meta: {meta['consecutive_wins']}"
+        f"Consecutive Wins:         Primary: {primary['consecutive_wins']:<{n},}  "
+        f"Meta: {meta['consecutive_wins']:}"
     )
     report.append(
-        f"Consecutive Losses:       Primary: {primary['consecutive_losses']}  "
-        f"Meta: {meta['consecutive_losses']}"
+        f"Consecutive Losses:       Primary: {primary['consecutive_losses']:<{n},}  "
+        f"Meta: {meta['consecutive_losses']:}"
     )
 
     report.append("")
@@ -547,34 +795,44 @@ def generate_summary_report(results: dict) -> str:
 
     # Check if meta-labeling improved performance
     if meta["sharpe_ratio"] > primary["sharpe_ratio"]:
-        improvement = (meta["sharpe_ratio"] / primary["sharpe_ratio"] - 1) * 100
-        insights.append(f"✅ Meta-labeling improved Sharpe ratio by {improvement:,.1f}%")
+        improvement = (meta["sharpe_ratio"] - primary["sharpe_ratio"]) / abs(
+            primary["sharpe_ratio"]
+        )
+        insights.append(f"✅ Meta-labeling improved Sharpe ratio by {improvement:,.1%}")
     else:
-        decline = (meta["sharpe_ratio"] / primary["sharpe_ratio"] - 1) * 100
-        insights.append(f"❌ Meta-labeling decreased Sharpe ratio by {abs(decline):,.1f}%")
+        decline = (meta["sharpe_ratio"] - primary["sharpe_ratio"]) / abs(
+            primary["sharpe_ratio"]
+        )
+        insights.append(
+            f"❌ Meta-labeling decreased Sharpe ratio by {abs(decline):,.1%}"
+        )
 
     # Check drawdown reduction
     if meta["max_drawdown"] < primary["max_drawdown"]:
-        reduction = (1 - meta["max_drawdown"] / primary["max_drawdown"]) * 100
-        insights.append(f"✅ Reduced maximum drawdown by {reduction:,.1f}%")
+        reduction = 1 - meta["max_drawdown"] / primary["max_drawdown"]
+        insights.append(f"✅ Reduced maximum drawdown by {reduction:,.1%}")
 
     # Check win rate improvement
     if meta["win_rate"] > primary["win_rate"]:
-        improvement = (meta["win_rate"] - primary["win_rate"]) * 100
-        insights.append(f"✅ Improved win rate by {improvement:,.1f} percentage points")
+        improvement = meta["win_rate"] - primary["win_rate"]
+        insights.append(f"✅ Improved win rate by {improvement:,.1%} percentage points")
 
     # Check if filtering is effective
     if signal_analysis["avoided_losses"] > 0.6:
         insights.append(
-            f"✅ Effectively avoiding losses ({signal_analysis['avoided_losses']:,.1%} of rejected signals)"
+            f"✅ Effectively avoiding losses ({signal_analysis['avoided_losses']:.1%} of rejected signals)"
         )
 
     # Check information ratio
     if "information_ratio" in meta:
         if meta["information_ratio"] > 0:
-            insights.append(f"✅ Positive information ratio ({meta['information_ratio']:.2f})")
+            insights.append(
+                f"✅ Positive information ratio ({meta['information_ratio']:.2f})"
+            )
         else:
-            insights.append(f"⚠ Negative information ratio ({meta['information_ratio']:.2f})")
+            insights.append(
+                f"⚠️ Negative information ratio ({meta['information_ratio']:.2f})"
+            )
 
     for insight in insights:
         report.append(insight)
@@ -608,10 +866,14 @@ def export_results_to_excel(results: dict, filepath: str):
         signal_quality.to_excel(writer, sheet_name="Signal_Quality")
 
         # Primary metrics
-        pd.DataFrame([results["primary_metrics"]]).T.to_excel(writer, sheet_name="Primary_Metrics")
+        pd.DataFrame([results["primary_metrics"]]).T.to_excel(
+            writer, sheet_name="Primary_Metrics"
+        )
 
         # Meta metrics
-        pd.DataFrame([results["meta_metrics"]]).T.to_excel(writer, sheet_name="Meta_Metrics")
+        pd.DataFrame([results["meta_metrics"]]).T.to_excel(
+            writer, sheet_name="Meta_Metrics"
+        )
 
         # Returns time series
         returns_df = pd.DataFrame(
@@ -749,13 +1011,21 @@ def generate_meta_labeling_markdown_report(
         worst_bar_type = comparison_df.iloc[-1]["Bar Type"]
 
         md_content.append(f"**Best Performing Bar Type**: `{best_bar_type}`  ")
-        md_content.append(f"  • Sharpe Ratio: `{comparison_df.iloc[0]['Meta Sharpe']:.2f}`  ")
-        md_content.append(f"  • Annual Return: `{comparison_df.iloc[0]['Meta Return %']:,.1f}%`  ")
+        md_content.append(
+            f"  • Sharpe Ratio: `{comparison_df.iloc[0]['Meta Sharpe']:.2f}`  "
+        )
+        md_content.append(
+            f"  • Annual Return: `{comparison_df.iloc[0]['Meta Return %']:.1f}%`  "
+        )
         md_content.append("")
 
         md_content.append(f"**Worst Performing Bar Type**: `{worst_bar_type}`  ")
-        md_content.append(f"  • Sharpe Ratio: `{comparison_df.iloc[-1]['Meta Sharpe']:.2f}`  ")
-        md_content.append(f"  • Annual Return: `{comparison_df.iloc[-1]['Meta Return %']:,.1f}%`  ")
+        md_content.append(
+            f"  • Sharpe Ratio: `{comparison_df.iloc[-1]['Meta Sharpe']:.2f}`  "
+        )
+        md_content.append(
+            f"  • Annual Return: `{comparison_df.iloc[-1]['Meta Return %']:.1f}%`  "
+        )
         md_content.append("")
 
         # Add improvement statistics if primary metrics available
@@ -770,10 +1040,12 @@ def generate_meta_labeling_markdown_report(
 
                 if primary and meta:
                     sharpe_improvement = (
-                        (meta.get("sharpe_ratio", 0) / primary.get("sharpe_ratio", 1)) - 1
+                        (meta.get("sharpe_ratio", 0) / primary.get("sharpe_ratio", 1))
+                        - 1
                     ) * 100
                     dd_improvement = (
-                        (meta.get("max_drawdown", 0) / primary.get("max_drawdown", 1)) - 1
+                        (meta.get("max_drawdown", 0) / primary.get("max_drawdown", 1))
+                        - 1
                     ) * 100
                     winrate_improvement = (
                         (meta.get("win_rate", 0) / primary.get("win_rate", 1)) - 1
@@ -786,7 +1058,11 @@ def generate_meta_labeling_markdown_report(
                             "Max DD Δ%": dd_improvement,
                             "Win Rate Δ%": winrate_improvement,
                             "Trades Δ%": (
-                                (meta.get("num_trades", 0) / primary.get("num_trades", 1)) - 1
+                                (
+                                    meta.get("num_trades", 0)
+                                    / primary.get("num_trades", 1)
+                                )
+                                - 1
                             )
                             * 100,
                         }
@@ -872,9 +1148,12 @@ def generate_meta_labeling_markdown_report(
                         - 1
                     )
                     * 100,
-                    meta_metrics.get("sharpe_ratio", 0) - primary_metrics.get("sharpe_ratio", 0),
-                    meta_metrics.get("sortino_ratio", 0) - primary_metrics.get("sortino_ratio", 0),
-                    meta_metrics.get("calmar_ratio", 0) - primary_metrics.get("calmar_ratio", 0),
+                    meta_metrics.get("sharpe_ratio", 0)
+                    - primary_metrics.get("sharpe_ratio", 0),
+                    meta_metrics.get("sortino_ratio", 0)
+                    - primary_metrics.get("sortino_ratio", 0),
+                    meta_metrics.get("calmar_ratio", 0)
+                    - primary_metrics.get("calmar_ratio", 0),
                     (
                         (
                             meta_metrics.get("max_drawdown", 0)
@@ -891,9 +1170,15 @@ def generate_meta_labeling_markdown_report(
                         - 1
                     )
                     * 100,
-                    (meta_metrics.get("win_rate", 0) - primary_metrics.get("win_rate", 0)) * 100,
-                    meta_metrics.get("profit_factor", 0) - primary_metrics.get("profit_factor", 0),
-                    meta_metrics.get("num_trades", 0) - primary_metrics.get("num_trades", 0),
+                    (
+                        meta_metrics.get("win_rate", 0)
+                        - primary_metrics.get("win_rate", 0)
+                    )
+                    * 100,
+                    meta_metrics.get("profit_factor", 0)
+                    - primary_metrics.get("profit_factor", 0),
+                    meta_metrics.get("num_trades", 0)
+                    - primary_metrics.get("num_trades", 0),
                     "N/A",
                 ],
             }
@@ -903,7 +1188,10 @@ def generate_meta_labeling_markdown_report(
         for i, row in metrics_table.iterrows():
             improvement = row["Improvement"]
             if isinstance(improvement, (int, float)):
-                if i in [5, 6]:  # For drawdown and volatility, negative improvement is good
+                if i in [
+                    5,
+                    6,
+                ]:  # For drawdown and volatility, negative improvement is good
                     color = "🟢" if improvement < 0 else "🔴"
                 else:  # For other metrics, positive improvement is good
                     color = "🟢" if improvement > 0 else "🔴"
@@ -954,9 +1242,13 @@ def generate_meta_labeling_markdown_report(
         if "ttest_pvalue" in signal_analysis:
             md_content.append("#### Statistical Significance")
             md_content.append("")
-            md_content.append(f"T-Test P-Value: `{signal_analysis['ttest_pvalue']:.4f}`  ")
+            md_content.append(
+                f"T-Test P-Value: `{signal_analysis['ttest_pvalue']:.4f}`  "
+            )
             if signal_analysis["ttest_pvalue"] < 0.05:
-                md_content.append("✅ **Statistically Significant Improvement** (p < 0.05)  ")
+                md_content.append(
+                    "✅ **Statistically Significant Improvement** (p < 0.05)  "
+                )
             else:
                 md_content.append("⚠️ **Not Statistically Significant** (p ≥ 0.05)  ")
             md_content.append("")
@@ -1009,7 +1301,9 @@ def generate_meta_labeling_markdown_report(
             signal_plot = _generate_signal_quality_plot(results)
             signal_b64 = _plot_to_base64(signal_plot)
 
-            md_content.append(f"### {bar_type.upper()} Bars - Signal Quality Distribution")
+            md_content.append(
+                f"### {bar_type.upper()} Bars - Signal Quality Distribution"
+            )
             md_content.append("")
             md_content.append(
                 f'<img src="data:image/png;base64,{signal_b64}" style="width: 100%; max-width: 1400px;">'
@@ -1041,8 +1335,12 @@ def generate_meta_labeling_markdown_report(
         md_content.append("")
 
         # Identify best risk-adjusted bar type
-        best_omega = risk_metrics_df.loc[risk_metrics_df["Omega Ratio"].idxmax(), "Bar Type"]
-        best_sharpe_dd = risk_metrics_df.loc[risk_metrics_df["Sharpe/MaxDD"].idxmax(), "Bar Type"]
+        best_omega = risk_metrics_df.loc[
+            risk_metrics_df["Omega Ratio"].idxmax(), "Bar Type"
+        ]
+        best_sharpe_dd = risk_metrics_df.loc[
+            risk_metrics_df["Sharpe/MaxDD"].idxmax(), "Bar Type"
+        ]
 
         md_content.append("#### Best Risk-Adjusted Performers")
         md_content.append("")
@@ -1065,7 +1363,9 @@ def generate_meta_labeling_markdown_report(
             )  # Simplified position series
             meta_positions = pd.Series(1, index=meta_returns.index)
 
-            primary_behavior = analyze_trading_behavior(primary_positions, primary_returns)
+            primary_behavior = analyze_trading_behavior(
+                primary_positions, primary_returns
+            )
             meta_behavior = analyze_trading_behavior(meta_positions, meta_returns)
 
             behavior_data.append(
@@ -1108,7 +1408,9 @@ def generate_meta_labeling_markdown_report(
 
         md_content.append(f"### 🏆 Recommended Bar Type: `{best_performer}`")
         md_content.append("")
-        md_content.append(f"**Rationale**: Highest Sharpe Ratio (`{best_sharpe:.2f}`)  ")
+        md_content.append(
+            f"**Rationale**: Highest Sharpe Ratio (`{best_sharpe:.2f}`)  "
+        )
         md_content.append("")
 
         # Key recommendations
@@ -1123,11 +1425,11 @@ def generate_meta_labeling_markdown_report(
 
             if signal_analysis.get("accepted_win_rate", 0) > 0.6:
                 recommendations.append(
-                    f"✅ `{bar_type}`: High accepted win rate ({signal_analysis['accepted_win_rate']:,.1%}) - Consider increasing position size"
+                    f"✅ `{bar_type}`: High accepted win rate ({signal_analysis['accepted_win_rate']:.1%}) - Consider increasing position size"
                 )
             elif signal_analysis.get("accepted_win_rate", 0) < 0.45:
                 recommendations.append(
-                    f"⚠️ `{bar_type}`: Low accepted win rate ({signal_analysis['accepted_win_rate']:,.1%}) - Consider adjusting confidence threshold"
+                    f"⚠️ `{bar_type}`: Low accepted win rate ({signal_analysis['accepted_win_rate']:.1%}) - Consider adjusting confidence threshold"
                 )
 
             if meta_metrics.get("profit_factor", 0) > 2.0:
@@ -1181,15 +1483,25 @@ def generate_meta_labeling_markdown_report(
     md_content.append("### A. Glossary of Metrics")
     md_content.append("")
     md_content.append("- **Sharpe Ratio**: Risk-adjusted return (higher is better)  ")
-    md_content.append("- **Sortino Ratio**: Risk-adjusted return focusing on downside risk  ")
+    md_content.append(
+        "- **Sortino Ratio**: Risk-adjusted return focusing on downside risk  "
+    )
     md_content.append("- **Calmar Ratio**: Return relative to maximum drawdown  ")
-    md_content.append("- **Omega Ratio**: Probability-weighted ratio of gains vs losses  ")
+    md_content.append(
+        "- **Omega Ratio**: Probability-weighted ratio of gains vs losses  "
+    )
     md_content.append("- **Profit Factor**: Gross profit divided by gross loss  ")
     md_content.append("- **Win Rate**: Percentage of profitable trades  ")
     md_content.append("- **Max Drawdown**: Maximum peak-to-trough decline  ")
-    md_content.append("- **Filter Rate**: Percentage of signals rejected by meta-model  ")
-    md_content.append("- **Precision**: Percentage of accepted signals that were profitable  ")
-    md_content.append("- **Recall**: Percentage of profitable signals that were accepted  ")
+    md_content.append(
+        "- **Filter Rate**: Percentage of signals rejected by meta-model  "
+    )
+    md_content.append(
+        "- **Precision**: Percentage of accepted signals that were profitable  "
+    )
+    md_content.append(
+        "- **Recall**: Percentage of profitable signals that were accepted  "
+    )
     md_content.append("")
 
     md_content.append("### B. Bar Type Characteristics")
@@ -1212,7 +1524,7 @@ def generate_meta_labeling_markdown_report(
 
     # Footer
     md_content.append("---")
-    md_content.append(f"*Report generated by Meta-Labeling Analysis Module*  ")
+    md_content.append("*Report generated by Meta-Labeling Analysis Module*  ")
     md_content.append(f"*Report saved to: `{filename}`*  ")
     if include_plots:
         md_content.append(f"*Plots saved in: `{plot_dir}`*  ")
@@ -1325,7 +1637,9 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
         meta_returns = results.get("meta_returns", pd.Series())
         if len(meta_returns) > 63:
             rolling_sharpe = (
-                meta_returns.rolling(63).mean() / meta_returns.rolling(63).std() * np.sqrt(252)
+                meta_returns.rolling(63).mean()
+                / meta_returns.rolling(63).std()
+                * np.sqrt(252)
             )
             ax2.plot(
                 rolling_sharpe.index,
@@ -1348,7 +1662,12 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
             cum_returns = (1 + meta_returns).cumprod()
             drawdown = cum_returns / cum_returns.cummax() - 1
             ax3.fill_between(
-                drawdown.index, drawdown.values, 0, alpha=0.3, label=bar_type, color=color
+                drawdown.index,
+                drawdown.values,
+                0,
+                alpha=0.3,
+                label=bar_type,
+                color=color,
             )
 
     ax3.set_title("Drawdown Comparison", fontsize=12, fontweight="bold")
@@ -1390,7 +1709,9 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
             monthly_matrix = np.array(aligned_data)
 
             # Plot heatmap
-            im = ax4.imshow(monthly_matrix, aspect="auto", cmap="RdYlGn", vmin=-0.1, vmax=0.1)
+            im = ax4.imshow(
+                monthly_matrix, aspect="auto", cmap="RdYlGn", vmin=-0.1, vmax=0.1
+            )
             ax4.set_title("Monthly Returns Heatmap", fontsize=12, fontweight="bold")
             ax4.set_yticks(range(len(bar_type_labels)))
             ax4.set_yticklabels(bar_type_labels)
@@ -1420,7 +1741,12 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
             )
     else:
         ax4.text(
-            0.5, 0.5, "No monthly data available", ha="center", va="center", transform=ax4.transAxes
+            0.5,
+            0.5,
+            "No monthly data available",
+            ha="center",
+            va="center",
+            transform=ax4.transAxes,
         )
     plt.tight_layout()
     return fig
@@ -1435,7 +1761,10 @@ def _generate_signal_quality_plot(results: Dict) -> plt.Figure:
     # Plot 1: Signal distribution pie chart
     ax1 = axes[0]
     labels = ["Accepted", "Rejected"]
-    sizes = [signal_analysis.get("accepted_signals", 0), signal_analysis.get("rejected_signals", 0)]
+    sizes = [
+        signal_analysis.get("accepted_signals", 0),
+        signal_analysis.get("rejected_signals", 0),
+    ]
     colors = ["#4CAF50", "#F44336"]
 
     ax1.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
@@ -1463,7 +1792,7 @@ def _generate_signal_quality_plot(results: Dict) -> plt.Figure:
         ax2.text(
             bar.get_x() + bar.get_width() / 2.0,
             height,
-            f"{val:.2%}",
+            f"{val:,.2%}",
             ha="center",
             va="bottom",
             fontsize=10,
@@ -1477,7 +1806,9 @@ def _save_all_plots(results_dict: Dict[str, Dict], plot_dir: Path):
     """Save all generated plots to directory."""
     # Bar type comparison plot
     comparison_plot = _generate_bar_type_comparison_plot(results_dict)
-    comparison_plot.savefig(plot_dir / "bar_type_comparison.png", dpi=150, bbox_inches="tight")
+    comparison_plot.savefig(
+        plot_dir / "bar_type_comparison.png", dpi=150, bbox_inches="tight"
+    )
     plt.close(comparison_plot)
 
     # Sharpe evolution plot
@@ -1490,7 +1821,9 @@ def _save_all_plots(results_dict: Dict[str, Dict], plot_dir: Path):
         # Strategy comparison plot
         strategy_plot = plot_strategy_comparison(results, figsize=(14, 8))
         strategy_plot.savefig(
-            plot_dir / f"{bar_type}_strategy_comparison.png", dpi=150, bbox_inches="tight"
+            plot_dir / f"{bar_type}_strategy_comparison.png",
+            dpi=150,
+            bbox_inches="tight",
         )
         plt.close(strategy_plot)
 
@@ -1506,7 +1839,7 @@ def generate_complete_meta_labeling_report(
     results_dict: Dict[str, Dict],
     strategy_config: Optional[Dict] = None,
     output_dir: Path = Path("meta_labeling_reports"),
-    filename: str = "meta_labeling_analysis_report.md",
+    filename: str = "meta_labeling_analysis_report",
 ) -> Path:
     """
     Complete meta-labeling analysis workflow with markdown report generation.
@@ -1520,7 +1853,7 @@ def generate_complete_meta_labeling_report(
     output_dir : Path
         Directory to save all outputs
     filename : str
-        Name of the markdown report file
+        Name used for output files
 
     Returns
     -------
@@ -1528,10 +1861,11 @@ def generate_complete_meta_labeling_report(
         Path to the generated markdown report
     """
     # Create output directory
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     plot_dir = output_dir / "plots"
 
     # Define report path
+    filename = Path(filename).stem
     report_path = output_dir / filename
 
     print("🔍 Generating meta-labeling analysis report...")
@@ -1540,7 +1874,7 @@ def generate_complete_meta_labeling_report(
     report_file = generate_meta_labeling_markdown_report(
         results_dict=results_dict,
         strategy_config=strategy_config,
-        filename=report_path,
+        filename=Path(f"{report_path}.md"),
         include_plots=True,
         plot_dir=plot_dir,
     )
@@ -1558,12 +1892,12 @@ def generate_complete_meta_labeling_report(
 
     if comparison_data:
         comparison_df = pd.DataFrame(comparison_data)
-        comparison_df.to_csv(output_dir / "meta_labeling_comparison.csv", index=False)
+        comparison_df.to_csv(Path(f"{report_path}.csv"), index=False)
 
     print(f"✅ Analysis complete! Files saved in: {output_dir}")
     print(f"📊 Report: {report_file}")
     print(f"📈 Plots: {plot_dir}")
-    print(f"📁 Raw data: {output_dir / 'meta_labeling_comparison.csv'}")
+    print(f"📁 Raw data: {Path(f'{report_path}.csv')}")
 
     return report_file
 
@@ -1571,7 +1905,7 @@ def generate_complete_meta_labeling_report(
 # Example usage
 if __name__ == "__main__":
     # Example with simulated data
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     # Create sample results for different bar types
     np.random.seed(42)
@@ -1585,10 +1919,13 @@ if __name__ == "__main__":
         trade_dates = np.random.choice(dates, n_trades, replace=False)
         trade_dates.sort()
 
-        primary_returns = pd.Series(np.random.normal(0.001, 0.02, n_trades), index=trade_dates)
+        primary_returns = pd.Series(
+            np.random.normal(0.001, 0.02, n_trades), index=trade_dates
+        )
 
         meta_returns = pd.Series(
-            np.random.normal(0.0015, 0.015, n_trades - 20), index=trade_dates[: n_trades - 20]
+            np.random.normal(0.0015, 0.015, n_trades - 20),
+            index=trade_dates[: n_trades - 20],
         )
 
         # Simulate metrics
@@ -1644,3 +1981,63 @@ if __name__ == "__main__":
             "total_primary_signals": n_trades,
             "filtered_signals": n_trades - 20,
         }
+
+
+def get_validation_metrics(
+    test_start,
+    test_end,
+    pipeline: ModelDevelopmentPipeline,
+    bet_sizing: str = None,
+    confidence_threshold: float = 0.5,
+) -> dict:
+    from sklearn.metrics import classification_report
+
+    df_test = load_and_prepare_training_data(
+        symbol=pipeline.symbol,
+        start_date=test_start,
+        end_date=test_end,
+        **pipeline.data_config,
+    )
+    events = generate_events_triple_barrier(
+        df_test, pipeline.strategy, **pipeline.label_config
+    )
+    sample_weight = pd.Series(np.ones(events.shape[0]), index=events.index)
+    meta_features = calculate_rolling_metrics(events, sample_weight)
+
+    features = create_feature_engineering_pipeline(
+        df_test, pipeline.feature_config, pipeline.data_config
+    )
+    features = features.join(meta_features, how="inner").dropna()
+    events = events.loc[features.index]
+    X = features[pipeline.preprocessed_features.columns]
+    y = events["bin"]
+
+    validate, test = PurgedSplit(events["t1"], test_size_pct=0.5).split(X)
+    X_val, X_test = X.iloc[validate], X.iloc[test]
+    y_val, y_test = y.iloc[validate], y.iloc[test]
+    prob = pd.Series(
+        pipeline.best_model.predict_proba(X_val)[:, 1], index=X_val.index, name="prob"
+    )
+    pred = (prob > confidence_threshold).astype(int)
+    events_val = events.iloc[validate]
+    df_val = df_test.loc[: events_val.t1[-1]]
+
+    validation_metrics = evaluate_meta_labeling_performance(
+        events_val,
+        prob,
+        df_val.close,
+        confidence_threshold=confidence_threshold,
+        strategy_name=pipeline.strategy.get_strategy_name(),
+        bet_sizing=bet_sizing,
+    )
+
+    validation_metrics.update(
+        dict(
+            symbol=pipeline.symbol,
+            bar_size=pipeline.data_config["bar_size"],
+            bar_type=pipeline.data_config["bar_type"],
+            classification_report=classification_report(y_val, pred),
+        )
+    )
+
+    return validation_metrics

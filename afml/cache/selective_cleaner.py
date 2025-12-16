@@ -43,7 +43,9 @@ class FunctionVersionTracker:
             try:
                 with open(self.tracker_file, "r") as f:
                     self.current_versions = json.load(f)
-                logger.debug("Loaded version data for {} functions", len(self.current_versions))
+                logger.debug(
+                    "Loaded version data for {} functions", len(self.current_versions)
+                )
             except Exception as e:
                 logger.warning("Failed to load version tracker: {}", e)
                 self.current_versions = {}
@@ -183,10 +185,14 @@ def find_orphaned_caches(
             if any(name.startswith(mod) for mod in modules)
         }
 
-    logger.info("Checking for orphaned caches across {} functions", len(current_versions))
+    logger.info(
+        "Checking for orphaned caches across {} functions", len(current_versions)
+    )
 
     # Build list of current version hashes
-    current_hashes = {info["hash"] for info in current_versions.values() if info["hash"]}
+    current_hashes = {
+        info["hash"] for info in current_versions.values() if info["hash"]
+    }
 
     # Scan cache directory for versioned cache files
     orphaned_files = []
@@ -225,7 +231,9 @@ def find_orphaned_caches(
     }
 
     if orphaned_files:
-        logger.info("Found {} orphaned cache files ({:.2f} MB)", len(orphaned_files), total_size)
+        logger.info(
+            "Found {} orphaned cache files ({:.2f} MB)", len(orphaned_files), total_size
+        )
     else:
         logger.info("No orphaned caches found")
 
@@ -316,7 +324,9 @@ def cleanup_by_size(max_size_mb: int) -> float:
             total_size += size_mb
 
     if total_size <= max_size_mb:
-        logger.info("Cache size {:.1f} MB is under limit {:.1f} MB", total_size, max_size_mb)
+        logger.info(
+            "Cache size {:.1f} MB is under limit {:.1f} MB", total_size, max_size_mb
+        )
         return 0.0
 
     # Sort by modification time (oldest first)
@@ -335,7 +345,9 @@ def cleanup_by_size(max_size_mb: int) -> float:
         except Exception as e:
             logger.debug("Failed to remove {}: {}", file_path, e)
 
-    logger.info("Removed {:.1f} MB of old caches (limit: {:.1f} MB)", removed_size, max_size_mb)
+    logger.info(
+        "Removed {:.1f} MB of old caches (limit: {:.1f} MB)", removed_size, max_size_mb
+    )
     return removed_size
 
 
@@ -430,7 +442,9 @@ def cache_maintenance(
             except Exception as e:
                 logger.warning("Age-based cleanup failed: {}", e)
 
-        logger.info("Cache maintenance completed: {}", _format_maintenance_report(report))
+        logger.info(
+            "Cache maintenance completed: {}", _format_maintenance_report(report)
+        )
 
     except Exception as e:
         logger.error("Cache maintenance failed: {}", e)
@@ -507,7 +521,9 @@ def analyze_cache_versions() -> Dict[str, any]:
             "version_count": len(data["versions"]),
             "total_size_mb": round(data["total_size_mb"], 2),
             "avg_size_per_version_mb": (
-                round(data["total_size_mb"] / len(data["versions"]), 2) if data["versions"] else 0.0
+                round(data["total_size_mb"] / len(data["versions"]), 2)
+                if data["versions"]
+                else 0.0
             ),
         }
 
@@ -527,7 +543,9 @@ def print_version_analysis():
     print("=" * 70)
 
     # Sort by version count
-    sorted_funcs = sorted(analysis.items(), key=lambda x: x[1]["version_count"], reverse=True)
+    sorted_funcs = sorted(
+        analysis.items(), key=lambda x: x[1]["version_count"], reverse=True
+    )
 
     total_versions = sum(info["version_count"] for _, info in sorted_funcs)
     total_size = sum(info["total_size_mb"] for _, info in sorted_funcs)

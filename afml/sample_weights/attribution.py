@@ -88,7 +88,8 @@ def get_weights_by_return(
         # Verify index compatibility
         missing_in_close = processed_ce.index.difference(close_series.index)
         assert missing_in_close.empty, (
-            f"num_conc_events contains {len(missing_in_close)} " "indices not in close_series"
+            f"num_conc_events contains {len(missing_in_close)} "
+            "indices not in close_series"
         )
 
     # Compute weights using processed concurrent events

@@ -41,7 +41,9 @@ class BollingerStrategy(BaseStrategy):
             Returns the objective of the strategy.
     """
 
-    def __init__(self, window: int = 20, std: float = 2.0, objective: str = "mean_reversion"):
+    def __init__(
+        self, window: int = 20, std: float = 2.0, objective: str = "mean_reversion"
+    ):
         self.window = window
         self.std = std
         self.objective = objective
@@ -86,7 +88,10 @@ class MACrossoverStrategy(BaseStrategy):
     """
 
     def __init__(
-        self, fast_window: int = 10, slow_window: int = 30, objective: str = "trend_following"
+        self,
+        fast_window: int = 10,
+        slow_window: int = 30,
+        objective: str = "trend_following",
     ):
         self.fast_window = fast_window
         self.slow_window = slow_window
@@ -102,8 +107,12 @@ class MACrossoverStrategy(BaseStrategy):
 
         # Generate signals
         signals = pd.Series(0, index=data.index, dtype="int8", name="signal")
-        signals[(fast_ma > slow_ma)] = 1  # Long signal when fast MA crosses above slow MA
-        signals[(fast_ma < slow_ma)] = -1  # Short signal when fast MA crosses below slow MA
+        signals[(fast_ma > slow_ma)] = (
+            1  # Long signal when fast MA crosses above slow MA
+        )
+        signals[
+            (fast_ma < slow_ma)
+        ] = -1  # Short signal when fast MA crosses below slow MA
         return signals
 
     def get_strategy_name(self) -> str:

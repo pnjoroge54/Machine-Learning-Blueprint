@@ -337,7 +337,14 @@ def plot_reliability(
     # Add probability distribution histogram
     if draw_hist:
         hist_ax = ax.inset_axes([0.15, -0.25, 0.7, 0.15])
-        hist_ax.hist(p_pred, bins=20, range=(0, 1), color="lightblue", edgecolor="black", alpha=0.7)
+        hist_ax.hist(
+            p_pred,
+            bins=20,
+            range=(0, 1),
+            color="lightblue",
+            edgecolor="black",
+            alpha=0.7,
+        )
         hist_ax.set_xlabel("Predicted Probability Distribution", fontsize=10)
         hist_ax.set_ylabel("Count", fontsize=10)
         hist_ax.set_xlim(0, 1)
@@ -506,7 +513,9 @@ def fit_platt_scaling(
     return platt
 
 
-def fit_isotonic_calibration(y_calib: np.ndarray, scores_calib: np.ndarray) -> IsotonicRegression:
+def fit_isotonic_calibration(
+    y_calib: np.ndarray, scores_calib: np.ndarray
+) -> IsotonicRegression:
     """
     Fit isotonic regression calibration mapping.
 
@@ -583,7 +592,9 @@ def oof_predict_proba(
         >>> oof_probs = oof_predict_proba(clf, X, y, cv=PurgedKFold(n_splits=5, t1=t1))
     """
     # Use sklearn's cross_val_predict with purged CV
-    predictions = cross_val_predict(estimator, X, y, cv=cv, method=method, n_jobs=n_jobs)
+    predictions = cross_val_predict(
+        estimator, X, y, cv=cv, method=method, n_jobs=n_jobs
+    )
 
     # Handle different prediction formats
     if predictions.ndim == 2 and predictions.shape[1] >= 2:
@@ -739,9 +750,15 @@ def calibration_report(
     # Calibrated probabilities (if provided)
     if p_calibrated is not None:
         metrics["calibrated_brier"] = brier_score(y_true, p_calibrated)
-        metrics["calibrated_ece"] = expected_calibration_error(y_true, p_calibrated, n_bins)
-        metrics["calibrated_mce"] = maximum_calibration_error(y_true, p_calibrated, n_bins)
-        metrics["brier_improvement"] = metrics["original_brier"] - metrics["calibrated_brier"]
+        metrics["calibrated_ece"] = expected_calibration_error(
+            y_true, p_calibrated, n_bins
+        )
+        metrics["calibrated_mce"] = maximum_calibration_error(
+            y_true, p_calibrated, n_bins
+        )
+        metrics["brier_improvement"] = (
+            metrics["original_brier"] - metrics["calibrated_brier"]
+        )
         metrics["ece_improvement"] = metrics["original_ece"] - metrics["calibrated_ece"]
 
     return pd.DataFrame([metrics]).T.rename(columns={0: "value"})

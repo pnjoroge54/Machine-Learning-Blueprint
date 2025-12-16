@@ -115,7 +115,9 @@ class DataAccessTracker:
         try:
             df = pd.DataFrame(self.access_log)
             df.to_csv(self.log_file, index=False)
-            logger.info(f"Saved {len(self.access_log)} access records to {self.log_file}")
+            logger.info(
+                f"Saved {len(self.access_log)} access records to {self.log_file}"
+            )
         except Exception as e:
             logger.error(f"Failed to save access log: {e}")
 
@@ -143,7 +145,8 @@ class DataAccessTracker:
         matching_accesses = [
             entry
             for entry in self.access_log
-            if entry["dataset"] == dataset_name and entry["purpose"] not in exclude_purposes
+            if entry["dataset"] == dataset_name
+            and entry["purpose"] not in exclude_purposes
         ]
 
         access_count = len(matching_accesses)
@@ -174,10 +177,14 @@ class DataAccessTracker:
 
         report_data = []
         for dataset_name in df["dataset"].unique():
-            access_count, warning_level, accesses = self.analyze_contamination(dataset_name)
+            access_count, warning_level, accesses = self.analyze_contamination(
+                dataset_name
+            )
 
             # Extract purposes from the already-filtered accesses
-            purposes = pd.Series([a["purpose"] for a in accesses]).value_counts().to_dict()
+            purposes = (
+                pd.Series([a["purpose"] for a in accesses]).value_counts().to_dict()
+            )
 
             # Extract timestamps from the already-filtered accesses
             timestamps = [a["timestamp"] for a in accesses]
@@ -216,7 +223,9 @@ class DataAccessTracker:
             print(f"  Total Accesses: {row['total_accesses']}")
             print(f"  Breakdown:")
             print(f"    - Train: {row['train_accesses']}")
-            print(f"    - Test: {row['test_accesses']} {'⚠️' if row['test_accesses'] > 2 else ''}")
+            print(
+                f"    - Test: {row['test_accesses']} {'⚠️' if row['test_accesses'] > 2 else ''}"
+            )
             print(
                 f"    - Validate: {row['validate_accesses']} {'⚠️' if row['validate_accesses'] > 2 else ''}"
             )

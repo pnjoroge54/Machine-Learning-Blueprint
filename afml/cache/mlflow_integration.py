@@ -306,7 +306,9 @@ class MLflowCacheIntegration:
             logger.error(f"Failed to load model from run {run_id}: {e}")
             raise
 
-    def _extract_params(self, func: Callable, args: tuple, kwargs: dict) -> Dict[str, Any]:
+    def _extract_params(
+        self, func: Callable, args: tuple, kwargs: dict
+    ) -> Dict[str, Any]:
         """Extract parameters from function call."""
         import inspect
 
@@ -336,7 +338,9 @@ class MLflowCacheIntegration:
 
     def _generate_run_name(self, func_name: str, params: Dict[str, Any]) -> str:
         """Generate unique run name."""
-        param_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
+        param_hash = hashlib.md5(
+            json.dumps(params, sort_keys=True).encode()
+        ).hexdigest()[:8]
         return f"{func_name}_{param_hash}"
 
     def _generate_cache_key(self, func_name: str, params: Dict[str, Any]) -> str:

@@ -250,7 +250,9 @@ def initialize_cache_system():
     stats = cache_stats.get_stats()
     if stats:
         hit_rate = cache_stats.get_hit_rate()
-        logger.info("  Loaded stats: {} functions, {:.1%} hit rate", len(stats), hit_rate)
+        logger.info(
+            "  Loaded stats: {} functions, {:.1%} hit rate", len(stats), hit_rate
+        )
 
 
 # =============================================================================
@@ -538,7 +540,9 @@ def clear_cache_by_pattern(pattern: str, cache_type: str = "joblib"):
         cache_type: Type of cache to clear ('joblib', 'numba', 'backtest')
     """
     if cache_type not in CACHE_DIRS:
-        raise ValueError(f"Invalid cache type: {cache_type}. Available: {list(CACHE_DIRS.keys())}")
+        raise ValueError(
+            f"Invalid cache type: {cache_type}. Available: {list(CACHE_DIRS.keys())}"
+        )
 
     cache_dir = CACHE_DIRS[cache_type]
     removed_count = 0
