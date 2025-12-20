@@ -4,23 +4,192 @@ from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from loguru import logger
 from scipy import optimize, stats
 
 warnings.filterwarnings("ignore")
 
 try:
-    from numba import jit, prange
-
+    from numba import njit, prange
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
 
+    # Fallback decorators
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+
+        return decorator if not args else decorator(args[0])
+
+    def prange(x):
+        return range(x)
+
+
+# ============================================================================
+# NUMBA-ACCELERATED KERNELS
+# ============================================================================
+
+
+@njit
+def ou_single(n_steps, dt, mu, phi, sigma):
+    path = np.zeros(n_steps + 1)
+    path[0] = mu
+    for t in range(n_steps):
+        path[t + 1] = phi * path[t] + (1 - phi) * mu + sigma * np.random.normal()
+    return path
+
+
+@njit(parallel=True)
+def ou_parallel(n_sims, n_steps, dt, mu, phi, sigma):
+    all_paths = np.zeros((n_sims, n_steps + 1))
+    for sim in prange(n_sims):
+        all_paths[sim] = ou_single(n_steps, dt, mu, phi, sigma)
+    return all_paths
+
+
+@njit
+def gbm_single(n_steps, dt, mu, sigma, S0):
+    path = np.zeros(n_steps + 1)
+    path[0] = S0
+    for t in range(n_steps):
+        dW = np.random.normal(0, np.sqrt(dt))
+        path[t + 1] = path[t] * np.exp((mu - 0.5 * sigma**2) * dt + sigma * dW)
+    return path
+
+
+@njit(parallel=True)
+def gbm_parallel(n_sims, n_steps, dt, mu, sigma, S0):
+    all_paths = np.zeros((n_sims, n_steps + 1))
+    for sim in prange(n_sims):
+        all_paths[sim] = gbm_single(n_steps, dt, mu, sigma, S0)
+    return all_paths
+
+
+@njit
+def jump_diffusion_single(n_steps, dt, mu, sigma, lam, jmean, jstd, S0):
+    path = np.zeros(n_steps + 1)
+    path[0] = S0
+    for t in range(n_steps):
+        dW = np.random.normal(0, np.sqrt(dt))
+        cont = (mu - 0.5 * sigma**2) * dt + sigma * dW
+        jump = np.random.normal(jmean, jstd) if np.random.random() < lam * dt else 0.0
+        path[t + 1] = path[t] * np.exp(cont + jump)
+    return path
+
+
+@njit(parallel=True)
+def jump_diffusion_parallel(n_sims, n_steps, dt, mu, sigma, lam, jmean, jstd, S0):
+    all_paths = np.zeros((n_sims, n_steps + 1))
+    for sim in prange(n_sims):
+        all_paths[sim] = jump_diffusion_single(n_steps, dt, mu, sigma, lam, jmean, jstd, S0)
+    return all_paths
+
+
+@njit
+def garch_single(n_steps, dt, omega, alpha, beta, S0):
+    path = np.zeros(n_steps + 1)
+    path[0] = S0
+    sigma2 = omega / (1 - alpha - beta)
+    for t in range(n_steps):
+        eps = np.random.normal()
+        ret = np.sqrt(sigma2) * eps
+        path[t + 1] = path[t] * (1 + ret)
+        sigma2 = omega + alpha * (ret**2) + beta * sigma2
+    return path
+
+
+@njit(parallel=True)
+def garch_parallel(n_sims, n_steps, dt, omega, alpha, beta, S0):
+    all_paths = np.zeros((n_sims, n_steps + 1))
+    for sim in prange(n_sims):
+        all_paths[sim] = garch_single(n_steps, dt, omega, alpha, beta, S0)
+    return all_paths
+
+
+@njit
+def heston_single(n_steps, dt, mu, kappa, theta, sigma_v, rho, v0, S0):
+    S = np.zeros(n_steps + 1)
+    v = np.zeros(n_steps + 1)
+    S[0] = S0
+    v[0] = v0
+    sqrt_1_rho2 = np.sqrt(1 - rho**2)
+
+    for t in range(n_steps):
+        dW1 = np.random.normal(0, np.sqrt(dt))
+        dW2 = rho * dW1 + sqrt_1_rho2 * np.random.normal(0, np.sqrt(dt))
+        vt = max(v[t], 0)
+        v[t + 1] = max(v[t] + kappa * (theta - v[t]) * dt + sigma_v * np.sqrt(vt) * dW2, 0)
+        S[t + 1] = S[t] * np.exp((mu - 0.5 * v[t]) * dt + np.sqrt(vt) * dW1)
+    return S
+
+
+@njit(parallel=True)
+def heston_parallel(n_sims, n_steps, dt, mu, kappa, theta, sigma_v, rho, v0, S0):
+    all_paths = np.zeros((n_sims, n_steps + 1))
+    for sim in prange(n_sims):
+        all_paths[sim] = heston_single(n_steps, dt, mu, kappa, theta, sigma_v, rho, v0, S0)
+    return all_paths
+
+
+@njit
+def cev_single(n_steps, dt, mu, sigma, gamma, S0):
+    path = np.zeros(n_steps + 1)
+    path[0] = S0
+    for t in range(n_steps):
+        dW = np.random.normal(0, np.sqrt(dt))
+        St = path[t]
+        drift = mu * St * dt
+        diff = sigma * (St**gamma) * dW
+        path[t + 1] = max(St + drift + diff, 0.01)
+    return path
+
+
+@njit(parallel=True)
+def cev_parallel(n_sims, n_steps, dt, mu, sigma, gamma, S0):
+    all_paths = np.zeros((n_sims, n_steps + 1))
+    for sim in prange(n_sims):
+        all_paths[sim] = cev_single(n_steps, dt, mu, sigma, gamma, S0)
+    return all_paths
+
+
+@njit
+def regime_single(n_steps, dt, mu1, sig1, mu2, sig2, p11, p22, init_reg, S0):
+    path = np.zeros(n_steps + 1)
+    path[0] = S0
+    regime = init_reg
+
+    for t in range(n_steps):
+        if regime == 0:
+            mu, sigma, stay = mu1, sig1, p11
+        else:
+            mu, sigma, stay = mu2, sig2, p22
+
+        if np.random.random() > stay:
+            regime = 1 - regime
+
+        ret = mu * dt + sigma * np.random.normal(0, np.sqrt(dt))
+        path[t + 1] = path[t] * (1 + ret)
+    return path
+
+
+@njit(parallel=True)
+def regime_parallel(n_sims, n_steps, dt, mu1, sig1, mu2, sig2, p11, p22, init_reg, S0):
+    all_paths = np.zeros((n_sims, n_steps + 1))
+    for sim in prange(n_sims):
+        all_paths[sim] = regime_single(n_steps, dt, mu1, sig1, mu2, sig2, p11, p22, init_reg, S0)
+    return all_paths
+
+
+# ============================================================================
+# STOCHASTIC PROCESS CLASSES
+# ============================================================================
 
 class StochasticProcess(ABC):
     """Base class for all stochastic processes"""
 
     @abstractmethod
-    def estimate_parameters(self, price_series, **kwargs):
+    def estimate_parameters(self, price_series):
         """Estimate process parameters from historical data"""
         pass
 
@@ -34,9 +203,10 @@ class StochasticProcess(ABC):
         """Return process name"""
         pass
 
-    def goodness_of_fit(self, price_series, params):
-        """Calculate goodness of fit metrics"""
-        pass
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        """Simulate multiple paths (uses parallel if available)"""
+        # Default fallback - subclasses override with optimized version
+        return np.array([self.simulate_path(params, n_steps, dt) for _ in range(n_simulations)])
 
 
 class OrnsteinUhlenbeck(StochasticProcess):
@@ -81,20 +251,25 @@ class OrnsteinUhlenbeck(StochasticProcess):
         }
 
     def simulate_path(self, params, n_steps, dt=1.0):
-        mu, theta, sigma, phi = (
-            params["mu"],
-            params["theta"],
-            params["sigma"],
-            params["phi"],
-        )
+        mu, phi, sigma = params["mu"], params["phi"], params["sigma"]
 
+        if NUMBA_AVAILABLE:
+            return ou_single(n_steps, dt, mu, phi, sigma)
+
+        # Fallback
         path = np.zeros(n_steps + 1)
         path[0] = mu
-
         for t in range(n_steps):
             path[t + 1] = phi * path[t] + (1 - phi) * mu + sigma * np.random.normal()
-
         return path
+
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        mu, phi, sigma = params["mu"], params["phi"], params["sigma"]
+
+        if NUMBA_AVAILABLE:
+            return ou_parallel(n_simulations, n_steps, dt, mu, phi, sigma)
+
+        return super().simulate_paths(params, n_steps, n_simulations, dt)
 
     def get_process_name(self):
         return "Ornstein-Uhlenbeck (Mean Reversion)"
@@ -115,15 +290,11 @@ class GeometricBrownianMotion(StochasticProcess):
     def estimate_parameters(self, price_series):
         returns = price_series.pct_change().dropna()
 
-        # Drift (μ) and volatility (σ)
         mu = returns.mean()
         sigma = returns.std()
 
-        # Annualized metrics (assuming daily data)
         mu_annual = mu * 252
         sigma_annual = sigma * np.sqrt(252)
-
-        # Sharpe ratio estimation
         sharpe = mu / sigma if sigma > 0 else 0
 
         return {
@@ -137,16 +308,27 @@ class GeometricBrownianMotion(StochasticProcess):
 
     def simulate_path(self, params, n_steps, dt=1.0):
         mu, sigma = params["mu"], params["sigma"]
+        S0 = 100
 
-        S0 = 100  # Starting price
+        if NUMBA_AVAILABLE:
+            return gbm_single(n_steps, dt, mu, sigma, S0)
+
+        # Fallback
         path = np.zeros(n_steps + 1)
         path[0] = S0
-
         for t in range(n_steps):
             dW = np.random.normal(0, np.sqrt(dt))
             path[t + 1] = path[t] * np.exp((mu - 0.5 * sigma**2) * dt + sigma * dW)
-
         return path
+
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        mu, sigma = params["mu"], params["sigma"]
+        S0 = 100
+
+        if NUMBA_AVAILABLE:
+            return gbm_parallel(n_simulations, n_steps, dt, mu, sigma, S0)
+
+        return super().simulate_paths(params, n_steps, n_simulations, dt)
 
     def get_process_name(self):
         return "Geometric Brownian Motion (Trend)"
@@ -168,7 +350,6 @@ class JumpDiffusion(StochasticProcess):
     def estimate_parameters(self, price_series, jump_threshold=2.5):
         returns = price_series.pct_change().dropna()
 
-        # Identify jumps (returns beyond threshold standard deviations)
         mean_return = returns.mean()
         std_return = returns.std()
 
@@ -176,10 +357,8 @@ class JumpDiffusion(StochasticProcess):
         jump_returns = returns[jump_indicator]
         normal_returns = returns[~jump_indicator]
 
-        # Jump intensity (lambda)
         lambda_jump = len(jump_returns) / len(returns)
 
-        # Jump magnitude parameters
         if len(jump_returns) > 0:
             jump_mean = jump_returns.mean()
             jump_std = jump_returns.std()
@@ -187,13 +366,8 @@ class JumpDiffusion(StochasticProcess):
             jump_mean = 0
             jump_std = std_return
 
-        # Continuous component parameters
-        mu_continuous = (
-            normal_returns.mean() if len(normal_returns) > 0 else mean_return
-        )
-        sigma_continuous = (
-            normal_returns.std() if len(normal_returns) > 0 else std_return
-        )
+        mu_continuous = normal_returns.mean() if len(normal_returns) > 0 else mean_return
+        sigma_continuous = normal_returns.std() if len(normal_returns) > 0 else std_return
 
         return {
             "mu": mu_continuous,
@@ -208,26 +382,38 @@ class JumpDiffusion(StochasticProcess):
     def simulate_path(self, params, n_steps, dt=1.0):
         mu = params["mu"]
         sigma = params["sigma"]
-        lambda_jump = params["lambda_jump"]
-        jump_mean = params["jump_mean"]
-        jump_std = params["jump_std"]
-
+        lam = params["lambda_jump"]
+        jmean = params["jump_mean"]
+        jstd = params["jump_std"]
         S0 = 100
+
+        if NUMBA_AVAILABLE:
+            return jump_diffusion_single(n_steps, dt, mu, sigma, lam, jmean, jstd, S0)
+
+        # Fallback
         path = np.zeros(n_steps + 1)
         path[0] = S0
-
         for t in range(n_steps):
-            # Continuous component
             dW = np.random.normal(0, np.sqrt(dt))
-            continuous_change = (mu - 0.5 * sigma**2) * dt + sigma * dW
-
-            # Jump component
-            jump_occurs = np.random.random() < lambda_jump * dt
-            jump_size = np.random.normal(jump_mean, jump_std) if jump_occurs else 0
-
-            path[t + 1] = path[t] * np.exp(continuous_change + jump_size)
-
+            cont = (mu - 0.5 * sigma**2) * dt + sigma * dW
+            jump = np.random.normal(jmean, jstd) if np.random.random() < lam * dt else 0
+            path[t + 1] = path[t] * np.exp(cont + jump)
         return path
+
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        if NUMBA_AVAILABLE:
+            return jump_diffusion_parallel(
+                n_simulations,
+                n_steps,
+                dt,
+                params["mu"],
+                params["sigma"],
+                params["lambda_jump"],
+                params["jump_mean"],
+                params["jump_std"],
+                100,
+            )
+        return super().simulate_paths(params, n_steps, n_simulations, dt)
 
     def get_process_name(self):
         return "Jump Diffusion (Events)"
@@ -253,7 +439,6 @@ class GARCH(StochasticProcess):
         def garch_likelihood(params):
             omega, alpha, beta = params
 
-            # Constraints
             if omega <= 0 or alpha < 0 or beta < 0 or alpha + beta >= 1:
                 return 1e10
 
@@ -264,11 +449,9 @@ class GARCH(StochasticProcess):
             for t in range(1, n):
                 sigma2[t] = omega + alpha * returns[t - 1] ** 2 + beta * sigma2[t - 1]
 
-            # Log-likelihood
             likelihood = -0.5 * np.sum(np.log(sigma2) + returns**2 / sigma2)
             return -likelihood
 
-        # Optimize
         result = optimize.minimize(
             garch_likelihood,
             initial_params,
@@ -277,8 +460,6 @@ class GARCH(StochasticProcess):
         )
 
         omega, alpha, beta = result.x
-
-        # Calculate unconditional variance
         uncond_var = omega / (1 - alpha - beta)
 
         return {
@@ -291,28 +472,29 @@ class GARCH(StochasticProcess):
         }
 
     def simulate_path(self, params, n_steps, dt=1.0):
-        omega = params["omega"]
-        alpha = params["alpha"]
-        beta = params["beta"]
-
+        omega, alpha, beta = params["omega"], params["alpha"], params["beta"]
         S0 = 100
+
+        if NUMBA_AVAILABLE:
+            return garch_single(n_steps, dt, omega, alpha, beta, S0)
+
+        # Fallback
         path = np.zeros(n_steps + 1)
         path[0] = S0
-
-        # Initialize variance
         sigma2 = omega / (1 - alpha - beta)
-
         for t in range(n_steps):
-            # Generate return with time-varying volatility
-            epsilon = np.random.normal()
-            return_t = np.sqrt(sigma2) * epsilon
-
-            path[t + 1] = path[t] * (1 + return_t)
-
-            # Update variance
-            sigma2 = omega + alpha * (return_t**2) + beta * sigma2
-
+            eps = np.random.normal()
+            ret = np.sqrt(sigma2) * eps
+            path[t + 1] = path[t] * (1 + ret)
+            sigma2 = omega + alpha * (ret**2) + beta * sigma2
         return path
+
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        if NUMBA_AVAILABLE:
+            return garch_parallel(
+                n_simulations, n_steps, dt, params["omega"], params["alpha"], params["beta"], 100
+            )
+        return super().simulate_paths(params, n_steps, n_simulations, dt)
 
     def get_process_name(self):
         return "GARCH(1,1) (Vol Clustering)"
@@ -332,19 +514,14 @@ class HestonModel(StochasticProcess):
     """
 
     def estimate_parameters(self, price_series, vol_series=None):
-        """
-        Simplified estimation. For production, use MLE or method of moments.
-        """
         returns = price_series.pct_change().dropna()
 
         if vol_series is None:
-            # Estimate realized volatility
             vol_series = returns.rolling(window=20).std() * np.sqrt(252)
 
         vol_data = vol_series.dropna()
 
-        # Estimate volatility mean reversion
-        v = vol_data**2  # Variance
+        v = vol_data**2
         v_lag = v.shift(1).dropna()
         v = v.loc[v_lag.index]
 
@@ -355,13 +532,8 @@ class HestonModel(StochasticProcess):
         theta = intercept / (1 - phi) if phi < 1 else v.mean()
         kappa = -np.log(phi) if phi > 0 and phi < 1 else 0.5
 
-        # Volatility of volatility
         sigma_v = results.resid.std()
-
-        # Drift
         mu = returns.mean()
-
-        # Correlation (simplified)
         return_vol_corr = returns.corr(vol_series.pct_change())
 
         return {
@@ -381,32 +553,44 @@ class HestonModel(StochasticProcess):
         sigma_v = params["sigma_v"]
         rho = params.get("rho", -0.5)
         v0 = params["v0"]
-
         S0 = 100
+
+        if NUMBA_AVAILABLE:
+            return heston_single(n_steps, dt, mu, kappa, theta, sigma_v, rho, v0, S0)
+
+        # Fallback
         S = np.zeros(n_steps + 1)
         v = np.zeros(n_steps + 1)
         S[0] = S0
         v[0] = v0
 
         for t in range(n_steps):
-            # Correlated Brownian motions
             dW1 = np.random.normal(0, np.sqrt(dt))
             dW2 = rho * dW1 + np.sqrt(1 - rho**2) * np.random.normal(0, np.sqrt(dt))
 
-            # Variance process (with Feller condition check)
             v[t + 1] = max(
-                v[t]
-                + kappa * (theta - v[t]) * dt
-                + sigma_v * np.sqrt(max(v[t], 0)) * dW2,
-                0,
+                v[t] + kappa * (theta - v[t]) * dt + sigma_v * np.sqrt(max(v[t], 0)) * dW2, 0
             )
 
-            # Price process
-            S[t + 1] = S[t] * np.exp(
-                (mu - 0.5 * v[t]) * dt + np.sqrt(max(v[t], 0)) * dW1
-            )
+            S[t + 1] = S[t] * np.exp((mu - 0.5 * v[t]) * dt + np.sqrt(max(v[t], 0)) * dW1)
 
         return S
+
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        if NUMBA_AVAILABLE:
+            return heston_parallel(
+                n_simulations,
+                n_steps,
+                dt,
+                params["mu"],
+                params["kappa"],
+                params["theta"],
+                params["sigma_v"],
+                params.get("rho", -0.5),
+                params["v0"],
+                100,
+            )
+        return super().simulate_paths(params, n_steps, n_simulations, dt)
 
     def get_process_name(self):
         return "Heston (Stochastic Vol)"
@@ -429,12 +613,9 @@ class CEVProcess(StochasticProcess):
         prices = price_series.loc[returns.index].values
         returns_values = returns.values
 
-        # Estimate gamma through regression
-        # log(|returns|) ≈ constant + γ*log(price)
         log_abs_returns = np.log(np.abs(returns_values) + 1e-10)
         log_prices = np.log(prices)
 
-        # Filter out infinities
         valid = np.isfinite(log_abs_returns) & np.isfinite(log_prices)
 
         if np.sum(valid) > 10:
@@ -444,35 +625,37 @@ class CEVProcess(StochasticProcess):
         else:
             gamma = gamma_guess
 
-        # Estimate drift and volatility coefficient
         mu = returns.mean()
 
-        # σ from standardized returns
         std_returns = returns_values / (prices ** (gamma - 1))
         sigma = np.std(std_returns[np.isfinite(std_returns)])
 
         return {"mu": mu, "sigma": sigma, "gamma": gamma, "process": "CEV"}
 
     def simulate_path(self, params, n_steps, dt=1.0):
-        mu = params["mu"]
-        sigma = params["sigma"]
-        gamma = params["gamma"]
-
+        mu, sigma, gamma = params["mu"], params["sigma"], params["gamma"]
         S0 = 100
+
+        if NUMBA_AVAILABLE:
+            return cev_single(n_steps, dt, mu, sigma, gamma, S0)
+
+        # Fallback
         path = np.zeros(n_steps + 1)
         path[0] = S0
-
         for t in range(n_steps):
             dW = np.random.normal(0, np.sqrt(dt))
-            S_t = path[t]
-
-            # CEV dynamics
-            drift = mu * S_t * dt
-            diffusion = sigma * (S_t**gamma) * dW
-
-            path[t + 1] = max(S_t + drift + diffusion, 0.01)  # Prevent negative prices
-
+            St = path[t]
+            drift = mu * St * dt
+            diff = sigma * (St**gamma) * dW
+            path[t + 1] = max(St + drift + diff, 0.01)
         return path
+
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        if NUMBA_AVAILABLE:
+            return cev_parallel(
+                n_simulations, n_steps, dt, params["mu"], params["sigma"], params["gamma"], 100
+            )
+        return super().simulate_paths(params, n_steps, n_simulations, dt)
 
     def get_process_name(self):
         return "CEV (Leverage Effect)"
@@ -493,14 +676,11 @@ class RegimeSwitching(StochasticProcess):
     def estimate_parameters(self, price_series, n_regimes=2):
         returns = price_series.pct_change().dropna()
 
-        # Simple 2-regime estimation using threshold
         median_vol = returns.rolling(20).std().median()
         current_vol = returns.rolling(20).std()
 
-        # Regime 1: Low volatility, Regime 2: High volatility
         regime = (current_vol > median_vol).astype(int)
 
-        # Estimate parameters for each regime
         regime1_returns = returns[regime == 0]
         regime2_returns = returns[regime == 1]
 
@@ -514,35 +694,43 @@ class RegimeSwitching(StochasticProcess):
             "sigma": regime2_returns.std() if len(regime2_returns) > 0 else 0.02,
         }
 
-        # Transition probabilities
-        transitions = regime.diff().fillna(0)
-        p11 = np.sum((regime[:-1] == 0) & (regime[1:] == 0)) / max(
-            np.sum(regime[:-1] == 0), 1
-        )
-        p22 = np.sum((regime[:-1] == 1) & (regime[1:] == 1)) / max(
-            np.sum(regime[:-1] == 1), 1
-        )
+        p11 = np.sum((regime[:-1] == 0) & (regime[1:] == 0)) / max(np.sum(regime[:-1] == 0), 1)
+        p22 = np.sum((regime[:-1] == 1) & (regime[1:] == 1)) / max(np.sum(regime[:-1] == 1), 1)
 
         return {
             "regime1_mu": params_regime1["mu"],
             "regime1_sigma": params_regime1["sigma"],
             "regime2_mu": params_regime2["mu"],
             "regime2_sigma": params_regime2["sigma"],
-            "p11": p11,  # Prob of staying in regime 1
-            "p22": p22,  # Prob of staying in regime 2
+            "p11": p11,
+            "p22": p22,
             "initial_regime": int(regime.iloc[-1]),
             "process": "Regime Switching",
         }
 
     def simulate_path(self, params, n_steps, dt=1.0):
         S0 = 100
+
+        if NUMBA_AVAILABLE:
+            return regime_single(
+                n_steps,
+                dt,
+                params["regime1_mu"],
+                params["regime1_sigma"],
+                params["regime2_mu"],
+                params["regime2_sigma"],
+                params["p11"],
+                params["p22"],
+                params["initial_regime"],
+                S0,
+            )
+
+        # Fallback
         path = np.zeros(n_steps + 1)
         path[0] = S0
-
         regime = params["initial_regime"]
 
         for t in range(n_steps):
-            # Determine current regime
             if regime == 0:
                 mu = params["regime1_mu"]
                 sigma = params["regime1_sigma"]
@@ -552,15 +740,30 @@ class RegimeSwitching(StochasticProcess):
                 sigma = params["regime2_sigma"]
                 stay_prob = params["p22"]
 
-            # Regime transition
             if np.random.random() > stay_prob:
                 regime = 1 - regime
 
-            # Generate return
             return_t = mu * dt + sigma * np.random.normal(0, np.sqrt(dt))
             path[t + 1] = path[t] * (1 + return_t)
 
         return path
+
+    def simulate_paths(self, params, n_steps, n_simulations, dt=1.0):
+        if NUMBA_AVAILABLE:
+            return regime_parallel(
+                n_simulations,
+                n_steps,
+                dt,
+                params["regime1_mu"],
+                params["regime1_sigma"],
+                params["regime2_mu"],
+                params["regime2_sigma"],
+                params["p11"],
+                params["p22"],
+                params["initial_regime"],
+                100,
+            )
+        return super().simulate_paths(params, n_steps, n_simulations, dt)
 
     def get_process_name(self):
         return "Regime Switching (Cycles)"
@@ -606,7 +809,7 @@ class ProcessSelector:
                 )
 
             except Exception as e:
-                print(f"  Error: {e}")
+                logger.error(f"  Error: {e}")
                 continue
 
         # Sort by AIC (lower is better)
@@ -619,14 +822,22 @@ class ProcessSelector:
         Calculate AIC, BIC, and other fit metrics
         """
         returns = price_series.pct_change().dropna()
+        n_steps = len(returns)
 
-        # Simulate and compare distributions
-        simulated_returns = []
-
-        for _ in range(n_simulations):
-            sim_path = process.simulate_path(params, len(returns))
-            sim_returns = pd.Series(sim_path).pct_change().dropna()
-            simulated_returns.extend(sim_returns.values)
+        # Use parallel simulations if available
+        if NUMBA_AVAILABLE and hasattr(process, "simulate_paths"):
+            all_paths = process.simulate_paths(params, n_steps, n_simulations)
+            simulated_returns = []
+            for path in all_paths:
+                sim_returns = pd.Series(path).pct_change().dropna()
+                simulated_returns.extend(sim_returns.values)
+        else:
+            # Sequential fallback
+            simulated_returns = []
+            for _ in range(n_simulations):
+                sim_path = process.simulate_path(params, n_steps)
+                sim_returns = pd.Series(sim_path).pct_change().dropna()
+                simulated_returns.extend(sim_returns.values)
 
         # KS test
         ks_stat, ks_pval = stats.ks_2samp(returns.values, simulated_returns)
@@ -635,7 +846,6 @@ class ProcessSelector:
         n_params = len([k for k, v in params.items() if isinstance(v, (int, float))])
         n_obs = len(returns)
 
-        # Simple Gaussian likelihood for comparison
         log_likelihood = (
             -0.5 * n_obs * (np.log(2 * np.pi) + 2 * np.log(returns.std()) + 1)
         )
