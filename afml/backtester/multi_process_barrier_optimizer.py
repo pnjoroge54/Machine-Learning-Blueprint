@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-from loguru import logger
 from scipy import optimize, stats
 
 warnings.filterwarnings("ignore")
@@ -809,7 +808,7 @@ class ProcessSelector:
                 )
 
             except Exception as e:
-                logger.error(f"  Error: {e}")
+                print(f"  Error: {e}")
                 continue
 
         # Sort by AIC (lower is better)
