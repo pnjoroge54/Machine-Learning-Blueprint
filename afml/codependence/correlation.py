@@ -4,8 +4,7 @@ Codependence: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3512994&downlo
 """
 
 import numpy as np
-from scipy.spatial.distance import squareform, pdist
-
+from scipy.spatial.distance import pdist, squareform
 
 # pylint: disable=invalid-name
 

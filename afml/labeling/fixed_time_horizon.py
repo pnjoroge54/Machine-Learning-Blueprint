@@ -6,10 +6,13 @@ labeling data this way can be used in training deep neural networks to predict p
 """
 
 import warnings
+
 import pandas as pd
 
 
-def fixed_time_horizon(prices, threshold=0, resample_by=None, lag=True, standardized=False, window=None):
+def fixed_time_horizon(
+    prices, threshold=0, resample_by=None, lag=True, standardized=False, window=None
+):
     """
     Fixed-Time Horizon Labeling Method.
 
@@ -49,16 +52,21 @@ def fixed_time_horizon(prices, threshold=0, resample_by=None, lag=True, standard
 
     # If threshold is pd.Series, its index must patch prices.index; otherwise labels will fail to return.
     if isinstance(threshold, pd.Series):
-        assert threshold.index.equals(prices.index), "prices.index and threshold.index must match! If prices are " \
-                                                     "resampled, the threshold index must match the resampled prices " \
-                                                     "index."
+        assert threshold.index.equals(prices.index), (
+            "prices.index and threshold.index must match! If prices are "
+            "resampled, the threshold index must match the resampled prices "
+            "index."
+        )
 
     # Adjust by mean and stdev, if desired. Assert that window must exist if standardization is on. Warning if window
     # is too large.
     if standardized:
         assert isinstance(window, int), "When standardized is True, window must be int."
         if window >= len(returns):
-            warnings.warn('window is greater than the length of the Series. All labels will be NaN.', UserWarning)
+            warnings.warn(
+                "window is greater than the length of the Series. All labels will be NaN.",
+                UserWarning,
+            )
 
         # Apply standardization.
         mean = returns.rolling(window=window).mean()
@@ -72,4 +80,6 @@ def fixed_time_horizon(prices, threshold=0, resample_by=None, lag=True, standard
     labels[returns.gt(threshold, axis=0)] = 1
     labels[(returns.ge(-threshold, axis=0)) & (returns.le(threshold, axis=0))] = 0
 
+    return labels
+    return labels
     return labels
