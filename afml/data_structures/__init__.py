@@ -1,1 +1,6 @@
-from .bars import make_bars, calculate_ticks_per_period
+from .bars import calculate_ticks_per_period, make_bars
+
+__all__ = [
+    "make_bars",
+    "calculate_ticks_per_period",
+]

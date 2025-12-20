@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from IPython.display import HTML, Markdown, display
+from IPython.display import Markdown, display
 
 
 def _get_param_columns(cv_results: pd.DataFrame) -> List[str]:
@@ -656,7 +656,7 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
 
     # Performance saturation analysis for depth if available
     if max_depth_col and max_depth_col in cv_results.columns:
-        print(f"\n2. PERFORMANCE SATURATION:")
+        print("\n2. PERFORMANCE SATURATION:")
         print("-" * 50)
 
         depth_groups = cv_results.groupby(max_depth_col)[target_metric].max()
@@ -667,7 +667,7 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
         analysis["depth_groups"] = depth_groups.to_dict()
 
     # 3. ACTIONABLE RECOMMENDATIONS
-    print(f"\n3. ACTIONABLE RECOMMENDATIONS:")
+    print("\n3. ACTIONABLE RECOMMENDATIONS:")
     print("-" * 50)
 
     best_score_val = best_model[target_metric]

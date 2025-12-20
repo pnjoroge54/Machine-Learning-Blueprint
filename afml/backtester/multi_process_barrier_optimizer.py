@@ -1,10 +1,10 @@
+import warnings
+from abc import ABC, abstractmethod
+
 import numpy as np
 import pandas as pd
-from scipy import stats, optimize
-from scipy.special import erf
 import statsmodels.api as sm
-from abc import ABC, abstractmethod
-import warnings
+from scipy import optimize, stats
 
 warnings.filterwarnings("ignore")
 

@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
@@ -5,13 +6,12 @@ from sklearn.ensemble import BaggingClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 
-from afml.util.pipelines import MyPipeline, set_pipeline_params
-
 from ..cache.unified_cache_system import (
     cacheable,
     create_cacheable_param_grid,
     reconstruct_param_grid,
 )
+from ..util.pipelines import MyPipeline, make_custom_pipeline, set_pipeline_params
 from .cross_validation import PurgedKFold
 
 
@@ -27,7 +27,7 @@ def clf_hyper_fit(
     bagging_max_features=1.0,
     rnd_search_iter=0,
     n_jobs=-1,
-    pct_embargo=0,
+    pct_embargo=0.01,
     random_state=None,
     verbose=0,
     **fit_params,
@@ -49,8 +49,8 @@ def clf_hyper_fit(
         Information range for each record, used for purged cross-validation.
         Index: Time when information extraction started.
         Values: Time when information extraction ended.
-    pipe_clf : sklearn.pipeline.Pipeline or MyPipeline
-        Pipeline containing preprocessing and classification steps.
+    pipe_clf : BaseEstimator or sklearn.pipeline.Pipeline or MyPipeline
+        A BaseEstimator or Pipeline containing preprocessing and classification steps.
     param_grid : dict or list of dicts
         Hyperparameter grid for search. Keys should include pipeline step
         names as prefixes (e.g., 'classifier__max_depth').
@@ -83,21 +83,29 @@ def clf_hyper_fit(
 
     Returns
     -------
-    estimator : Pipeline or BaggingClassifier
+    estimator : Pipeline
         The trained model.
     cv_results : Dict
         Cross-validation results including best parameters and scores.
     """
 
     # Clone the pipeline to avoid modifying the original
-    pipe_clf = clone(pipe_clf)
+    pipe_clf = make_custom_pipeline(clone(pipe_clf))
+    name_of_clf, estimator = pipe_clf.steps[-1]
 
     # Ensures no issues with oversubscription during parallelization
     pipe_clf = set_pipeline_params(pipe_clf, n_jobs=1)
 
+    # Clean param_grid to only include valid parameters
+    for k in reversed(list(param_grid.keys())):
+        if not hasattr(estimator, k.split(f"{name_of_clf}__")[-1]):
+            param_grid.pop(k)
+        elif not k.startswith(f"{name_of_clf}__"):
+            param_grid[f"{name_of_clf}__{k}"] = param_grid.pop(k)
+
     # Determine scoring metric
     if set(labels.unique()) == {0, 1}:
-        scoring = "f1"  # f1 for meta-labeling
+        scoring = "f1"  # for meta-labeling
     else:
         scoring = "neg_log_loss"
 
@@ -165,10 +173,10 @@ def clf_hyper_fit(
         bag = Pipeline([("bag", bag)])
         return bag, cv_results
     else:
-        return best_estimator, cv_results
+        return Pipeline(best_estimator.steps), cv_results
 
 
-@cacheable(auto_versioning=False)
+@cacheable(time_aware=True)
 def clf_hyper_fit_internal(
     features,
     labels,
@@ -181,7 +189,7 @@ def clf_hyper_fit_internal(
     bagging_max_features=1.0,
     rnd_search_iter=0,
     n_jobs=-1,
-    pct_embargo=0,
+    pct_embargo=0.01,
     random_state=None,
     verbose=0,
     **fit_params,
@@ -228,7 +236,7 @@ def clf_hyper_fit_cached(
     bagging_max_features=1.0,
     rnd_search_iter=0,
     n_jobs=-1,
-    pct_embargo=0,
+    pct_embargo=0.01,
     random_state=None,
     verbose=0,
     **fit_params,

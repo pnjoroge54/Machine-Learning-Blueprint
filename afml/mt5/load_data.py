@@ -24,6 +24,7 @@ Features:
 
 import json
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -35,13 +36,8 @@ from dotenv import load_dotenv
 from loguru import logger
 from tqdm import tqdm
 
-from afml.mt5.clean_data import clean_tick_data
-from afml.util.misc import (
-    date_conversion,
-    is_first_weekday,
-    is_last_weekday,
-    log_df_info,
-)
+from ..util.misc import date_conversion, is_first_weekday, is_last_weekday, log_df_info
+from .clean_data import clean_tick_data
 
 # --- Credential and Login Management ---
 
@@ -342,8 +338,8 @@ def process_symbol(symbol, start_dt, end_dt, data_path, account_name):
             missing_data.append(start.strftime("%Y-%m"))
             try:
                 year_path.rmdir()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Could not remove empty directory {year_path}: {e}")
 
     mt5.shutdown()  # Each worker should shutdown its own connection
     return {symbol: missing_data}
@@ -533,7 +529,7 @@ if __name__ == "__main__":
     # --- 1. User Configuration ---
     CONFIG = {
         "save_path": Path.home() / "tick_data_parquet",
-        "symbols_to_download": MAJORS[:1],
+        "symbols_to_download": MAJORS + CRYPTO,
         "account_to_use": "FundedNext_STLR2_6K",  # This name MUST match the one used in your environment variables
         "start_date": "2016-01-01",
         "end_date": "2017-12-31",
@@ -542,6 +538,17 @@ if __name__ == "__main__":
 
     # --- 2. Setup Logging ---
     # Configure logger to output to console and a file for persistent records.
+    logger.add(
+        sys.stderr,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+        "<level>{message}</level>",
+        colorize=True,
+        backtrace=True,
+        diagnose=True,
+        enqueue=True,
+    )
     log_path = CONFIG["save_path"] / "data_download.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -552,6 +559,7 @@ if __name__ == "__main__":
         retention="30 days",
         level="INFO",
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+        enqueue=True,
     )
     logger.info("--- Starting New Data Download Session ---")
 

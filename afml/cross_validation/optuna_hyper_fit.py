@@ -8,7 +8,6 @@ from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPrune
 from optuna.samplers import TPESampler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score
-from sklearn.model_selection import cross_val_score
 
 from afml.cross_validation.cross_validation import PurgedKFold
 

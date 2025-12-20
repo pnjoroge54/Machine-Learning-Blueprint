@@ -15,7 +15,7 @@ from ..util.misc import (
 def calculate_ticks_per_period(
     df: pd.DataFrame,
     timeframe: str = "M1",
-    method: str = "mean",
+    method: str = "median",
     verbose: bool = True,
 ) -> int:
     """
@@ -25,7 +25,7 @@ def calculate_ticks_per_period(
         df (pd.DataFrame): Tick data with a datetime index.
         timeframe (str): Timeframe using MetaTrader5 convention (e.g., 'M1').
         method (str): Calculation method from ['median', 'mean']
-        verbose (bool): Whether to logger the result.
+        verbose (bool): Whether to log the result.
 
     Returns:
         int: Rounded number of ticks per period.
@@ -57,7 +57,7 @@ def _make_bar_type_grouper(
     df: pd.DataFrame,
     bar_type: str = "tick",
     bar_size: Union[int, str] = 100,
-) -> tuple[pd.core.groupby.generic.DataFrameGroupBy, int]:
+) -> tuple[pd.DataFrame.groupby, int]:
     """
     Create a grouped object for aggregating tick data into time/tick/dollar/volume bars.
 

@@ -186,7 +186,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
 
     Parameters
     ----------
-    base_estimator : estimator object
+    estimator : estimator object
         A scikit-learn-compatible, unfitted estimator implementing fit and predict.
         For probability-based aggregation or scoring, base_estimator should implement
         predict_proba.
@@ -195,6 +195,11 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     max_samples : int or float, optional (default=1.0)
         If int, the exact number of training rows drawn per estimator; if float in
         (0, 1], the fraction of the training set drawn per estimator.
+    max_features : int or float or None, optional (default=None)
+        If None and bootstrap_features is True, the full feature set is sampled
+        (with replacement). If int, draw exactly `max_features` columns per
+        estimator. If float in (0, 1], draw that fraction of the total feature
+        count per estimator. Ignored when bootstrap_features is False.
     bootstrap_features : bool, optional (default=False)
         If True, features are sampled with replacement for each base estimator
         (feature bagging). When enabled, each estimator is trained on a randomly
@@ -203,11 +208,6 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         individual learners when the feature set is small or highly informative.
         Use `max_features` to control the number (or fraction) of features drawn
         per estimator.
-    max_features : int or float or None, optional (default=None)
-        If None and bootstrap_features is True, the full feature set is sampled
-        (with replacement). If int, draw exactly `max_features` columns per
-        estimator. If float in (0, 1], draw that fraction of the total feature
-        count per estimator. Ignored when bootstrap_features is False.
     oob_score : bool, optional (default=False)
         Whether to compute and store the estimator's out-of-bag score after fit.
         Matches scikit-learn semantics: a boolean flag only. If True the estimator
@@ -552,11 +552,11 @@ class SequentiallyBootstrappedBaggingClassifier(
 
     def __init__(
         self,
-        samples_info_sets,
-        price_bars_index,
+        samples_info_sets=None,
+        price_bars_index=None,
         estimator=None,
         n_estimators=10,
-        max_samples=1,
+        max_samples=1.0,
         max_features=1.0,
         bootstrap_features=False,
         oob_score=False,
@@ -589,6 +589,7 @@ class SequentiallyBootstrappedBaggingClassifier(
                 max_features="sqrt",
                 min_weight_fraction_leaf=0.05,
                 max_depth=6,
+                min_impurity_decrease=0.0001,
             )
         )
 
@@ -778,7 +779,7 @@ class SequentiallyBootstrappedBaggingRegressor(
         price_bars_index=None,
         estimator=None,
         n_estimators=10,
-        max_samples=1,
+        max_samples=1.0,
         max_features=1.0,
         bootstrap_features=False,
         oob_score=False,
@@ -804,7 +805,14 @@ class SequentiallyBootstrappedBaggingRegressor(
 
     def _validate_estimator(self):
         """Check the estimator and set the estimator_ attribute."""
-        super()._validate_estimator(default=DecisionTreeRegressor(max_features=0.33))
+        super()._validate_estimator(
+            default=DecisionTreeRegressor(
+                max_features="sqrt",
+                min_weight_fraction_leaf=0.05,
+                max_depth=6,
+                min_impurity_decrease=0.0001,
+            )
+        )
 
     def _set_oob_score(self, X, y):
         """Compute out-of-bag score"""
