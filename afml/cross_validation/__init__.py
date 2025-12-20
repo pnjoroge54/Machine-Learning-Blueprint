@@ -2,23 +2,15 @@
 Functions derived from Chapter 7: Cross Validation
 """
 
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    log_loss,
-    precision_score,
-    recall_score,
-)
+from sklearn.metrics import (accuracy_score, f1_score, log_loss,
+                             precision_score, recall_score)
 
 from .combinatorial import CombinatorialPurgedKFold
-from .cross_validation import (
-    PurgedKFold,
-    PurgedSplit,
-    analyze_cross_val_scores,
-    ml_cross_val_score,
-    ml_get_train_times,
-)
-from .hyper_fit import MyPipeline, clf_hyper_fit, clf_hyper_fit_cached, param_grid_size
+from .cross_validation import (PurgedKFold, PurgedSplit, PurgedWalkForwardCV,
+                               analyze_cross_val_scores, ml_cross_val_score,
+                               ml_get_train_times)
+from .hyper_fit import (MyPipeline, clf_hyper_fit, clf_hyper_fit_cached,
+                        param_grid_size)
 from .scoring import probability_weighted_accuracy
 
 scoring_methods = {
@@ -37,6 +29,7 @@ __all__ = [
     "analyze_cross_val_scores_calibrated",
     "PurgedKFold",
     "PurgedSplit",
+    "PurgedWalkForwardCV",
     "probability_weighted_accuracy",
     "MyPipeline",
     "clf_hyper_fit",
