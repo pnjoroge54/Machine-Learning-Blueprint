@@ -1,6 +1,7 @@
 """
 Tests Online Moving Average Reversion.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
@@ -22,9 +23,11 @@ class TestOnlineMovingAverageReversion(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_olmar_solution(self):
         """
@@ -33,7 +36,7 @@ class TestOnlineMovingAverageReversion(TestCase):
         # Initialize OLMAR.
         olmar = OLMAR(reversion_method=1, epsilon=1, window=10)
         # Allocates asset prices to OLMAR.
-        olmar.allocate(self.data, resample_by='M')
+        olmar.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(olmar.all_weights)
         # Check if all weights sum to 1.
@@ -50,7 +53,7 @@ class TestOnlineMovingAverageReversion(TestCase):
         # Initialize OLMAR.
         olmar1 = OLMAR(reversion_method=2, epsilon=10, alpha=0.5)
         # Allocates asset prices to OLMAR.
-        olmar1.allocate(self.data, resample_by='M')
+        olmar1.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(olmar1.all_weights)
         # Check if all weights sum to 1.
@@ -118,4 +121,4 @@ class TestOnlineMovingAverageReversion(TestCase):
         olmar7 = OLMAR(reversion_method=1, epsilon=2, window=1)
         no_change_data = self.data
         no_change_data.iloc[:] = 1
-        olmar7.allocate(no_change_data, resample_by='M')
+        olmar7.allocate(no_change_data, resample_by="M")

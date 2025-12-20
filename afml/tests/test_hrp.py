@@ -22,7 +22,7 @@ class TestHRP(unittest.TestCase):
         """
 
         project_path = os.path.dirname(__file__)
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date")
 
     def test_hrp(self):
@@ -45,7 +45,11 @@ class TestHRP(unittest.TestCase):
         hrp = HierarchicalRiskParity()
         side_weights = pd.Series([1] * self.data.shape[1], index=self.data.columns)
         side_weights.loc[self.data.columns[:4]] = -1
-        hrp.allocate(asset_prices=self.data, asset_names=self.data.columns, side_weights=side_weights)
+        hrp.allocate(
+            asset_prices=self.data,
+            asset_names=self.data.columns,
+            side_weights=side_weights,
+        )
         weights = hrp.weights.values[0]
         self.assertEqual(len(weights) - self.data.shape[1], 0)
         self.assertAlmostEqual(np.sum(weights), 0)
@@ -58,11 +62,11 @@ class TestHRP(unittest.TestCase):
         hrp = HierarchicalRiskParity()
         hrp.allocate(asset_prices=self.data, asset_names=self.data.columns)
         dendrogram = hrp.plot_clusters(assets=self.data.columns)
-        assert dendrogram.get('icoord')
-        assert dendrogram.get('dcoord')
-        assert dendrogram.get('ivl')
-        assert dendrogram.get('leaves')
-        assert dendrogram.get('color_list')
+        assert dendrogram.get("icoord")
+        assert dendrogram.get("dcoord")
+        assert dendrogram.get("ivl")
+        assert dendrogram.get("leaves")
+        assert dendrogram.get("color_list")
 
     def test_quasi_diagnalization(self):
         """
@@ -71,8 +75,31 @@ class TestHRP(unittest.TestCase):
 
         hrp = HierarchicalRiskParity()
         hrp.allocate(asset_prices=self.data, asset_names=self.data.columns)
-        assert hrp.ordered_indices == [13, 9, 10, 8, 14, 7, 1, 6, 4, 16, 3, 17,
-                                       12, 18, 22, 0, 15, 21, 11, 2, 20, 5, 19]
+        assert hrp.ordered_indices == [
+            13,
+            9,
+            10,
+            8,
+            14,
+            7,
+            1,
+            6,
+            4,
+            16,
+            3,
+            17,
+            12,
+            18,
+            22,
+            0,
+            15,
+            21,
+            11,
+            2,
+            20,
+            5,
+            19,
+        ]
 
     def test_value_error_for_non_dataframe_input(self):
         """
@@ -143,7 +170,11 @@ class TestHRP(unittest.TestCase):
         corr = np.dot(np.dot(d_inv, covariance), d_inv)
         corr = pd.DataFrame(corr, index=covariance.columns, columns=covariance.columns)
         distance_matrix = np.sqrt((1 - corr).round(5) / 2)
-        hrp.allocate(asset_names=self.data.columns, covariance_matrix=covariance, distance_matrix=distance_matrix)
+        hrp.allocate(
+            asset_names=self.data.columns,
+            covariance_matrix=covariance,
+            distance_matrix=distance_matrix,
+        )
         weights = hrp.weights.values[0]
         self.assertTrue((weights >= 0).all())
         self.assertTrue(len(weights) == self.data.shape[1])
@@ -155,10 +186,35 @@ class TestHRP(unittest.TestCase):
         """
 
         hrp = HierarchicalRiskParity()
-        hrp.allocate(asset_names=self.data.columns, asset_prices=self.data, linkage='ward')
+        hrp.allocate(
+            asset_names=self.data.columns, asset_prices=self.data, linkage="ward"
+        )
         weights = hrp.weights.values[0]
-        assert hrp.ordered_indices == [13, 7, 1, 6, 4, 16, 3, 17, 14, 0, 15, 8,
-                                       9, 10, 12, 18, 22, 5, 19, 2, 20, 11, 21]
+        assert hrp.ordered_indices == [
+            13,
+            7,
+            1,
+            6,
+            4,
+            16,
+            3,
+            17,
+            14,
+            0,
+            15,
+            8,
+            9,
+            10,
+            12,
+            18,
+            22,
+            5,
+            19,
+            2,
+            20,
+            11,
+            21,
+        ]
         self.assertTrue((weights >= 0).all())
         self.assertTrue(len(weights) == self.data.shape[1])
         self.assertAlmostEqual(np.sum(weights), 1)

@@ -19,17 +19,21 @@ class TestVolatilityEstimators(unittest.TestCase):
         Set the file path for the sample dollar bars data.
         """
         project_path = os.path.dirname(__file__)
-        self.path = project_path + '/test_data/dollar_bar_sample.csv'
-        self.trades_path = project_path + '/test_data/tick_data.csv'
-        self.data = pd.read_csv(self.path, index_col='date_time', parse_dates=[0])
+        self.path = project_path + "/test_data/dollar_bar_sample.csv"
+        self.trades_path = project_path + "/test_data/tick_data.csv"
+        self.data = pd.read_csv(self.path, index_col="date_time", parse_dates=[0])
         self.data.index = pd.to_datetime(self.data.index)
 
     def test_vol_features(self):
         """
         Test volatility estimators
         """
-        gm_vol = get_garman_class_vol(self.data.open, self.data.high, self.data.low, self.data.close, window=20)
-        yz_vol = get_yang_zhang_vol(self.data.open, self.data.high, self.data.low, self.data.close, window=20)
+        gm_vol = get_garman_class_vol(
+            self.data.open, self.data.high, self.data.low, self.data.close, window=20
+        )
+        yz_vol = get_yang_zhang_vol(
+            self.data.open, self.data.high, self.data.low, self.data.close, window=20
+        )
         park_vol = get_parksinson_vol(self.data.high, self.data.low, window=20)
 
         self.assertEqual(self.data.shape[0], gm_vol.shape[0])

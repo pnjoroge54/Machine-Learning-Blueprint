@@ -1,12 +1,12 @@
 """
 Tests Symmetric Correlation Driven Nonparametric Learning - K.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
 import pandas as pd
-from ..online_portfolio_selection.scornk \
-    import SCORNK
+from ..online_portfolio_selection.scornk import SCORNK
 
 
 class TestSymmetricCorrelationDrivenNonparametricLearningK(TestCase):
@@ -23,9 +23,11 @@ class TestSymmetricCorrelationDrivenNonparametricLearningK(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_scorn_k_solution(self):
         """
@@ -34,7 +36,7 @@ class TestSymmetricCorrelationDrivenNonparametricLearningK(TestCase):
         # Initialize SCORN-K.
         scorn_k = SCORNK(window=2, rho=2, k=1)
         # Allocates asset prices to SCORN-K.
-        scorn_k.allocate(self.data, resample_by='M')
+        scorn_k.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(scorn_k.all_weights)
         # Check if all weights sum to 1.

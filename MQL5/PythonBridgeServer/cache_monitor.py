@@ -97,8 +97,12 @@ class CacheMonitor:
             axes[0, 0].set_ylim([0, 100])
 
             # Plot 2: Hits vs Misses
-            axes[0, 1].plot(self.timestamps, self.total_hits, "g-", label="Hits", linewidth=2)
-            axes[0, 1].plot(self.timestamps, self.total_misses, "r-", label="Misses", linewidth=2)
+            axes[0, 1].plot(
+                self.timestamps, self.total_hits, "g-", label="Hits", linewidth=2
+            )
+            axes[0, 1].plot(
+                self.timestamps, self.total_misses, "r-", label="Misses", linewidth=2
+            )
             axes[0, 1].set_title("Cumulative Hits vs Misses")
             axes[0, 1].set_ylabel("Count")
             axes[0, 1].legend()
@@ -110,13 +114,13 @@ class CacheMonitor:
                 stats_text = f"""
                 Current Statistics:
                 
-                Total Hits: {stats.get('total_hits', 0):,}
-                Total Misses: {stats.get('total_misses', 0):,}
+                Total Hits: {stats.get("total_hits", 0):,}
+                Total Misses: {stats.get("total_misses", 0):,}
                 Hit Rate: {self.hit_rates[-1] if self.hit_rates else 0:.2f}%
                 
-                Cache Size: {stats.get('cache_size', 0)} / {stats.get('max_size', 0)}
+                Cache Size: {stats.get("cache_size", 0)} / {stats.get("max_size", 0)}
                 
-                Last Update: {datetime.now().strftime('%H:%M:%S')}
+                Last Update: {datetime.now().strftime("%H:%M:%S")}
                 """
                 axes[1, 0].text(
                     0.1,
@@ -150,13 +154,21 @@ def main():
     parser = argparse.ArgumentParser(description="Real-time MQL5 cache monitoring")
 
     parser.add_argument(
-        "--cache-stats", type=str, required=True, help="Path to cache statistics file (JSON)"
+        "--cache-stats",
+        type=str,
+        required=True,
+        help="Path to cache statistics file (JSON)",
     )
 
-    parser.add_argument("--interval", type=int, default=1, help="Update interval in seconds")
+    parser.add_argument(
+        "--interval", type=int, default=1, help="Update interval in seconds"
+    )
 
     parser.add_argument(
-        "--history", type=int, default=100, help="Number of data points to keep in history"
+        "--history",
+        type=int,
+        default=100,
+        help="Number of data points to keep in history",
     )
 
     args = parser.parse_args()

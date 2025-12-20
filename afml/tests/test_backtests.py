@@ -1,6 +1,7 @@
 """
 Tests the backtests of Campbell research - Haircut Sharpe ratio and Profit Hurdle algorithms.
 """
+
 import unittest
 import numpy as np
 from ..backtest_statistics.backtests import CampbellBacktesting
@@ -17,7 +18,7 @@ class TestCampbellBacktesting(unittest.TestCase):
         Test the calculation of haircuts with simple inputs
         """
 
-        sample_frequency = 'M'
+        sample_frequency = "M"
         num_observations = 120
         sharpe_ratio = 1
         annualized = True
@@ -25,8 +26,16 @@ class TestCampbellBacktesting(unittest.TestCase):
         rho_a = 0.1
         num_mult_test = 100
         rho = 0.4
-        parameters = (sample_frequency, num_observations, sharpe_ratio, annualized,
-                      autocorr_adjusted, rho_a, num_mult_test, rho)
+        parameters = (
+            sample_frequency,
+            num_observations,
+            sharpe_ratio,
+            annualized,
+            autocorr_adjusted,
+            rho_a,
+            num_mult_test,
+            rho,
+        )
 
         # Avoiding a random output
         np.random.seed(0)
@@ -85,7 +94,6 @@ class TestCampbellBacktesting(unittest.TestCase):
         # Testing the resulting t-statistic
         self.assertEqual(tstat, 1.96)
 
-
     def test_bhy_method_returns(self):
         """
         Test the special inputs to BHY method on required monthly returns.
@@ -106,11 +114,18 @@ class TestCampbellBacktesting(unittest.TestCase):
         self.assertEqual(tstat, 1.96)
 
         # If no exceeding p-values
-        tstat = backtesting._bhy_method_returns(p_values_simulation, num_mult_test, alpha_sig)
+        tstat = backtesting._bhy_method_returns(
+            p_values_simulation, num_mult_test, alpha_sig
+        )
         self.assertEqual(tstat, 1.96)
 
         # If exceeding value is first
-        tstat = round(backtesting._bhy_method_returns(p_values_simulation_low, num_mult_test, alpha_sig), 3)
+        tstat = round(
+            backtesting._bhy_method_returns(
+                p_values_simulation_low, num_mult_test, alpha_sig
+            ),
+            3,
+        )
         self.assertEqual(tstat, 3.216)
 
     def test_parameter_calculation(self):
@@ -136,7 +151,7 @@ class TestCampbellBacktesting(unittest.TestCase):
         """
 
         backtesting = CampbellBacktesting(200)
-        sampling_frequency = ['D', 'W', 'M', 'Q', 'A', 'N']
+        sampling_frequency = ["D", "W", "M", "Q", "A", "N"]
         expected_result_autocorr = [0.905, 0.906, 0.912, 0.928, 1.0, 1.0]
         expected_result_annual = [18.974, 7.211, 3.464, 2.0, 1.0, 1.0]
         parameters_autocorr = []
@@ -146,16 +161,26 @@ class TestCampbellBacktesting(unittest.TestCase):
 
         # Tests for not adjusted to autocorrelation
         for freq in sampling_frequency:
-            sr_annual_adj = backtesting._annualized_sharpe_ratio(sharpe_ratio=1, sampling_frequency=freq, rho=0.1,
-                                                                 annualized=True, autocorr_adjusted=False)
+            sr_annual_adj = backtesting._annualized_sharpe_ratio(
+                sharpe_ratio=1,
+                sampling_frequency=freq,
+                rho=0.1,
+                annualized=True,
+                autocorr_adjusted=False,
+            )
             parameters_autocorr.append(round(sr_annual_adj, 3))
         self.assertEqual(expected_result_autocorr, parameters_autocorr)
 
         parameters_annual = []
         # Test for already adjusted
         for freq in sampling_frequency:
-            sr_annual_adj = backtesting._annualized_sharpe_ratio(sharpe_ratio=1, sampling_frequency=freq, rho=0.1,
-                                                                 annualized=False, autocorr_adjusted=True)
+            sr_annual_adj = backtesting._annualized_sharpe_ratio(
+                sharpe_ratio=1,
+                sampling_frequency=freq,
+                rho=0.1,
+                annualized=False,
+                autocorr_adjusted=True,
+            )
             parameters_annual.append(round(sr_annual_adj, 3))
         self.assertEqual(expected_result_annual, parameters_annual)
 
@@ -165,8 +190,8 @@ class TestCampbellBacktesting(unittest.TestCase):
         """
 
         backtesting = CampbellBacktesting(200)
-        sampling_frequency = ['D', 'W', 'M', 'Q', 'A', 'N']
-        expected_observations = [0.0, 2.0, 10.0, 30.0, 120., 10.0]
+        sampling_frequency = ["D", "W", "M", "Q", "A", "N"]
+        expected_observations = [0.0, 2.0, 10.0, 30.0, 120.0, 10.0]
         observations = []
 
         # Avoiding a random output

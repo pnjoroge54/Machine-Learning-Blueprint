@@ -9,7 +9,10 @@ import pandas as pd
 
 from ..filters.filters import cusum_filter
 from ..labeling.labeling import get_events, add_vertical_barrier
-from ..sample_weights.attribution import get_weights_by_return, get_weights_by_time_decay
+from ..sample_weights.attribution import (
+    get_weights_by_return,
+    get_weights_by_time_decay,
+)
 from ..util.volatility import get_daily_vol
 
 
@@ -23,32 +26,37 @@ class TestSampling(unittest.TestCase):
         Set the file path for the sample dollar bars data and get triple barrier events
         """
         project_path = os.path.dirname(__file__)
-        self.path = project_path + '/test_data/dollar_bar_sample.csv'
-        self.data = pd.read_csv(self.path, index_col='date_time')
+        self.path = project_path + "/test_data/dollar_bar_sample.csv"
+        self.data = pd.read_csv(self.path, index_col="date_time")
         self.data.index = pd.to_datetime(self.data.index)
 
-        daily_vol = get_daily_vol(close=self.data['close'], lookback=100)
-        cusum_events = cusum_filter(self.data['close'], threshold=0.02)
-        vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'],
-                                                 num_days=2)
+        daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
+        cusum_events = cusum_filter(self.data["close"], threshold=0.02)
+        vertical_barriers = add_vertical_barrier(
+            t_events=cusum_events, close=self.data["close"], num_days=2
+        )
 
-        self.data['side'] = 1
-        self.meta_labeled_events = get_events(close=self.data['close'],
-                                              t_events=cusum_events,
-                                              pt_sl=[4, 4],
-                                              target=daily_vol,
-                                              min_ret=0.005,
-                                              num_threads=3,
-                                              vertical_barrier_times=vertical_barriers,
-                                              side_prediction=self.data['side'],
-                                              verbose=False)
+        self.data["side"] = 1
+        self.meta_labeled_events = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[4, 4],
+            target=daily_vol,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=self.data["side"],
+            verbose=False,
+        )
 
     def test_ret_attribution(self):
         """
         Assert that return attribution length equals triple barrier length, check particular values
         """
         non_nan_meta_labels = self.meta_labeled_events.dropna()
-        ret_weights = get_weights_by_return(non_nan_meta_labels, self.data['close'], verbose=False)
+        ret_weights = get_weights_by_return(
+            non_nan_meta_labels, self.data["close"], verbose=False
+        )
         self.assertTrue(ret_weights.shape[0] == non_nan_meta_labels.shape[0])
         self.assertTrue(abs(ret_weights.iloc[0] - 0.781807) <= 1e5)
         self.assertTrue(abs(ret_weights.iloc[3] - 1.627944) <= 1e5)
@@ -58,11 +66,21 @@ class TestSampling(unittest.TestCase):
         Assert that time decay weights length equals triple barrier length, check particular values
         """
         non_nan_meta_labels = self.meta_labeled_events.dropna()
-        standard_decay = get_weights_by_time_decay(non_nan_meta_labels, self.data['close'], decay=0.5, verbose=False)
-        no_decay = get_weights_by_time_decay(non_nan_meta_labels, self.data['close'], decay=1, verbose=False)
-        neg_decay = get_weights_by_time_decay(non_nan_meta_labels, self.data['close'], decay=-0.5, verbose=False)
-        converge_decay = get_weights_by_time_decay(non_nan_meta_labels, self.data['close'], decay=0, verbose=False)
-        pos_decay = get_weights_by_time_decay(non_nan_meta_labels, self.data['close'], decay=1.5, verbose=False)
+        standard_decay = get_weights_by_time_decay(
+            non_nan_meta_labels, self.data["close"], decay=0.5, verbose=False
+        )
+        no_decay = get_weights_by_time_decay(
+            non_nan_meta_labels, self.data["close"], decay=1, verbose=False
+        )
+        neg_decay = get_weights_by_time_decay(
+            non_nan_meta_labels, self.data["close"], decay=-0.5, verbose=False
+        )
+        converge_decay = get_weights_by_time_decay(
+            non_nan_meta_labels, self.data["close"], decay=0, verbose=False
+        )
+        pos_decay = get_weights_by_time_decay(
+            non_nan_meta_labels, self.data["close"], decay=1.5, verbose=False
+        )
 
         self.assertTrue(standard_decay.shape == no_decay.shape)
         self.assertTrue(standard_decay.shape == neg_decay.shape)
@@ -87,7 +105,9 @@ class TestSampling(unittest.TestCase):
         """
 
         with self.assertRaises(AssertionError):
-            get_weights_by_return(self.meta_labeled_events, self.data['close'])
+            get_weights_by_return(self.meta_labeled_events, self.data["close"])
 
         with self.assertRaises(AssertionError):
-            get_weights_by_time_decay(self.meta_labeled_events, self.data['close'], decay=0.5)
+            get_weights_by_time_decay(
+                self.meta_labeled_events, self.data["close"], decay=0.5
+            )

@@ -144,7 +144,10 @@ class MQL5LogAnalyzer:
             total = sum(class_counts.values())
             class_pct = {k: v / total * 100 for k, v in class_counts.items()}
 
-            analysis["class_distribution"] = {"counts": class_counts, "percentages": class_pct}
+            analysis["class_distribution"] = {
+                "counts": class_counts,
+                "percentages": class_pct,
+            }
 
         return analysis
 
@@ -164,7 +167,10 @@ class MQL5LogAnalyzer:
             total = sum(signal_counts.values())
             signal_pct = {k: v / total * 100 for k, v in signal_counts.items()}
 
-            analysis["signal_distribution"] = {"counts": signal_counts, "percentages": signal_pct}
+            analysis["signal_distribution"] = {
+                "counts": signal_counts,
+                "percentages": signal_pct,
+            }
 
         # Confidence analysis
         if "Confidence" in self.trade_logs.columns:
@@ -207,7 +213,9 @@ class MQL5LogAnalyzer:
                 ].to_dict("records")
 
                 anomalies["high_latency_events"] = high_latency_events
-                logger.warning(f"Found {len(high_latency_events)} high latency events (>1s)")
+                logger.warning(
+                    f"Found {len(high_latency_events)} high latency events (>1s)"
+                )
 
         # Extreme predictions (|score| > 0.95)
         if self.model_logs is not None and "PredictionScore" in self.model_logs.columns:
@@ -220,16 +228,18 @@ class MQL5LogAnalyzer:
                 ].to_dict("records")
 
                 anomalies["extreme_predictions"] = extreme_predictions
-                logger.info(f"Found {len(extreme_predictions)} extreme predictions (|score|>0.95)")
+                logger.info(
+                    f"Found {len(extreme_predictions)} extreme predictions (|score|>0.95)"
+                )
 
         # Error entries
         if self.df is not None and "Level" in self.df.columns:
             error_mask = self.df["Level"].isin(["ERROR", "FATAL"])
 
             if error_mask.any():
-                errors = self.df[error_mask][["Timestamp", "Level", "Message", "Function"]].to_dict(
-                    "records"
-                )
+                errors = self.df[error_mask][
+                    ["Timestamp", "Level", "Message", "Function"]
+                ].to_dict("records")
 
                 anomalies["errors"] = errors
                 logger.warning(f"Found {len(errors)} error entries")
@@ -245,7 +255,9 @@ class MQL5LogAnalyzer:
         plt.figure(figsize=(12, 6))
 
         # Convert to milliseconds for readability
-        latencies_ms = pd.to_numeric(self.model_logs["LatencyUS"], errors="coerce") / 1000
+        latencies_ms = (
+            pd.to_numeric(self.model_logs["LatencyUS"], errors="coerce") / 1000
+        )
         timestamps = self.model_logs["Timestamp"]
 
         plt.plot(timestamps, latencies_ms, alpha=0.6, linewidth=1)
@@ -256,12 +268,20 @@ class MQL5LogAnalyzer:
 
         # Add mean line
         mean_latency = latencies_ms.mean()
-        plt.axhline(y=mean_latency, color="r", linestyle="--", label=f"Mean: {mean_latency:.2f}ms")
+        plt.axhline(
+            y=mean_latency,
+            color="r",
+            linestyle="--",
+            label=f"Mean: {mean_latency:.2f}ms",
+        )
 
         # Add p95 line
         p95_latency = latencies_ms.quantile(0.95)
         plt.axhline(
-            y=p95_latency, color="orange", linestyle="--", label=f"P95: {p95_latency:.2f}ms"
+            y=p95_latency,
+            color="orange",
+            linestyle="--",
+            label=f"P95: {p95_latency:.2f}ms",
         )
 
         plt.legend()
@@ -330,7 +350,9 @@ class MQL5LogAnalyzer:
         axes[0].grid(True, alpha=0.3, axis="y")
 
         # Pie chart
-        axes[1].pie(class_counts, labels=class_counts.index, autopct="%1.1f%%", startangle=90)
+        axes[1].pie(
+            class_counts, labels=class_counts.index, autopct="%1.1f%%", startangle=90
+        )
         axes[1].set_title("Predicted Class Proportions")
 
         plt.tight_layout()
@@ -360,11 +382,25 @@ class MQL5LogAnalyzer:
         )
 
         # Reorder days
-        day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        day_order = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+        ]
         pivot = pivot.reindex([day for day in day_order if day in pivot.index])
 
         plt.figure(figsize=(14, 6))
-        sns.heatmap(pivot, annot=True, fmt=".2f", cmap="YlOrRd", cbar_kws={"label": "Latency (ms)"})
+        sns.heatmap(
+            pivot,
+            annot=True,
+            fmt=".2f",
+            cmap="YlOrRd",
+            cbar_kws={"label": "Latency (ms)"},
+        )
         plt.title("Average Inference Latency by Day and Hour")
         plt.xlabel("Hour of Day")
         plt.ylabel("Day of Week")
@@ -468,15 +504,15 @@ class MQL5LogAnalyzer:
                 <h2>Summary</h2>
                 <div class="metric">
                     <span class="metric-label">Total Entries:</span>
-                    <span class="metric-value">{summary.get('total_entries', 0):,}</span>
+                    <span class="metric-value">{summary.get("total_entries", 0):,}</span>
                 </div>
                 <div class="metric">
                     <span class="metric-label">Time Range:</span>
-                    <span class="metric-value">{summary.get('time_range', ['N/A', 'N/A'])[0]} to {summary.get('time_range', ['N/A', 'N/A'])[1]}</span>
+                    <span class="metric-value">{summary.get("time_range", ["N/A", "N/A"])[0]} to {summary.get("time_range", ["N/A", "N/A"])[1]}</span>
                 </div>
                 <div class="metric">
                     <span class="metric-label">Duration:</span>
-                    <span class="metric-value">{summary.get('duration_hours', 0):.2f} hours</span>
+                    <span class="metric-value">{summary.get("duration_hours", 0):.2f} hours</span>
                 </div>
             """
 
@@ -496,23 +532,23 @@ class MQL5LogAnalyzer:
                     </tr>
                     <tr>
                         <td>Mean</td>
-                        <td>{latency['mean_us']/1000:.3f}</td>
+                        <td>{latency["mean_us"] / 1000:.3f}</td>
                     </tr>
                     <tr>
                         <td>Median</td>
-                        <td>{latency['median_us']/1000:.3f}</td>
+                        <td>{latency["median_us"] / 1000:.3f}</td>
                     </tr>
                     <tr>
                         <td>P95</td>
-                        <td>{latency['p95_us']/1000:.3f}</td>
+                        <td>{latency["p95_us"] / 1000:.3f}</td>
                     </tr>
                     <tr>
                         <td>P99</td>
-                        <td>{latency['p99_us']/1000:.3f}</td>
+                        <td>{latency["p99_us"] / 1000:.3f}</td>
                     </tr>
                     <tr>
                         <td>Max</td>
-                        <td>{latency['max_us']/1000:.3f}</td>
+                        <td>{latency["max_us"] / 1000:.3f}</td>
                     </tr>
                 </table>
                 """
@@ -528,19 +564,19 @@ class MQL5LogAnalyzer:
                     </tr>
                     <tr>
                         <td>Mean</td>
-                        <td>{pred_dist['mean']:.4f}</td>
+                        <td>{pred_dist["mean"]:.4f}</td>
                     </tr>
                     <tr>
                         <td>Std Dev</td>
-                        <td>{pred_dist['std']:.4f}</td>
+                        <td>{pred_dist["std"]:.4f}</td>
                     </tr>
                     <tr>
                         <td>Min</td>
-                        <td>{pred_dist['min']:.4f}</td>
+                        <td>{pred_dist["min"]:.4f}</td>
                     </tr>
                     <tr>
                         <td>Max</td>
-                        <td>{pred_dist['max']:.4f}</td>
+                        <td>{pred_dist["max"]:.4f}</td>
                     </tr>
                 </table>
                 """
@@ -576,7 +612,7 @@ class MQL5LogAnalyzer:
                 html += f"""
                 <div class="warning">
                     <strong>⚠️ High Latency Events:</strong> 
-                    Found {len(anomalies['high_latency_events'])} events with latency > 1 second
+                    Found {len(anomalies["high_latency_events"])} events with latency > 1 second
                 </div>
                 """
 
@@ -584,7 +620,7 @@ class MQL5LogAnalyzer:
                 html += f"""
                 <div class="warning">
                     <strong>⚠️ Extreme Predictions:</strong> 
-                    Found {len(anomalies['extreme_predictions'])} predictions with |score| > 0.95
+                    Found {len(anomalies["extreme_predictions"])} predictions with |score| > 0.95
                 </div>
                 """
 
@@ -592,7 +628,7 @@ class MQL5LogAnalyzer:
                 html += f"""
                 <div class="error">
                     <strong>❌ Errors:</strong> 
-                    Found {len(anomalies['errors'])} error entries
+                    Found {len(anomalies["errors"])} error entries
                 </div>
                 <table>
                     <tr>
@@ -604,9 +640,9 @@ class MQL5LogAnalyzer:
                 for error in anomalies["errors"][:10]:  # Show first 10
                     html += f"""
                     <tr>
-                        <td>{error.get('Timestamp', 'N/A')}</td>
-                        <td>{error.get('Level', 'N/A')}</td>
-                        <td>{error.get('Message', 'N/A')}</td>
+                        <td>{error.get("Timestamp", "N/A")}</td>
+                        <td>{error.get("Level", "N/A")}</td>
+                        <td>{error.get("Message", "N/A")}</td>
                     </tr>
                     """
                 html += "</table>"
@@ -628,7 +664,9 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Analyze MQL5 structured logs")
 
-    parser.add_argument("--log", type=str, required=True, help="Path to log file (CSV format)")
+    parser.add_argument(
+        "--log", type=str, required=True, help="Path to log file (CSV format)"
+    )
 
     parser.add_argument(
         "--output-dir",
@@ -637,7 +675,9 @@ def main():
         help="Output directory for reports and plots",
     )
 
-    parser.add_argument("--plots", action="store_true", help="Generate visualization plots")
+    parser.add_argument(
+        "--plots", action="store_true", help="Generate visualization plots"
+    )
 
     args = parser.parse_args()
 
@@ -676,8 +716,8 @@ def main():
 
         if "latency" in model_perf:
             latency = model_perf["latency"]
-            print(f"  Avg Latency: {latency['mean_us']/1000:.2f}ms")
-            print(f"  P95 Latency: {latency['p95_us']/1000:.2f}ms")
+            print(f"  Avg Latency: {latency['mean_us'] / 1000:.2f}ms")
+            print(f"  P95 Latency: {latency['p95_us'] / 1000:.2f}ms")
 
         if "class_distribution" in model_perf:
             class_dist = model_perf["class_distribution"]
@@ -690,9 +730,13 @@ def main():
         if any(anomalies.values()):
             print("\nAnomalies Detected:")
             if anomalies.get("high_latency_events"):
-                print(f"  ⚠️  High latency events: {len(anomalies['high_latency_events'])}")
+                print(
+                    f"  ⚠️  High latency events: {len(anomalies['high_latency_events'])}"
+                )
             if anomalies.get("extreme_predictions"):
-                print(f"  ⚠️  Extreme predictions: {len(anomalies['extreme_predictions'])}")
+                print(
+                    f"  ⚠️  Extreme predictions: {len(anomalies['extreme_predictions'])}"
+                )
             if anomalies.get("errors"):
                 print(f"  ❌ Errors: {len(anomalies['errors'])}")
 
@@ -708,7 +752,9 @@ def main():
         logger.info("Generating visualization plots...")
 
         analyzer.plot_latency_over_time(output_dir / "latency_over_time.png")
-        analyzer.plot_prediction_distribution(output_dir / "prediction_distribution.png")
+        analyzer.plot_prediction_distribution(
+            output_dir / "prediction_distribution.png"
+        )
         analyzer.plot_class_distribution(output_dir / "class_distribution.png")
         analyzer.plot_latency_heatmap(output_dir / "latency_heatmap.png")
 

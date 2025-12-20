@@ -58,7 +58,9 @@ def generate_synthetic_features(n_samples: int = 10000) -> pd.DataFrame:
 def generate_labels(features: pd.DataFrame) -> np.ndarray:
     """Generate synthetic labels based on features."""
     # Simple rule: BUY (1) if momentum > 0 and RSI < 70, else SELL (0)
-    labels = np.where((features["momentum"] > 0) & (features["rsi_14"] < 70), 1, 0)  # BUY  # SELL
+    labels = np.where(
+        (features["momentum"] > 0) & (features["rsi_14"] < 70), 1, 0
+    )  # BUY  # SELL
 
     return labels
 
@@ -76,7 +78,9 @@ def train_and_save_model():
 
     print(f"   Features shape: {features.shape}")
     print(f"   Labels shape: {labels.shape}")
-    print(f"   Class distribution: BUY={np.sum(labels)}, SELL={len(labels)-np.sum(labels)}")
+    print(
+        f"   Class distribution: BUY={np.sum(labels)}, SELL={len(labels) - np.sum(labels)}"
+    )
 
     # Split data
     print("\n2. Splitting data (80% train, 20% test)...")

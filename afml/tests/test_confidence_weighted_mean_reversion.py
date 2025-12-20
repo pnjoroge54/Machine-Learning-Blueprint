@@ -1,6 +1,7 @@
 """
 Tests Confidence Weighted Mean Reversion.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
@@ -22,18 +23,20 @@ class TestConfidenceWeightedMeanReversion(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_cwmr_solution(self):
         """
         Test the calculation of CWMR with the original method.
         """
         # Initialize CWMR.
-        cwmr = CWMR(confidence=0.5, epsilon=0.5, method='var')
+        cwmr = CWMR(confidence=0.5, epsilon=0.5, method="var")
         # Allocates asset prices to CWMR.
-        cwmr.allocate(self.data, resample_by='M')
+        cwmr.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(cwmr.all_weights)
         # Check if all weights sum to 1.
@@ -48,9 +51,9 @@ class TestConfidenceWeightedMeanReversion(TestCase):
         Test the calculation of CWMR with the second method.
         """
         # Initialize CWMR.
-        cwmr = CWMR(confidence=0.5, epsilon=0.5, method='sd')
+        cwmr = CWMR(confidence=0.5, epsilon=0.5, method="sd")
         # Allocates asset prices to OLMAR.
-        cwmr.allocate(self.data, resample_by='M')
+        cwmr.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(cwmr.all_weights)
         # Check if all weights sum to 1.
@@ -97,7 +100,7 @@ class TestConfidenceWeightedMeanReversion(TestCase):
         Tests ValueError if method is not 'sd' or 'var'.
         """
         # Initialize CWMR.
-        cwmr5 = CWMR(confidence=0.5, epsilon=0.5, method='normal')
+        cwmr5 = CWMR(confidence=0.5, epsilon=0.5, method="normal")
         with self.assertRaises(ValueError):
             # Running allocate will raise ValueError.
             cwmr5.allocate(self.data)
@@ -110,9 +113,9 @@ class TestConfidenceWeightedMeanReversion(TestCase):
         weight = np.zeros(self.data.iloc[0].shape)
         weight[0] = 1
         # Initialize CWMR.
-        cwmr6 = CWMR(confidence=0.5, epsilon=0.5, method='var')
+        cwmr6 = CWMR(confidence=0.5, epsilon=0.5, method="var")
         # Allocates asset prices to CWMR.
-        cwmr6.allocate(self.data, weights=weight, resample_by='M')
+        cwmr6.allocate(self.data, weights=weight, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(cwmr6.all_weights)
         # Check if all weights sum to 1.

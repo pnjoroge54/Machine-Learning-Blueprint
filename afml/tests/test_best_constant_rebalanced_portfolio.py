@@ -1,6 +1,7 @@
 """
 Tests Best Constant Rebalanced Portfolio.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
@@ -23,9 +24,11 @@ class TestBestConstantRebalancedPortfolio(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_bcrp_solution(self):
         """
@@ -34,7 +37,7 @@ class TestBestConstantRebalancedPortfolio(TestCase):
         # Initialize BCRP.
         bcrp = BCRP()
         # Allocates asset prices to BCRP.
-        bcrp.allocate(self.data, resample_by='M')
+        bcrp.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(bcrp.all_weights)
         # All weights for the strategy have to be the same.
@@ -54,14 +57,14 @@ class TestBestConstantRebalancedPortfolio(TestCase):
         # Initialize BCRP
         bcrp1 = BCRP()
         # Allocates asset prices to BCRP.
-        bcrp1.allocate(self.data, resample_by='M')
+        bcrp1.allocate(self.data, resample_by="M")
         # Get final returns for bcrp1.
         bcrp1_returns = np.array(bcrp1.portfolio_return)[-1]
         # Set an arbitray weight to test.
         weight = bcrp1._uniform_weight()
         # Initialize CRP.
         crp = CRP(weight)
-        crp.allocate(self.data, resample_by='M')
+        crp.allocate(self.data, resample_by="M")
         # Get final returns for CRP.
         crp_returns = np.array(crp.portfolio_return)[-1]
         # Check that CRP returns are lower than BCRP returns.

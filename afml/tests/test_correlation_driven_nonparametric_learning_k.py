@@ -1,6 +1,7 @@
 """
 Tests Correlation Driven Nonparametric Learning - K.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
@@ -21,9 +22,11 @@ class TestCorrelationDrivenNonparametricLearningK(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_corn_k_solution(self):
         """
@@ -32,7 +35,7 @@ class TestCorrelationDrivenNonparametricLearningK(TestCase):
         # Initialize CORN-K.
         corn_k = CORNK(window=2, rho=2, k=1)
         # Allocates asset prices to CORN-K.
-        corn_k.allocate(self.data, resample_by='M')
+        corn_k.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(corn_k.all_weights)
         # Check if all weights sum to 1.

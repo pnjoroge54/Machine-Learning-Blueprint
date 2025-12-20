@@ -129,7 +129,10 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
             X.loc[index, "label_prob_0.2"] = _generate_label_with_prob(value, 0.2)
             X.loc[index, "label_prob_0.1"] = _generate_label_with_prob(value, 0.1)
 
-        features = ["label_prob_0.6", "label_prob_0.2"]  # Two super-informative features
+        features = [
+            "label_prob_0.6",
+            "label_prob_0.2",
+        ]  # Two super-informative features
         for prob in [0.5, 0.3, 0.2, 0.1]:
             for window in [2, 5, 10]:
                 X["label_prob_{}_sma_{}".format(prob, window)] = (
@@ -163,7 +166,10 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
         sb_clf.fit(self.X_train, self.y_train_clf)
         self.assertTrue(
-            (sb_clf.predict(self.X_train)[:10] == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])).all
+            (
+                sb_clf.predict(self.X_train)[:10]
+                == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])
+            ).all
         )
 
     def test_sb_bagging_non_sample_weights_with_verbose(self):
@@ -188,7 +194,10 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         with self.assertWarns(UserWarning):
             sb_clf.fit(self.X_train, self.y_train_clf)
         self.assertTrue(
-            (sb_clf.predict(self.X_train)[:10] == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])).all
+            (
+                sb_clf.predict(self.X_train)[:10]
+                == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])
+            ).all
         )
 
     def test_sb_bagging_with_max_features(self):
@@ -217,10 +226,15 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
         with self.assertWarns(UserWarning):
             sb_clf.fit(
-                self.X_train, self.y_train_clf, sample_weight=np.ones((self.X_train.shape[0],))
+                self.X_train,
+                self.y_train_clf,
+                sample_weight=np.ones((self.X_train.shape[0],)),
             )
         self.assertTrue(
-            (sb_clf.predict(self.X_train)[:10] == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])).all
+            (
+                sb_clf.predict(self.X_train)[:10]
+                == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])
+            ).all
         )
 
     def test_sb_bagging_float_max_samples_warm_start_true(self):
@@ -269,7 +283,10 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
 
         self.assertTrue(
-            (sb_clf.predict(self.X_train)[:10] == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])).all
+            (
+                sb_clf.predict(self.X_train)[:10]
+                == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])
+            ).all
         )
 
     def test_value_error_raise(self):
@@ -278,7 +295,9 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         """
         clf = KNeighborsClassifier()
         bagging_clf_1 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf, samples_info_sets=self.samples_info_sets, price_bars=self.data
+            base_estimator=clf,
+            samples_info_sets=self.samples_info_sets,
+            price_bars=self.data,
         )
         bagging_clf_2 = SequentiallyBootstrappedBaggingClassifier(
             base_estimator=clf,
@@ -371,7 +390,10 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
 
         # Init classifiers
         clf_base = RandomForestClassifier(
-            n_estimators=1, criterion="entropy", bootstrap=False, class_weight="balanced_subsample"
+            n_estimators=1,
+            criterion="entropy",
+            bootstrap=False,
+            class_weight="balanced_subsample",
         )
 
         sb_clf = SequentiallyBootstrappedBaggingClassifier(
@@ -385,7 +407,9 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
 
         # X_train index should be in index mapping
-        self.assertTrue(self.X_train.index.isin(sb_clf.timestamp_int_index_mapping.index).all())
+        self.assertTrue(
+            self.X_train.index.isin(sb_clf.timestamp_int_index_mapping.index).all()
+        )
 
         sb_clf.fit(self.X_train, self.y_train_clf)
 
@@ -431,10 +455,14 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         sb_reg.fit(self.X_train, self.y_train_reg)
 
         with self.assertWarns(UserWarning):
-            sb_reg_1.fit(self.X_train, self.y_train_reg)  # To raise warning and get code coverage
+            sb_reg_1.fit(
+                self.X_train, self.y_train_reg
+            )  # To raise warning and get code coverage
 
         # X_train index should be in index mapping
-        self.assertTrue(self.X_train.index.isin(sb_reg.timestamp_int_index_mapping.index).all())
+        self.assertTrue(
+            self.X_train.index.isin(sb_reg.timestamp_int_index_mapping.index).all()
+        )
         self.assertTrue(
             (sb_reg.X_time_index == self.X_train.index).all()
         )  # X_train index == reg X_train index

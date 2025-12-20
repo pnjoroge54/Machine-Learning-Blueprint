@@ -1,5 +1,4 @@
 import numpy as np
-from typing import List, Tuple, Union, Optional
 
 
 def qsortd(first: int, last: int, data: np.ndarray) -> None:

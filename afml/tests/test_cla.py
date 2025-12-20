@@ -22,7 +22,7 @@ class TestCLA(unittest.TestCase):
         """
 
         project_path = os.path.dirname(__file__)
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date")
 
     def test_cla_with_mean_returns(self):
@@ -33,10 +33,12 @@ class TestCLA(unittest.TestCase):
         self.data.iloc[1:10, :] = 40
         self.data.iloc[11:20, :] = 50
         self.data.iloc[21, :] = 100
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
         cla.allocate(asset_prices=self.data, asset_names=self.data.columns)
         weights = cla.weights.values
-        weights[weights <= 1e-15] = 0 # Convert very very small numbers to 0
+        weights[weights <= 1e-15] = 0  # Convert very very small numbers to 0
         for turning_point in weights:
             assert (turning_point >= 0).all()
             assert len(turning_point) == self.data.shape[1]
@@ -48,8 +50,10 @@ class TestCLA(unittest.TestCase):
         instead of just lower and upper bound value.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=([0]*self.data.shape[1], [1]*self.data.shape[1]),
-                                    calculate_expected_returns="mean")
+        cla = CriticalLineAlgorithm(
+            weight_bounds=([0] * self.data.shape[1], [1] * self.data.shape[1]),
+            calculate_expected_returns="mean",
+        )
         cla.allocate(asset_prices=self.data, asset_names=self.data.columns)
         weights = cla.weights.values
         weights[weights <= 1e-15] = 0  # Convert very very small numbers to 0
@@ -63,10 +67,12 @@ class TestCLA(unittest.TestCase):
         Test the calculation of CLA turning points using exponential returns
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="exponential")
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="exponential"
+        )
         cla.allocate(asset_prices=self.data, asset_names=self.data.columns)
         weights = cla.weights.values
-        weights[weights <= 1e-15] = 0 # Convert very very small numbers to 0
+        weights[weights <= 1e-15] = 0  # Convert very very small numbers to 0
         for turning_point in weights:
             assert (turning_point >= 0).all()
             assert len(turning_point) == self.data.shape[1]
@@ -77,8 +83,12 @@ class TestCLA(unittest.TestCase):
         Test the calculation of maximum sharpe ratio weights.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='max_sharpe', asset_names=self.data.columns)
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data, solution="max_sharpe", asset_names=self.data.columns
+        )
         weights = cla.weights.values[0]
         assert (weights >= 0).all()
         assert len(weights) == self.data.shape[1]
@@ -89,8 +99,14 @@ class TestCLA(unittest.TestCase):
         Test the calculation for minimum volatility weights.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='min_volatility', asset_names=self.data.columns)
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data,
+            solution="min_volatility",
+            asset_names=self.data.columns,
+        )
         weights = cla.weights.values[0]
         assert (weights >= 0).all()
         assert len(weights) == self.data.shape[1]
@@ -101,12 +117,21 @@ class TestCLA(unittest.TestCase):
         Test the calculation of the efficient frontier solution.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='efficient_frontier', asset_names=self.data.columns)
-        assert len(cla.efficient_frontier_means) == len(cla.efficient_frontier_sigma) and \
-               len(cla.efficient_frontier_sigma) == len(cla.weights.values)
-        assert cla.efficient_frontier_sigma[-1] <= cla.efficient_frontier_sigma[0] and \
-               cla.efficient_frontier_means[-1] <= cla.efficient_frontier_means[0]  # higher risk = higher return
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data,
+            solution="efficient_frontier",
+            asset_names=self.data.columns,
+        )
+        assert len(cla.efficient_frontier_means) == len(
+            cla.efficient_frontier_sigma
+        ) and len(cla.efficient_frontier_sigma) == len(cla.weights.values)
+        assert (
+            cla.efficient_frontier_sigma[-1] <= cla.efficient_frontier_sigma[0]
+            and cla.efficient_frontier_means[-1] <= cla.efficient_frontier_means[0]
+        )  # higher risk = higher return
 
     def test_lambda_for_no_bounded_weights(self):
         # pylint: disable=protected-access,invalid-name
@@ -114,16 +139,24 @@ class TestCLA(unittest.TestCase):
         Test the computation of lambda when there are no bounded weights.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='min_volatility', asset_names=self.data.columns)
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data,
+            solution="min_volatility",
+            asset_names=self.data.columns,
+        )
         data = self.data.cov()
         data = data.values
-        x, y = cla._compute_lambda(covar_f_inv=data,
-                                   covar_fb=data,
-                                   mean_f=cla.expected_returns,
-                                   w_b=None,
-                                   asset_index=1,
-                                   b_i=[[0], [1]])
+        x, y = cla._compute_lambda(
+            covar_f_inv=data,
+            covar_fb=data,
+            mean_f=cla.expected_returns,
+            w_b=None,
+            asset_index=1,
+            b_i=[[0], [1]],
+        )
         assert isinstance(x, float)
         assert isinstance(y, int)
 
@@ -133,9 +166,17 @@ class TestCLA(unittest.TestCase):
         Test the method of freeing bounded weights when free-weights is None.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='min_volatility', asset_names=self.data.columns)
-        x, y = cla._free_bound_weight(free_weights=[1]*(cla.expected_returns.shape[0]+1))
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data,
+            solution="min_volatility",
+            asset_names=self.data.columns,
+        )
+        x, y = cla._free_bound_weight(
+            free_weights=[1] * (cla.expected_returns.shape[0] + 1)
+        )
         assert not x
         assert not y
 
@@ -145,11 +186,22 @@ class TestCLA(unittest.TestCase):
         Test for condition when expected returns equal the mean value.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='min_volatility', asset_names=self.data.columns)
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data,
+            solution="min_volatility",
+            asset_names=self.data.columns,
+        )
         data = self.data.copy()
         data.iloc[:, :] = 0.02320653
-        cla._initialise(asset_prices=data, resample_by='B', expected_asset_returns=None, covariance_matrix=None)
+        cla._initialise(
+            asset_prices=data,
+            resample_by="B",
+            expected_asset_returns=None,
+            covariance_matrix=None,
+        )
         assert cla.expected_returns[-1, 0] == 1e-5
 
     def test_lambda_for_zero_matrices(self):
@@ -159,17 +211,25 @@ class TestCLA(unittest.TestCase):
         should return None, None.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='min_volatility', asset_names=self.data.columns)
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data,
+            solution="min_volatility",
+            asset_names=self.data.columns,
+        )
         data = self.data.cov()
         data = data.values
         data[:, :] = 0
-        x, y = cla._compute_lambda(covar_f_inv=data,
-                                   covar_fb=data,
-                                   mean_f=cla.expected_returns,
-                                   w_b=None,
-                                   asset_index=1,
-                                   b_i=[[0], [1]])
+        x, y = cla._compute_lambda(
+            covar_f_inv=data,
+            covar_fb=data,
+            mean_f=cla.expected_returns,
+            w_b=None,
+            asset_index=1,
+            b_i=[[0], [1]],
+        )
         assert not x
         assert not y
 
@@ -179,14 +239,19 @@ class TestCLA(unittest.TestCase):
         Test the computation of weights (w) when there are no bounded weights.
         """
 
-        cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-        cla.allocate(asset_prices=self.data, solution='min_volatility', asset_names=self.data.columns)
+        cla = CriticalLineAlgorithm(
+            weight_bounds=(0, 1), calculate_expected_returns="mean"
+        )
+        cla.allocate(
+            asset_prices=self.data,
+            solution="min_volatility",
+            asset_names=self.data.columns,
+        )
         data = self.data.cov()
         data = data.values
-        x, y = cla._compute_w(covar_f_inv=data,
-                              covar_fb=data,
-                              mean_f=cla.expected_returns,
-                              w_b=None)
+        x, y = cla._compute_w(
+            covar_f_inv=data, covar_fb=data, mean_f=cla.expected_returns, w_b=None
+        )
         assert isinstance(x, np.ndarray)
         assert isinstance(y, float)
 
@@ -197,10 +262,16 @@ class TestCLA(unittest.TestCase):
         """
 
         with self.assertRaises(IndexError):
-            cla = CriticalLineAlgorithm(weight_bounds=(0, 1), calculate_expected_returns="mean")
-            cla.allocate(asset_prices=self.data, solution='cla_turning_points', asset_names=self.data.columns)
+            cla = CriticalLineAlgorithm(
+                weight_bounds=(0, 1), calculate_expected_returns="mean"
+            )
+            cla.allocate(
+                asset_prices=self.data,
+                solution="cla_turning_points",
+                asset_names=self.data.columns,
+            )
             cla.weights = list(cla.weights.values)
-            cla.weights = cla.weights*100
+            cla.weights = cla.weights * 100
             cla._purge_num_err(tol=1e-18)
 
     def test_flag_true_for_purge_num_err(self):
@@ -228,7 +299,11 @@ class TestCLA(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             cla = CriticalLineAlgorithm()
-            cla.allocate(asset_prices=self.data, solution='unknown_string', asset_names=self.data.columns)
+            cla.allocate(
+                asset_prices=self.data,
+                solution="unknown_string",
+                asset_names=self.data.columns,
+            )
 
     def test_value_error_for_non_dataframe_input(self):
         """
@@ -237,7 +312,11 @@ class TestCLA(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             cla = CriticalLineAlgorithm()
-            cla.allocate(asset_prices=self.data.values, solution='cla_turning_points', asset_names=self.data.columns)
+            cla.allocate(
+                asset_prices=self.data.values,
+                solution="cla_turning_points",
+                asset_names=self.data.columns,
+            )
 
     def test_value_error_for_non_date_index(self):
         """
@@ -247,7 +326,11 @@ class TestCLA(unittest.TestCase):
         with self.assertRaises(ValueError):
             cla = CriticalLineAlgorithm()
             data = self.data.reset_index()
-            cla.allocate(asset_prices=data, solution='cla_turning_points', asset_names=self.data.columns)
+            cla.allocate(
+                asset_prices=data,
+                solution="cla_turning_points",
+                asset_names=self.data.columns,
+            )
 
     def test_value_error_for_unknown_returns(self):
         """
@@ -256,7 +339,11 @@ class TestCLA(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             cla = CriticalLineAlgorithm(calculate_expected_returns="unknown_returns")
-            cla.allocate(asset_prices=self.data, solution='cla_turning_points', asset_names=self.data.columns)
+            cla.allocate(
+                asset_prices=self.data,
+                solution="cla_turning_points",
+                asset_names=self.data.columns,
+            )
 
     def test_resampling_asset_prices(self):
         """
@@ -264,7 +351,12 @@ class TestCLA(unittest.TestCase):
         """
 
         cla = CriticalLineAlgorithm()
-        cla.allocate(asset_prices=self.data, resample_by='B', solution='min_volatility', asset_names=self.data.columns)
+        cla.allocate(
+            asset_prices=self.data,
+            resample_by="B",
+            solution="min_volatility",
+            asset_names=self.data.columns,
+        )
         weights = cla.weights.values[0]
         assert (weights >= 0).all()
         assert len(weights) == self.data.shape[1]
@@ -286,11 +378,15 @@ class TestCLA(unittest.TestCase):
         """
 
         cla = CriticalLineAlgorithm()
-        expected_returns = ReturnsEstimators().calculate_mean_historical_returns(asset_prices=self.data)
+        expected_returns = ReturnsEstimators().calculate_mean_historical_returns(
+            asset_prices=self.data
+        )
         covariance = ReturnsEstimators().calculate_returns(asset_prices=self.data).cov()
-        cla.allocate(covariance_matrix=covariance,
-                     expected_asset_returns=expected_returns,
-                     asset_names=self.data.columns)
+        cla.allocate(
+            covariance_matrix=covariance,
+            expected_asset_returns=expected_returns,
+            asset_names=self.data.columns,
+        )
         weights = cla.weights.values
         weights[weights <= 1e-15] = 0  # Convert very very small numbers to 0
         for turning_point in weights:
@@ -317,7 +413,14 @@ class TestCLA(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             cla = CriticalLineAlgorithm()
-            expected_returns = ReturnsEstimators().calculate_mean_historical_returns(asset_prices=self.data,
-                                                                                     resample_by='W')
-            covariance = ReturnsEstimators().calculate_returns(asset_prices=self.data, resample_by='W').cov()
-            cla.allocate(expected_asset_returns=expected_returns, covariance_matrix=covariance)
+            expected_returns = ReturnsEstimators().calculate_mean_historical_returns(
+                asset_prices=self.data, resample_by="W"
+            )
+            covariance = (
+                ReturnsEstimators()
+                .calculate_returns(asset_prices=self.data, resample_by="W")
+                .cov()
+            )
+            cla.allocate(
+                expected_asset_returns=expected_returns, covariance_matrix=covariance
+            )

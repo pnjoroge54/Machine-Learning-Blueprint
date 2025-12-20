@@ -23,7 +23,7 @@ class TestDataStructures(unittest.TestCase):
         Set the file path for the tick data csv
         """
         project_path = os.path.dirname(__file__)
-        self.path = project_path + '/test_data/tick_data.csv'
+        self.path = project_path + "/test_data/tick_data.csv"
 
     def test_ewma(self):
         """

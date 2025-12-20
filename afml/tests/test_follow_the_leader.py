@@ -1,6 +1,7 @@
 """
 Tests Follow the Leader.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
@@ -23,9 +24,11 @@ class TestFollowTheLeader(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_ftl_solution(self):
         """
@@ -34,7 +37,7 @@ class TestFollowTheLeader(TestCase):
         # Initialize FTL.
         ftl = FTL()
         # Allocate asset prices to FTL.
-        ftl.allocate(self.data, resample_by='M')
+        ftl.allocate(self.data, resample_by="M")
         all_weights = np.array(ftl.all_weights)
         for i in range(all_weights.shape[0]):
             weights = all_weights[i]
@@ -49,7 +52,7 @@ class TestFollowTheLeader(TestCase):
         # Initialize FTL.
         ftl1 = FTL()
         # Allocate asset prices to FTL.
-        ftl1.allocate(self.data, resample_by='M')
+        ftl1.allocate(self.data, resample_by="M")
         all_weights = np.array(ftl1.all_weights)
         # Get uniform weights.
         uniform_weight = ftl1._uniform_weight()

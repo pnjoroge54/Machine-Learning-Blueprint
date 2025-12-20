@@ -23,9 +23,11 @@ class TestUniversalPortfolio(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_up_solution(self):
         """
@@ -58,7 +60,7 @@ class TestUniversalPortfolio(TestCase):
         Tests UP with uniform capital allocation.
         """
         # Initialize UP.
-        up3 = UP(2, weighted='uniform')
+        up3 = UP(2, weighted="uniform")
         # Allocates asset prices to UP.
         up3.allocate(self.data)
         # Create np.array of all_weights.
@@ -75,7 +77,7 @@ class TestUniversalPortfolio(TestCase):
         Tests UP with top-k experts capital allocation.
         """
         # Initialize UP.
-        up4 = UP(5, weighted='top-k', k=2)
+        up4 = UP(5, weighted="top-k", k=2)
         # Allocates asset prices to UP.
         up4.allocate(self.data)
         # Create np.array of all_weights.
@@ -92,7 +94,7 @@ class TestUniversalPortfolio(TestCase):
         Tests ValueError if the method is not 'hist_performance', 'uniform', or 'top-k'.
         """
         # Initialize UP.
-        up5 = UP(5, weighted='random', k=2)
+        up5 = UP(5, weighted="random", k=2)
         with self.assertRaises(ValueError):
             # Running allocate will raise ValueError.
             up5.allocate(self.data)
@@ -102,7 +104,7 @@ class TestUniversalPortfolio(TestCase):
         Tests recalculate method in UP.
         """
         # Initialize UP.
-        up6 = UP(3, weighted='top-k', k=2)
+        up6 = UP(3, weighted="top-k", k=2)
         # Allocates asset prices to UP.
         up6.allocate(self.data)
         # Recalculate with k=1.
@@ -121,7 +123,7 @@ class TestUniversalPortfolio(TestCase):
         Tests ValueError if k is greater number of experts for recalculate.
         """
         # Initialize UP.
-        up7 = UP(3, weighted='top-k', k=2)
+        up7 = UP(3, weighted="top-k", k=2)
         # Allocates asset prices to UP.
         up7.allocate(self.data)
         with self.assertRaises(ValueError):
@@ -133,7 +135,7 @@ class TestUniversalPortfolio(TestCase):
         Tests ValueError if k is not an integer for recalculate.
         """
         # Initialize UP.
-        up8 = UP(3, weighted='top-k', k=2)
+        up8 = UP(3, weighted="top-k", k=2)
         # Allocates asset prices to UP.
         up8.allocate(self.data)
         with self.assertRaises(ValueError):
@@ -145,7 +147,7 @@ class TestUniversalPortfolio(TestCase):
         Tests ValueError if k is not greater than or equal to 1.
         """
         # Initialize UP.
-        up9 = UP(3, weighted='top-k', k=2)
+        up9 = UP(3, weighted="top-k", k=2)
         # Allocates asset prices to UP.
         up9.allocate(self.data)
         with self.assertRaises(ValueError):

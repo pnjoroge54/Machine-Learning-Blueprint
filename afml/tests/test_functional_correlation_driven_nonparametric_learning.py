@@ -1,12 +1,12 @@
 """
 Tests Functional Correlation Driven Nonparametric Learning.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
 import pandas as pd
-from ..online_portfolio_selection.fcorn \
-    import FCORN
+from ..online_portfolio_selection.fcorn import FCORN
 
 
 class TestFunctionalCorrelationDrivenNonparametricLearning(TestCase):
@@ -23,9 +23,11 @@ class TestFunctionalCorrelationDrivenNonparametricLearning(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_fcorn_solution(self):
         """
@@ -34,7 +36,7 @@ class TestFunctionalCorrelationDrivenNonparametricLearning(TestCase):
         # Initialize FCORN.
         fcorn = FCORN(window=2, rho=0.5, lambd=10)
         # Allocates asset prices to FCORN.
-        fcorn.allocate(self.data, resample_by='3M')
+        fcorn.allocate(self.data, resample_by="3M")
         # Create np.array of all_weights.
         all_weights = np.array(fcorn.all_weights)
         # Check if all weights sum to 1.
@@ -94,7 +96,7 @@ class TestFunctionalCorrelationDrivenNonparametricLearning(TestCase):
         # Initialize FCORN.
         fcorn6 = FCORN(window=1, rho=0.5, lambd=10)
         # Allocates asset prices to FCORN.
-        fcorn6.allocate(self.data, resample_by='Y')
+        fcorn6.allocate(self.data, resample_by="Y")
         # Create np.array of all_weights.
         all_weights = np.array(fcorn6.all_weights)
         # Check if all weights sum to 1.

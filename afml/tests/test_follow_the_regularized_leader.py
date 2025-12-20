@@ -1,6 +1,7 @@
 """
 Tests Follow the Regularized Leader.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
@@ -22,9 +23,11 @@ class TestFollowTheRegularizedLeader(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_ftrl_solution(self):
         """
@@ -33,7 +36,7 @@ class TestFollowTheRegularizedLeader(TestCase):
         # Initialize FTRL.
         ftrl = FTRL(beta=0.2)
         # Allocate asset prices to FTRL.
-        ftrl.allocate(self.data, resample_by='Y')
+        ftrl.allocate(self.data, resample_by="Y")
         all_weights = np.array(ftrl.all_weights)
         for i in range(all_weights.shape[0]):
             weights = all_weights[i]
@@ -48,7 +51,7 @@ class TestFollowTheRegularizedLeader(TestCase):
         # Initialize FTRL.
         ftrl = FTRL(beta=0)
         # Allocate asset prices to FTRL.
-        ftrl.allocate(self.data, resample_by='Y')
+        ftrl.allocate(self.data, resample_by="Y")
         all_weights = np.array(ftrl.all_weights)
         for i in range(all_weights.shape[0]):
             weights = all_weights[i]
@@ -63,7 +66,7 @@ class TestFollowTheRegularizedLeader(TestCase):
         # Initialize FTRL.
         ftrl = FTRL(beta=1)
         # Allocate asset prices to FTRL.
-        ftrl.allocate(self.data, resample_by='Y')
+        ftrl.allocate(self.data, resample_by="Y")
         all_weights = np.array(ftrl.all_weights)
         for i in range(all_weights.shape[0]):
             weights = all_weights[i]
@@ -78,7 +81,7 @@ class TestFollowTheRegularizedLeader(TestCase):
         # Initialize FTRL.
         ftrl = FTRL(beta=10)
         # Allocate asset prices to FTRL.
-        ftrl.allocate(self.data, resample_by='Y')
+        ftrl.allocate(self.data, resample_by="Y")
         all_weights = np.array(ftrl.all_weights)
         for i in range(all_weights.shape[0]):
             weights = all_weights[i]

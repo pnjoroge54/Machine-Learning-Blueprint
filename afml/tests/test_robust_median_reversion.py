@@ -1,6 +1,7 @@
 """
 Tests Robust Median Reversion.
 """
+
 from unittest import TestCase
 import os
 import numpy as np
@@ -22,9 +23,11 @@ class TestRobustMedianReversion(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
-        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
+        self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(
+            axis=1
+        )
 
     def test_rmr_solution(self):
         """
@@ -33,7 +36,7 @@ class TestRobustMedianReversion(TestCase):
         # Initialize RMR.
         rmr = RMR(epsilon=1.1, n_iteration=10, window=3, tau=0.001)
         # Allocates asset prices to RMR.
-        rmr.allocate(self.data, resample_by='M')
+        rmr.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(rmr.all_weights)
         # Check if all weights sum to 1.
@@ -92,7 +95,7 @@ class TestRobustMedianReversion(TestCase):
         # Initialize RMR.
         rmr6 = RMR(epsilon=1.1, n_iteration=10, window=3, tau=0.9)
         # Allocates asset prices to RMR.
-        rmr6.allocate(self.data, resample_by='M')
+        rmr6.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(rmr6.all_weights)
         # Check if all weights sum to 1.
@@ -125,7 +128,7 @@ class TestRobustMedianReversion(TestCase):
         new_data = self.data
         new_data[:] = 1
         # Calculate edge case.
-        rmr8.allocate(new_data, resample_by='M')
+        rmr8.allocate(new_data, resample_by="M")
 
     def test_rmr_tau_error(self):
         """

@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from ..backtest_statistics.statistics import (
+from ..backtest_statistics.perfomance_statistics import (
     all_bets_concentration,
     average_holding_period,
     bets_concentration,
@@ -49,17 +49,23 @@ class TestBacktestStatistics(unittest.TestCase):
         self.logret.index = pd.to_datetime(self.logret.index)
         self.logret = np.log(self.logret["close"]).diff()[1:]
 
-        dates = np.array([dt.datetime(2000, 1, 1) + i * dt.timedelta(days=1) for i in range(10)])
+        dates = np.array(
+            [dt.datetime(2000, 1, 1) + i * dt.timedelta(days=1) for i in range(10)]
+        )
         flip_positions = np.array([1.0, 1.5, 0.5, 0, -0.5, -1.0, 0.5, 1.5, 1.5, 1.5])
         hold_positions = np.array([0, 1, 1, -1, -1, 0, 0, 2, 2, 0])
         no_closed_positions = np.array([0, 1, 1, 1, 1, 2, 2, 2, 2, 2])
         dollar_ret = np.array([100, 110, 90, 100, 120, 130, 100, 120, 140, 130])
-        normal_ret = np.array([0.01, 0.03, 0.02, 0.01, -0.01, 0.02, 0.01, 0.0, -0.01, 0.01])
+        normal_ret = np.array(
+            [0.01, 0.03, 0.02, 0.01, -0.01, 0.02, 0.01, 0.0, -0.01, 0.01]
+        )
         cumulated_ret = np.cumprod(1 + normal_ret)
 
         self.flip_flattening_positions = pd.Series(data=flip_positions, index=dates)
         self.flips = pd.DatetimeIndex([dt.datetime(2000, 1, 7)])
-        self.flattenings = pd.DatetimeIndex([dt.datetime(2000, 1, 4), dt.datetime(2000, 1, 10)])
+        self.flattenings = pd.DatetimeIndex(
+            [dt.datetime(2000, 1, 4), dt.datetime(2000, 1, 10)]
+        )
         self.hold_positions = pd.Series(data=hold_positions, index=dates)
         self.no_closed_positions = pd.Series(data=no_closed_positions, index=dates)
         self.dollar_returns = pd.Series(data=dollar_ret, index=dates)
@@ -73,7 +79,9 @@ class TestBacktestStatistics(unittest.TestCase):
         that last is added
         """
 
-        flattenings_and_flips = timing_of_flattening_and_flips(self.flip_flattening_positions)
+        flattenings_and_flips = timing_of_flattening_and_flips(
+            self.flip_flattening_positions
+        )
         test_flat_flip = self.flips.append(self.flattenings)
 
         # In case last bet is already included
@@ -81,9 +89,13 @@ class TestBacktestStatistics(unittest.TestCase):
         altered_flips[-1:] = 0
         flattenings_and_flips_last = timing_of_flattening_and_flips(altered_flips)
 
-        self.assertTrue(test_flat_flip.sort_values().equals(flattenings_and_flips.sort_values()))
         self.assertTrue(
-            flattenings_and_flips_last.sort_values().equals(flattenings_and_flips.sort_values())
+            test_flat_flip.sort_values().equals(flattenings_and_flips.sort_values())
+        )
+        self.assertTrue(
+            flattenings_and_flips_last.sort_values().equals(
+                flattenings_and_flips.sort_values()
+            )
         )
 
     def test_average_holding_period(self):
@@ -108,7 +120,9 @@ class TestBacktestStatistics(unittest.TestCase):
         flipped_logret = -1 * self.logret
         negative_concentration = bets_concentration(flipped_logret)
 
-        self.assertAlmostEqual(positive_concentration, negative_concentration, delta=1e-5)
+        self.assertAlmostEqual(
+            positive_concentration, negative_concentration, delta=1e-5
+        )
         self.assertAlmostEqual(positive_concentration, 2.0111445, delta=1e-4)
 
     def test_all_bets_concentration(self):
@@ -155,7 +169,9 @@ class TestBacktestStatistics(unittest.TestCase):
         Check if Sharpe ratio is calculated right
         """
 
-        sharpe = sharpe_ratio(self.normal_returns, entries_per_year=12, risk_free_rate=0.005)
+        sharpe = sharpe_ratio(
+            self.normal_returns, entries_per_year=12, risk_free_rate=0.005
+        )
 
         self.assertAlmostEqual(sharpe, 0.987483, delta=1e-4)
 
@@ -164,7 +180,9 @@ class TestBacktestStatistics(unittest.TestCase):
         Check if Information ratio is calculated right
         """
 
-        information_r = information_ratio(self.normal_returns, benchmark=0.006, entries_per_year=12)
+        information_r = information_ratio(
+            self.normal_returns, benchmark=0.006, entries_per_year=12
+        )
 
         self.assertAlmostEqual(information_r, 0.733559, delta=1e-4)
 
@@ -225,7 +243,12 @@ class TestBacktestStatistics(unittest.TestCase):
         )
 
         param_defl_sr = deflated_sharpe_ratio(
-            observed_sr, estim_param, number_of_returns, skewness, kurtosis, estimates_param=True
+            observed_sr,
+            estim_param,
+            number_of_returns,
+            skewness,
+            kurtosis,
+            estimates_param=True,
         )
 
         self.assertAlmostEqual(result_defl_sr, 0.95836, delta=1e-4)

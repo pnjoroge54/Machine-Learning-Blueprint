@@ -101,7 +101,8 @@ class RandomForestWrapper(BaseModelWrapper):
             self.load_time = time.time() - start_time
 
             logger.info(
-                f"Loaded RandomForest model: {self.model_version} " f"({self.load_time:.3f}s)"
+                f"Loaded RandomForest model: {self.model_version} "
+                f"({self.load_time:.3f}s)"
             )
 
             return True
@@ -161,7 +162,9 @@ class XGBoostWrapper(BaseModelWrapper):
 
             self.load_time = time.time() - start_time
 
-            logger.info(f"Loaded XGBoost model: {self.model_version} " f"({self.load_time:.3f}s)")
+            logger.info(
+                f"Loaded XGBoost model: {self.model_version} ({self.load_time:.3f}s)"
+            )
 
             return True
 
@@ -222,7 +225,7 @@ class TensorFlowWrapper(BaseModelWrapper):
             self.load_time = time.time() - start_time
 
             logger.info(
-                f"Loaded TensorFlow model: {self.model_version} " f"({self.load_time:.3f}s)"
+                f"Loaded TensorFlow model: {self.model_version} ({self.load_time:.3f}s)"
             )
 
             return True
@@ -544,18 +547,24 @@ class MLBridgeServer:
 
             if cached_result:
                 prediction_score, predicted_class, confidence = cached_result
-                logger.debug(f"Cache HIT: {predicted_class} (score={prediction_score:.4f})")
+                logger.debug(
+                    f"Cache HIT: {predicted_class} (score={prediction_score:.4f})"
+                )
             else:
                 # Make prediction
                 start_time = time.time()
 
-                prediction_score, predicted_class, confidence = self.model_wrapper.predict(features)
+                prediction_score, predicted_class, confidence = (
+                    self.model_wrapper.predict(features)
+                )
 
                 inference_time = (time.time() - start_time) * 1_000_000  # microseconds
 
                 # Cache result
                 if self.cache:
-                    self.cache.set(features, (prediction_score, predicted_class, confidence))
+                    self.cache.set(
+                        features, (prediction_score, predicted_class, confidence)
+                    )
 
                 self.predictions_made += 1
 
@@ -592,7 +601,9 @@ class MLBridgeServer:
             "requests_received": self.requests_received,
             "predictions_made": self.predictions_made,
             "errors": self.errors,
-            "model_version": self.model_wrapper.model_version if self.model_wrapper else "unknown",
+            "model_version": self.model_wrapper.model_version
+            if self.model_wrapper
+            else "unknown",
         }
 
         if self.cache:
@@ -645,7 +656,9 @@ class MLBridgeServer:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="ML Bridge Server for MQL5 Integration")
+    parser = argparse.ArgumentParser(
+        description="ML Bridge Server for MQL5 Integration"
+    )
 
     parser.add_argument(
         "--model",
@@ -657,9 +670,13 @@ def main():
 
     parser.add_argument("--port", type=int, default=80, help="Server port")
 
-    parser.add_argument("--model-path", type=str, default="models", help="Path to model files")
+    parser.add_argument(
+        "--model-path", type=str, default="models", help="Path to model files"
+    )
 
-    parser.add_argument("--no-cache", action="store_true", help="Disable prediction caching")
+    parser.add_argument(
+        "--no-cache", action="store_true", help="Disable prediction caching"
+    )
 
     parser.add_argument(
         "--cache-size", type=int, default=1000, help="Cache size (number of entries)"

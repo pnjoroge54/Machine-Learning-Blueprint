@@ -17,7 +17,13 @@ def calculate_ef3m_parameters(concurrent_positions):
     df_results = m2n.mp_fit()
     params = most_likely_parameters(df_results)
 
-    return [params["mu_1"], params["mu_2"], params["sigma_1"], params["sigma_2"], params["p_1"]]
+    return [
+        params["mu_1"],
+        params["mu_2"],
+        params["sigma_1"],
+        params["sigma_2"],
+        params["p_1"],
+    ]
 
 
 # Export to file for MQL5 to read

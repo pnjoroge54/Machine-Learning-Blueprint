@@ -1,6 +1,7 @@
 """
 Tests the cross validation technique described in Ch.7 of the book.
 """
+
 import unittest
 import os
 import pandas as pd
@@ -12,7 +13,7 @@ from sklearn.metrics import log_loss, accuracy_score
 from ..cross_validation.cross_validation import (
     ml_get_train_times,
     ml_cross_val_score,
-    PurgedKFold
+    PurgedKFold,
 )
 
 
@@ -51,8 +52,8 @@ class TestCrossValidation(unittest.TestCase):
         self.log(f"pwd_path= {pwd_path}")
 
         self.info_sets = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:00:00', periods=10, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', periods=10, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:00:00", periods=10, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:02:00", periods=10, freq="T"),
         )
 
     def test_get_train_times_1(self):
@@ -60,84 +61,108 @@ class TestCrossValidation(unittest.TestCase):
         Tests the get_train_times method for the case where the train STARTS within test.
         """
         test_times = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:01:00', periods=1, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', periods=1, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:01:00", periods=1, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:02:00", periods=1, freq="T"),
         )
         self.log(f"test_times=\n{test_times}")
         train_times_ret = ml_get_train_times(self.info_sets, test_times)
         self.log(f"train_times_ret=\n{train_times_ret}")
 
         train_times_ok = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:03:00', end='2019-01-01 00:09:00', freq='T'),
-            data=pd.date_range(start='2019-01-01 00:05:00', end='2019-01-01 00:11:00', freq='T'),
+            index=pd.date_range(
+                start="2019-01-01 00:03:00", end="2019-01-01 00:09:00", freq="T"
+            ),
+            data=pd.date_range(
+                start="2019-01-01 00:05:00", end="2019-01-01 00:11:00", freq="T"
+            ),
         )
         self.log(f"train_times=\n{train_times_ok}")
 
-        self.assertTrue(train_times_ret.equals(train_times_ok), "train dataset doesn't match")
+        self.assertTrue(
+            train_times_ret.equals(train_times_ok), "train dataset doesn't match"
+        )
 
     def test_get_train_times_2(self):
         """
         Tests the get_train_times method for the case where the train ENDS within test.
         """
         test_times = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:08:00', periods=1, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:11:00', periods=1, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:08:00", periods=1, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:11:00", periods=1, freq="T"),
         )
         self.log(f"test_times=\n{test_times}")
         train_times_ret = ml_get_train_times(self.info_sets, test_times)
         self.log(f"train_times_ret=\n{train_times_ret}")
 
         train_times_ok = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:00:00', end='2019-01-01 00:05:00', freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', end='2019-01-01 00:07:00', freq='T'),
+            index=pd.date_range(
+                start="2019-01-01 00:00:00", end="2019-01-01 00:05:00", freq="T"
+            ),
+            data=pd.date_range(
+                start="2019-01-01 00:02:00", end="2019-01-01 00:07:00", freq="T"
+            ),
         )
         self.log(f"train_times=\n{train_times_ok}")
 
-        self.assertTrue(train_times_ret.equals(train_times_ok), "train dataset doesn't match")
+        self.assertTrue(
+            train_times_ret.equals(train_times_ok), "train dataset doesn't match"
+        )
 
     def test_get_train_times_3(self):
         """
         Tests the get_train_times method for the case where the train ENVELOPES test.
         """
         test_times = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:06:00', periods=1, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:08:00', periods=1, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:06:00", periods=1, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:08:00", periods=1, freq="T"),
         )
         self.log(f"test_times=\n{test_times}")
         train_times_ret = ml_get_train_times(self.info_sets, test_times)
         self.log(f"train_times_ret=\n{train_times_ret}")
 
         train_times_ok1 = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:00:00', end='2019-01-01 00:03:00', freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', end='2019-01-01 00:05:00', freq='T'),
+            index=pd.date_range(
+                start="2019-01-01 00:00:00", end="2019-01-01 00:03:00", freq="T"
+            ),
+            data=pd.date_range(
+                start="2019-01-01 00:02:00", end="2019-01-01 00:05:00", freq="T"
+            ),
         )
         train_times_ok2 = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:09:00', end='2019-01-01 00:09:00', freq='T'),
-            data=pd.date_range(start='2019-01-01 00:11:00', end='2019-01-01 00:11:00', freq='T'),
+            index=pd.date_range(
+                start="2019-01-01 00:09:00", end="2019-01-01 00:09:00", freq="T"
+            ),
+            data=pd.date_range(
+                start="2019-01-01 00:11:00", end="2019-01-01 00:11:00", freq="T"
+            ),
         )
         train_times_ok = pd.concat([train_times_ok1, train_times_ok2])
         self.log(f"train_times=\n{train_times_ok}")
 
-        self.assertTrue(train_times_ret.equals(train_times_ok), "train dataset doesn't match")
+        self.assertTrue(
+            train_times_ret.equals(train_times_ok), "train dataset doesn't match"
+        )
 
     def test_purgedkfold_01_exception(self):
         """
         Test throw exception when samples_info_sets is not a pd.Series.
         """
         samples_info_sets = pd.DataFrame(
-            index=pd.date_range(start='2019-01-01 00:00:00', periods=20, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', periods=20, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:00:00", periods=20, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:02:00", periods=20, freq="T"),
         )
         self.log(f"info_sets=\n{samples_info_sets}")
 
         dataset = pd.DataFrame(
             index=samples_info_sets.index,
-            data={'feat': np.arange(0, 20)},
+            data={"feat": np.arange(0, 20)},
         )
         self.log(f"dataset=\n{dataset}")
 
         try:
-            PurgedKFold(n_splits=3, samples_info_sets=samples_info_sets, pct_embargo=0.)
+            PurgedKFold(
+                n_splits=3, samples_info_sets=samples_info_sets, pct_embargo=0.0
+            )
         except ValueError:
             pass
         else:
@@ -149,18 +174,18 @@ class TestCrossValidation(unittest.TestCase):
         constructor.
         """
         info_sets = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:00:00', periods=10, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', periods=10, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:00:00", periods=10, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:02:00", periods=10, freq="T"),
         )
         self.log(f"info_sets=\n{info_sets}")
 
         dataset = pd.DataFrame(
-            index=pd.date_range(start='2019-01-01 00:00:00', periods=11, freq='T'),
-            data={'feat': np.arange(0, 11)},  # One entry more than info_sets
+            index=pd.date_range(start="2019-01-01 00:00:00", periods=11, freq="T"),
+            data={"feat": np.arange(0, 11)},  # One entry more than info_sets
         )
         self.log(f"dataset=\n{dataset}")
 
-        pkf = PurgedKFold(n_splits=3, samples_info_sets=info_sets, pct_embargo=0.)
+        pkf = PurgedKFold(n_splits=3, samples_info_sets=info_sets, pct_embargo=0.0)
         try:
             for _, _ in pkf.split(dataset):
                 pass
@@ -178,18 +203,18 @@ class TestCrossValidation(unittest.TestCase):
         """
 
         info_sets = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:00:00', periods=20, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', periods=20, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:00:00", periods=20, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:02:00", periods=20, freq="T"),
         )
         self.log(f"info_sets=\n{info_sets}")
 
         dataset = pd.DataFrame(
             index=info_sets.index,
-            data={'feat': np.arange(0, 20)},
+            data={"feat": np.arange(0, 20)},
         )
         self.log(f"dataset=\n{dataset}")
 
-        pkf = PurgedKFold(n_splits=3, samples_info_sets=info_sets, pct_embargo=0.)
+        pkf = PurgedKFold(n_splits=3, samples_info_sets=info_sets, pct_embargo=0.0)
         for train_indices, test_indices in pkf.split(dataset):
             self.log(f"test_times_ret=\n{info_sets[test_indices]}")
 
@@ -206,7 +231,9 @@ class TestCrossValidation(unittest.TestCase):
             self.log(f"train_times_gtt=\n{train_times_gtt}")
             self.log("-" * 100)
 
-            self.assertTrue(train_times_ret.equals(train_times_gtt), "dataset don't match")
+            self.assertTrue(
+                train_times_ret.equals(train_times_gtt), "dataset don't match"
+            )
 
     def test_purgedkfold_04_embargo(self):
         """
@@ -215,22 +242,23 @@ class TestCrossValidation(unittest.TestCase):
         """
 
         info_sets = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:00:00', periods=100, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', periods=100, freq='T'),
+            index=pd.date_range(start="2019-01-01 00:00:00", periods=100, freq="T"),
+            data=pd.date_range(start="2019-01-01 00:02:00", periods=100, freq="T"),
         )
 
         dataset = pd.DataFrame(
             index=info_sets.index,
-            data={'feat': np.arange(0, 100)},
+            data={"feat": np.arange(0, 100)},
         )
         pct_points_test: int = 2
         self.log(f"pct_points_test= {pct_points_test}")
 
-        pkf = PurgedKFold(n_splits=3, samples_info_sets=info_sets, pct_embargo=0.01*pct_points_test)
+        pkf = PurgedKFold(
+            n_splits=3, samples_info_sets=info_sets, pct_embargo=0.01 * pct_points_test
+        )
 
         # Also test that X can be an np.ndarray by passing in the .values of the pd.DataFrame
         for train_indices, test_indices in pkf.split(dataset):
-
             train_times_ret = info_sets.iloc[train_indices]
             self.log(f"train_times_ret=\n{train_times_ret}")
 
@@ -252,12 +280,16 @@ class TestCrossValidation(unittest.TestCase):
             # if test set is in the middle drop pct_points_test records from the end of test set index
             elif test_times_ret.index[-1] != dataset.index[-1]:
                 last_test_ix = test_times_ret.index.get_loc(test_times_ret.index[-1])
-                to_drop: pd.DatetimeIndex = train_times_gtt.iloc[last_test_ix+2:last_test_ix+2+pct_points_test].index
+                to_drop: pd.DatetimeIndex = train_times_gtt.iloc[
+                    last_test_ix + 2 : last_test_ix + 2 + pct_points_test
+                ].index
                 train_times_gtt.drop(to_drop.to_list(), inplace=True)
 
             self.log(f"train_times_gtt=\n{train_times_gtt}")
             self.log("-" * 100)
-            self.assertTrue(train_times_ret.equals(train_times_gtt), "dataset don't match")
+            self.assertTrue(
+                train_times_ret.equals(train_times_gtt), "dataset don't match"
+            )
 
     def _test_ml_cross_val_score__data(self):
         """
@@ -266,29 +298,29 @@ class TestCrossValidation(unittest.TestCase):
         sample_size = 1000
 
         info_sets = pd.Series(
-            index=pd.date_range(start='2019-01-01 00:00:00', periods=sample_size, freq='T'),
-            data=pd.date_range(start='2019-01-01 00:02:00', periods=sample_size, freq='T'),
+            index=pd.date_range(
+                start="2019-01-01 00:00:00", periods=sample_size, freq="T"
+            ),
+            data=pd.date_range(
+                start="2019-01-01 00:02:00", periods=sample_size, freq="T"
+            ),
         )
 
         records = pd.DataFrame(
             index=info_sets.index,
             data={
-                'even': np.arange(0, sample_size),
-                'odd': np.arange(1, sample_size+1)
+                "even": np.arange(0, sample_size),
+                "odd": np.arange(1, sample_size + 1),
             },
         )
-        labels = pd.Series(
-            index=info_sets.index,
-            data=np.arange(0, sample_size)
-        )
-        labels[records['even'] % 2 == 0] = 1
-        labels[records['even'] % 2 != 0] = 0
+        labels = pd.Series(index=info_sets.index, data=np.arange(0, sample_size))
+        labels[records["even"] % 2 == 0] = 1
+        labels[records["even"] % 2 != 0] = 0
         self.log(f"y=\n{labels[:10]}")
 
         random_state = np.random.RandomState(seed=12345)
         sample_weights = pd.Series(
-            index=info_sets.index,
-            data=random_state.random_sample(sample_size)
+            index=info_sets.index, data=random_state.random_sample(sample_size)
         )
 
         decision_tree = DecisionTreeClassifier(random_state=0)
@@ -298,7 +330,9 @@ class TestCrossValidation(unittest.TestCase):
         """
         Test the ml_cross_val_score function with an artificial dataset.
         """
-        info_sets, records, labels, sample_weights, decision_tree = self._test_ml_cross_val_score__data()
+        info_sets, records, labels, sample_weights, decision_tree = (
+            self._test_ml_cross_val_score__data()
+        )
         cv_gen = PurgedKFold(samples_info_sets=info_sets, n_splits=3, pct_embargo=0.01)
         scores = ml_cross_val_score(
             classifier=decision_tree,
@@ -311,17 +345,18 @@ class TestCrossValidation(unittest.TestCase):
         )
         self.log(f"score1= {scores}")
 
-        should_be = np.array([0.5186980141893885, 0.4876916232189882, 0.4966185791847402])
-        self.assertTrue(
-            np.array_equal(scores, should_be),
-            "score lists don't match"
+        should_be = np.array(
+            [0.5186980141893885, 0.4876916232189882, 0.4966185791847402]
         )
+        self.assertTrue(np.array_equal(scores, should_be), "score lists don't match")
 
     def test_ml_cross_val_score_02_neg_log_loss(self):
         """
         Test the ml_cross_val_score function with an artificial dataset.
         """
-        info_sets, records, labels, sample_weights, decision_tree = self._test_ml_cross_val_score__data()
+        info_sets, records, labels, sample_weights, decision_tree = (
+            self._test_ml_cross_val_score__data()
+        )
         cv_gen = PurgedKFold(samples_info_sets=info_sets, n_splits=3, pct_embargo=0.01)
         scores = ml_cross_val_score(
             classifier=decision_tree,
@@ -335,16 +370,15 @@ class TestCrossValidation(unittest.TestCase):
         self.log(f"scores= {scores}")
 
         should_be = np.array([-17.26939, -17.32125, -17.32125])
-        self.assertTrue(
-            np.allclose(scores, should_be),
-            "score lists don't match"
-        )
+        self.assertTrue(np.allclose(scores, should_be), "score lists don't match")
 
     def test_ml_cross_val_score_03_other_cv_gen(self):
         """
         Test the ml_cross_val_score function with an artificial dataset.
         """
-        _, records, labels, sample_weights, decision_tree = self._test_ml_cross_val_score__data()
+        _, records, labels, sample_weights, decision_tree = (
+            self._test_ml_cross_val_score__data()
+        )
         scores = ml_cross_val_score(
             classifier=decision_tree,
             X=records,
@@ -356,18 +390,22 @@ class TestCrossValidation(unittest.TestCase):
         )
         self.log(f"scores= {scores}")
 
-        should_be = np.array([-17.520701311460694, -18.25536255165772, -16.964650471071668])
+        should_be = np.array(
+            [-17.520701311460694, -18.25536255165772, -16.964650471071668]
+        )
         self.assertTrue(
             np.array_equal(scores, should_be),
             # self.assertListEqual(scores.tolist(), should_be.tolist()),
-            "score lists don't match"
+            "score lists don't match",
         )
 
     def test_ml_cross_val_score_04_sw(self):
         """
         Test the ml_cross_val_score function with an artificial dataset.
         """
-        info_sets, records, labels, _, decision_tree = self._test_ml_cross_val_score__data()
+        info_sets, records, labels, _, decision_tree = (
+            self._test_ml_cross_val_score__data()
+        )
         cv_gen = PurgedKFold(samples_info_sets=info_sets, n_splits=3, pct_embargo=0.01)
         scores = ml_cross_val_score(
             classifier=decision_tree,
@@ -381,7 +419,4 @@ class TestCrossValidation(unittest.TestCase):
         self.log(f"score1= {scores}")
 
         should_be = np.array([0.5, 0.4984984984984985, 0.4984984984984985])
-        self.assertTrue(
-            np.array_equal(scores, should_be),
-            "score lists don't match"
-        )
+        self.assertTrue(np.array_equal(scores, should_be), "score lists don't match")

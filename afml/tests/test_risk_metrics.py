@@ -15,7 +15,7 @@ class TestRiskMetrics(unittest.TestCase):
         Set the file path for the tick data csv.
         """
         project_path = os.path.dirname(__file__)
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date")
 
     def test_variance_calculation(self):
@@ -51,7 +51,9 @@ class TestRiskMetrics(unittest.TestCase):
         """
 
         test_returns = self.data.iloc[:, 0].values
-        conditional_drawdown = RiskMetrics().calculate_conditional_drawdown_risk(test_returns)
+        conditional_drawdown = RiskMetrics().calculate_conditional_drawdown_risk(
+            test_returns
+        )
         assert isinstance(conditional_drawdown, float)
 
     def test_value_at_risk_for_dataframe(self):
@@ -78,5 +80,7 @@ class TestRiskMetrics(unittest.TestCase):
         """
 
         test_returns = pd.DataFrame(self.data.iloc[:, 0])
-        conditional_drawdown = RiskMetrics().calculate_conditional_drawdown_risk(test_returns)
+        conditional_drawdown = RiskMetrics().calculate_conditional_drawdown_risk(
+            test_returns
+        )
         assert isinstance(conditional_drawdown, float)

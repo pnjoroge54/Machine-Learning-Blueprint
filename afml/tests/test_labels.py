@@ -23,8 +23,8 @@ class TestChapter3(unittest.TestCase):
         Set the file path for the sample dollar bars data.
         """
         project_path = os.path.dirname(__file__)
-        self.path = project_path + '/test_data/dollar_bar_sample.csv'
-        self.data = pd.read_csv(self.path, index_col='date_time')
+        self.path = project_path + "/test_data/dollar_bar_sample.csv"
+        self.data = pd.read_csv(self.path, index_col="date_time")
         self.data.index = pd.to_datetime(self.data.index)
 
     def test_daily_volatility(self):
@@ -33,7 +33,7 @@ class TestChapter3(unittest.TestCase):
         Although I have reservations, example: no minimum value is set in the EWM.
         Thus it returns values for volatility before there are even enough data points.
         """
-        daily_vol = get_daily_vol(close=self.data['close'], lookback=100)
+        daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
 
         # Last value in the set is still the same
         self.assertTrue(daily_vol[-1] == 0.008968238932170641)
@@ -42,19 +42,23 @@ class TestChapter3(unittest.TestCase):
         self.assertTrue(daily_vol.shape[0] == 960)
 
         # test localized datetimes
-        self.data.index = self.data.index.tz_localize(tz='UTC')
-        daily_vol_tz = get_daily_vol(close=self.data['close'], lookback=100)
-        self.assertTrue((daily_vol.dropna().values == daily_vol_tz.dropna().values).all())
+        self.data.index = self.data.index.tz_localize(tz="UTC")
+        daily_vol_tz = get_daily_vol(close=self.data["close"], lookback=100)
+        self.assertTrue(
+            (daily_vol.dropna().values == daily_vol_tz.dropna().values).all()
+        )
 
     def test_vertical_barriers(self):
         """
         Assert that the vertical barrier returns the timestamp x amount of days after the event.
         """
-        cusum_events = cusum_filter(self.data['close'], threshold=0.02)
+        cusum_events = cusum_filter(self.data["close"], threshold=0.02)
 
         # Compute vertical barrier
         for days in [1, 2, 3, 4, 5]:
-            vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'], num_days=days)
+            vertical_barriers = add_vertical_barrier(
+                t_events=cusum_events, close=self.data["close"], num_days=days
+            )
 
             # For each row assert the time delta is correct
             for start_date, end_date in vertical_barriers.iteritems():
@@ -62,7 +66,9 @@ class TestChapter3(unittest.TestCase):
 
         # Check hourly barriers
         for hours in [1, 2, 3, 4, 5]:
-            vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'], num_hours=hours)
+            vertical_barriers = add_vertical_barrier(
+                t_events=cusum_events, close=self.data["close"], num_hours=hours
+            )
 
             # For each row assert the time delta is correct
             for start_date, end_date in vertical_barriers.iteritems():
@@ -70,8 +76,9 @@ class TestChapter3(unittest.TestCase):
 
         # Check minute barriers
         for minutes in [1, 2, 3, 4, 5]:
-            vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'],
-                                                     num_minutes=minutes)
+            vertical_barriers = add_vertical_barrier(
+                t_events=cusum_events, close=self.data["close"], num_minutes=minutes
+            )
 
             # For each row assert the time delta is correct
             for start_date, end_date in vertical_barriers.iteritems():
@@ -79,8 +86,9 @@ class TestChapter3(unittest.TestCase):
 
         # Check seconds barriers
         for seconds in [1, 2, 3, 4, 5]:
-            vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'],
-                                                     num_seconds=seconds)
+            vertical_barriers = add_vertical_barrier(
+                t_events=cusum_events, close=self.data["close"], num_seconds=seconds
+            )
 
             # For each row assert the time delta is correct
             for start_date, end_date in vertical_barriers.iteritems():
@@ -93,21 +101,25 @@ class TestChapter3(unittest.TestCase):
         """
 
         # Test how labelling works with tz-aware timestamp
-        self.data.index = self.data.index.tz_localize(tz='US/Eastern')
-        daily_vol = get_daily_vol(close=self.data['close'], lookback=100)
-        cusum_events = cusum_filter(self.data['close'], threshold=0.02)
-        vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'], num_days=1)
+        self.data.index = self.data.index.tz_localize(tz="US/Eastern")
+        daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
+        cusum_events = cusum_filter(self.data["close"], threshold=0.02)
+        vertical_barriers = add_vertical_barrier(
+            t_events=cusum_events, close=self.data["close"], num_days=1
+        )
 
         # No meta-labeling
-        triple_barrier_events = get_events(close=self.data['close'],
-                                           t_events=cusum_events,
-                                           pt_sl=[1, 1],
-                                           target=daily_vol,
-                                           min_ret=0.005,
-                                           num_threads=3,
-                                           vertical_barrier_times=vertical_barriers,
-                                           side_prediction=None,
-                                           verbose=False)
+        triple_barrier_events = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[1, 1],
+            target=daily_vol,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=None,
+            verbose=False,
+        )
 
         # Test that the events are the same as expected (naive test)
         self.assertTrue(triple_barrier_events.shape == (8, 4))  # Assert shape
@@ -121,85 +133,110 @@ class TestChapter3(unittest.TestCase):
 
         # ----------------------
         # With meta-labeling
-        self.data['side'] = 1
-        meta_labeled_events = get_events(close=self.data['close'],
-                                         t_events=cusum_events,
-                                         pt_sl=[1, 1],
-                                         target=daily_vol,
-                                         min_ret=0.005,
-                                         num_threads=3,
-                                         vertical_barrier_times=vertical_barriers,
-                                         side_prediction=self.data['side'],
-                                         verbose=False)
+        self.data["side"] = 1
+        meta_labeled_events = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[1, 1],
+            target=daily_vol,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=self.data["side"],
+            verbose=False,
+        )
 
         # Assert that the two different events are the the same as they are generated using same data
-        self.assertTrue(np.all(meta_labeled_events['t1'] == triple_barrier_events['t1']))
-        self.assertTrue(np.all(meta_labeled_events['trgt'] == triple_barrier_events['trgt']))
+        self.assertTrue(
+            np.all(meta_labeled_events["t1"] == triple_barrier_events["t1"])
+        )
+        self.assertTrue(
+            np.all(meta_labeled_events["trgt"] == triple_barrier_events["trgt"])
+        )
 
         # Assert shape
         self.assertTrue(meta_labeled_events.shape == (8, 5))
 
         # ----------------------
         # No vertical barriers
-        no_vertical_events = get_events(close=self.data['close'],
-                                        t_events=cusum_events,
-                                        pt_sl=[1, 1],
-                                        target=daily_vol,
-                                        min_ret=0.005,
-                                        num_threads=3,
-                                        vertical_barrier_times=False,
-                                        side_prediction=None,
-                                        verbose=False)
+        no_vertical_events = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[1, 1],
+            target=daily_vol,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=False,
+            side_prediction=None,
+            verbose=False,
+        )
 
         # Assert targets match other events trgts
-        self.assertTrue(np.all(triple_barrier_events['trgt'] == no_vertical_events['trgt']))
+        self.assertTrue(
+            np.all(triple_barrier_events["trgt"] == no_vertical_events["trgt"])
+        )
         self.assertTrue(no_vertical_events.shape == (8, 4))
 
         # Previously the vertical barrier was touched twice, assert that those events aren't included here
-        self.assertTrue((no_vertical_events['t1'] != triple_barrier_events['t1']).sum() == 2)
+        self.assertTrue(
+            (no_vertical_events["t1"] != triple_barrier_events["t1"]).sum() == 2
+        )
 
     def test_triple_barrier_labeling(self):
         """
         Assert that meta labeling as well as standard labeling works. Also check that if a vertical barrier is
         reached, then a 0 class label is assigned (in the case of standard labeling).
         """
-        daily_vol = get_daily_vol(close=self.data['close'], lookback=100)
-        cusum_events = cusum_filter(self.data['close'], threshold=0.02)
-        vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'], num_days=1)
+        daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
+        cusum_events = cusum_filter(self.data["close"], threshold=0.02)
+        vertical_barriers = add_vertical_barrier(
+            t_events=cusum_events, close=self.data["close"], num_days=1
+        )
 
         # ----------------------
         # Assert 0 labels are generated if vertical barrier hit
-        triple_barrier_events = get_events(close=self.data['close'],
-                                           t_events=cusum_events,
-                                           pt_sl=[1, 1],
-                                           target=daily_vol,
-                                           min_ret=0.005,
-                                           num_threads=3,
-                                           vertical_barrier_times=vertical_barriers,
-                                           side_prediction=None,
-                                           verbose=False)
+        triple_barrier_events = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[1, 1],
+            target=daily_vol,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=None,
+            verbose=False,
+        )
 
-        triple_labels = get_bins(triple_barrier_events, self.data['close'])
-        self.assertTrue(np.all(triple_labels[np.abs(triple_labels['ret']) < triple_labels['trgt']]['bin'] == 0))
+        triple_labels = get_bins(triple_barrier_events, self.data["close"])
+        self.assertTrue(
+            np.all(
+                triple_labels[np.abs(triple_labels["ret"]) < triple_labels["trgt"]][
+                    "bin"
+                ]
+                == 0
+            )
+        )
 
         # Assert meta labeling works
-        self.data['side'] = 1
-        triple_barrier_events = get_events(close=self.data['close'],
-                                           t_events=cusum_events,
-                                           pt_sl=[1, 1],
-                                           target=daily_vol,
-                                           min_ret=0.005,
-                                           num_threads=3,
-                                           vertical_barrier_times=vertical_barriers,
-                                           side_prediction=self.data['side'],
-                                           verbose=False)
+        self.data["side"] = 1
+        triple_barrier_events = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[1, 1],
+            target=daily_vol,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=self.data["side"],
+            verbose=False,
+        )
 
-        triple_labels = get_bins(triple_barrier_events, self.data['close'])
+        triple_labels = get_bins(triple_barrier_events, self.data["close"])
 
         # Label 1 if made money, else 0
-        condition1 = triple_labels['ret'] > 0
-        condition2 = triple_labels['ret'].abs() > triple_labels['trgt']
-        self.assertTrue(((condition1 & condition2) == triple_labels['bin']).all())
+        condition1 = triple_labels["ret"] > 0
+        condition2 = triple_labels["ret"].abs() > triple_labels["trgt"]
+        self.assertTrue(((condition1 & condition2) == triple_labels["bin"]).all())
 
         # Assert shape
         self.assertTrue(triple_labels.shape == (8, 4))
@@ -216,59 +253,71 @@ class TestChapter3(unittest.TestCase):
         This also meant that irrespective of the pt_sl levels set, the labels would always be the same.
         """
 
-        target = get_daily_vol(close=self.data['close'], lookback=100)
-        cusum_events = cusum_filter(self.data['close'], threshold=0.02)
-        vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'], num_days=1)
+        target = get_daily_vol(close=self.data["close"], lookback=100)
+        cusum_events = cusum_filter(self.data["close"], threshold=0.02)
+        vertical_barriers = add_vertical_barrier(
+            t_events=cusum_events, close=self.data["close"], num_days=1
+        )
 
         # --------------------------------------------------------------------------------------------------------
         # Assert that the vertical barrier would be reached for all positions due to the high pt level.
         # All labels should be 0. Check the 'bin' column
         pt_sl = [1000, 1000]
-        triple_barrier_events_ptsl = get_events(close=self.data['close'],
-                                                t_events=cusum_events,
-                                                pt_sl=pt_sl,
-                                                target=target,
-                                                min_ret=0.005,
-                                                num_threads=3,
-                                                vertical_barrier_times=vertical_barriers,
-                                                side_prediction=None,
-                                                verbose=False)
+        triple_barrier_events_ptsl = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=pt_sl,
+            target=target,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=None,
+            verbose=False,
+        )
 
-        triple_labels_ptsl_large = get_bins(triple_barrier_events_ptsl, self.data['close'])
-        labels_large = triple_labels_ptsl_large['bin']
-        label_count = triple_labels_ptsl_large['bin'].sum()
+        triple_labels_ptsl_large = get_bins(
+            triple_barrier_events_ptsl, self.data["close"]
+        )
+        labels_large = triple_labels_ptsl_large["bin"]
+        label_count = triple_labels_ptsl_large["bin"].sum()
         self.assertTrue(label_count == 0)
 
         # --------------------------------------------------------------------------------------------------------
         # Assert that the vertical barriers are never reached for very small multiples
-        triple_barrier_events_ptsl = get_events(close=self.data['close'],
-                                                t_events=cusum_events,
-                                                pt_sl=[0.00000001, 0.00000001],
-                                                target=target,
-                                                min_ret=0.005,
-                                                num_threads=3,
-                                                vertical_barrier_times=vertical_barriers,
-                                                side_prediction=None,
-                                                verbose=False)
+        triple_barrier_events_ptsl = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[0.00000001, 0.00000001],
+            target=target,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=None,
+            verbose=False,
+        )
 
-        triple_labels_ptsl_small = get_bins(triple_barrier_events_ptsl, self.data['close'])
-        labels_small = triple_labels_ptsl_small['bin']
-        label_count = (triple_labels_ptsl_small['bin'] == 0).sum()
+        triple_labels_ptsl_small = get_bins(
+            triple_barrier_events_ptsl, self.data["close"]
+        )
+        labels_small = triple_labels_ptsl_small["bin"]
+        label_count = (triple_labels_ptsl_small["bin"] == 0).sum()
         self.assertTrue(label_count == 0)
 
         # --------------------------------------------------------------------------------------------------------
         # TP too large and tight stop loss: expected all values less than 1
-        triple_barrier_events_ptsl = get_events(close=self.data['close'],
-                                                t_events=cusum_events,
-                                                pt_sl=[10000, 0.00000001],
-                                                target=target,
-                                                min_ret=0.005,
-                                                num_threads=3,
-                                                vertical_barrier_times=vertical_barriers,
-                                                side_prediction=None,
-                                                verbose=False)
+        triple_barrier_events_ptsl = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[10000, 0.00000001],
+            target=target,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=None,
+            verbose=False,
+        )
 
-        labels_no_ones = get_bins(triple_barrier_events_ptsl, self.data['close'])['bin']
+        labels_no_ones = get_bins(triple_barrier_events_ptsl, self.data["close"])["bin"]
         self.assertTrue(np.all(labels_no_ones < 1))
 
         # --------------------------------------------------------------------------------------------------------
@@ -279,24 +328,28 @@ class TestChapter3(unittest.TestCase):
         """
         Assert that drop_labels removes rare class labels.
         """
-        daily_vol = get_daily_vol(close=self.data['close'], lookback=100)
-        cusum_events = cusum_filter(self.data['close'], threshold=0.02)
-        vertical_barriers = add_vertical_barrier(t_events=cusum_events, close=self.data['close'], num_days=1)
-        triple_barrier_events = get_events(close=self.data['close'],
-                                           t_events=cusum_events,
-                                           pt_sl=[1, 1],
-                                           target=daily_vol,
-                                           min_ret=0.005,
-                                           num_threads=3,
-                                           vertical_barrier_times=vertical_barriers,
-                                           side_prediction=None,
-                                           verbose=False)
-        triple_labels = get_bins(triple_barrier_events, self.data['close'])
+        daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
+        cusum_events = cusum_filter(self.data["close"], threshold=0.02)
+        vertical_barriers = add_vertical_barrier(
+            t_events=cusum_events, close=self.data["close"], num_days=1
+        )
+        triple_barrier_events = get_events(
+            close=self.data["close"],
+            t_events=cusum_events,
+            pt_sl=[1, 1],
+            target=daily_vol,
+            min_ret=0.005,
+            num_threads=3,
+            vertical_barrier_times=vertical_barriers,
+            side_prediction=None,
+            verbose=False,
+        )
+        triple_labels = get_bins(triple_barrier_events, self.data["close"])
 
         # Drop the 2 zero labels in the set since they are "rare"
         new_labels = drop_labels(events=triple_labels, min_pct=0.30)
-        self.assertTrue(0 not in set(new_labels['bin']))
+        self.assertTrue(0 not in set(new_labels["bin"]))
 
         # Assert that threshold works
         new_labels = drop_labels(events=triple_labels, min_pct=0.20)
-        self.assertTrue(0 in set(new_labels['bin']))
+        self.assertTrue(0 in set(new_labels["bin"]))
