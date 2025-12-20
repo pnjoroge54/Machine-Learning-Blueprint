@@ -63,7 +63,7 @@ from ..cache import memory
 from ..labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
 from ..util.volatility import get_period_vol
 from .signal_processing import get_entries
-from .signals import BaseStrategy
+from .trading_strategies import BaseStrategy
 
 
 def get_dynamic_seed() -> int:

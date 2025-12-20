@@ -5,7 +5,7 @@ from typing import Union
 import numpy as np
 import pandas as pd
 
-from ..strategies.signals import BaseStrategy
+from ..strategies.trading_strategies import BaseStrategy
 from .model_development import ModelDevelopmentPipeline
 
 

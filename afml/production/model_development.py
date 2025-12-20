@@ -13,36 +13,25 @@ from numba import njit, prange
 from scipy.stats import uniform
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 
-from ..cache import (
-    cacheable,
-    get_cache_monitor,
-    log_data_access,
-    print_contamination_report,
-)
+from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..cross_validation import PurgedKFold, clf_hyper_fit_cached
-from ..cross_validation.hyper_fit_analysis import (
-    generate_hyperparameter_markdown_report,
-)
+from ..cross_validation.hyper_fit_analysis import generate_hyperparameter_markdown_report
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..features.trading_session import get_time_features
-from ..labeling.triple_barrier import (
-    add_vertical_barrier,
-    get_event_weights,
-    triple_barrier_labels,
-)
+from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
 from ..mt5.load_data import load_tick_data, save_data_to_parquet
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
 from ..strategies.signal_processing import get_entries
-from ..strategies.signals import BaseStrategy
-from ..util.misc import value_counts_data
+from ..strategies.trading_strategies import BaseStrategy
+from ..util.misc import date_conversion, value_counts_data
 from ..util.pipelines import make_custom_pipeline, set_pipeline_params
 from ..util.volatility import get_daily_vol
-from .utils import ModelDevelopmentLogger, ModelFileManager
+from .utils import ModelFileManager
 
 
 class TickDataLoader:
@@ -61,7 +50,7 @@ class TickDataLoader:
     - Memory usage: ~100MB per 1M ticks
     """
 
-    def __init__(self, max_cache_size_mb: int = 500, max_cached_symbols: int = 20):
+    def __init__(self, max_cache_size_mb: int = 3000, max_cached_symbols: int = 20):
         """
         Initialize the tick data loader.
 
@@ -116,15 +105,13 @@ class TickDataLoader:
         - Merges cached and newly loaded data seamlessly
         """
         cache_key = (symbol, account_name)
-        start_dt = pd.to_datetime(start_date)
-        end_dt = pd.to_datetime(end_date)
+        start_dt, end_dt = date_conversion(start_date, end_date)
 
         # Check if we have cached data for this symbol/account
         if cache_key in self._cache:
             cached_df = self._cache[cache_key]
             metadata = self._cache_metadata[cache_key]
-            cached_start = metadata["start_date"]
-            cached_end = metadata["end_date"]
+            cached_start, cached_end = date_conversion(metadata["start_date"], metadata["end_date"])
 
             # Check if cached data fully covers requested range
             if cached_start <= start_dt and cached_end >= end_dt:
@@ -171,8 +158,7 @@ class TickDataLoader:
         cached_start = self._cache_metadata[cache_key]["start_date"]
         cached_end = self._cache_metadata[cache_key]["end_date"]
 
-        start_dt = pd.to_datetime(start_date)
-        end_dt = pd.to_datetime(end_date)
+        start_dt, end_dt = date_conversion(start_date, end_date)
 
         # Determine what we need to load
         load_ranges = []
@@ -240,13 +226,14 @@ class TickDataLoader:
         """
         logger.info(f"Loading data for {symbol} from {start_date} to {end_date}")
         df = self._load_data(symbol, start_date, end_date, account_name)
+        start_date, end_date = date_conversion(start_date, end_date)
 
         if not df.empty:
             # Cache the data
             self._cache[cache_key] = df
             self._cache_metadata[cache_key] = {
-                "start_date": pd.to_datetime(start_date),
-                "end_date": pd.to_datetime(end_date),
+                "start_date": start_date,
+                "end_date": end_date,
                 "last_accessed": datetime.now(),
                 "size_mb": df.memory_usage(deep=True).sum() / (1024**2),
             }
@@ -495,7 +482,7 @@ def load_and_prepare_training_data(
     bar_size : int or str
         Bar size. If 'tick' and str, converted via `get_bar_size`.
     price : str
-        Price type ('bid', 'ask', 'mid').
+        Price type ('bid', 'ask', 'mid_price').
 
     Returns
     -------
@@ -653,16 +640,15 @@ def weighted_estimator(base_estimator, events, data_index):
             self.base_estimator.set_params(**params)
 
         def fit(self, X, y):
-            n = len(X)
             if self.scheme == "uniqueness":
-                weights = self.events["tW"].copy()
+                weights = self.events["tW"]
             elif self.scheme == "return":
-                weights = self.events["w"].copy()
+                weights = self.events["w"]
             else:
-                weights = pd.Series(np.ones(n), index=self.events.index)
+                weights = pd.Series(np.ones(len(y)), index=y.index)
 
             valid = X.index.intersection(y.index)
-            X, y, weights = X.reindex(valid), y.reindex(valid), weights.reindex(valid)
+            X, y, w = X.loc[valid], y.loc[valid], weights.loc[valid]
 
             # Apply decay factor
             if self.decay != 1.0:
@@ -673,9 +659,9 @@ def weighted_estimator(base_estimator, events, data_index):
                     linear=self.linear,
                     av_uniqueness=self.events.loc[X.index, "tW"],
                 )
-                weights *= decay_vec
+                w *= decay_vec
 
-            self.base_estimator.fit(X, y, sample_weight=weights)
+            self.base_estimator.fit(X, y, sample_weight=w)
             return self
 
         def predict(self, X):
@@ -704,6 +690,8 @@ def find_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
     features: pd.DataFrame,
+    cv_splits: int = 5,
+    n_iter: int = 15,
 ) -> pd.Series:
     """
     Compute best sample weight with time decay.
@@ -716,50 +704,45 @@ def find_optimal_sample_weight(
         Event labels with uniqueness weights.
     features: pd.DataFrame
         Training features
+    cv_splits : int, optional
+        Number of cross-validation splits (default: 5).
+    n_iter : int, optional
+        Number of random search iterations (default: 15).
 
     Returns
     -------
-    pd.Series
-        Sample weights.
-
+    weights : pd.Series
+        Computed sample weights.
+    cv_results : dict
+        Cross-validation results.
+    best_scheme : str
+        Best weighting scheme description.
     """
     valid_index = features.index.intersection(events.index)
     cont = events.loc[valid_index]
-
     X = features.loc[valid_index]
     y = cont["bin"]
+
     scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
 
     classifier = RandomForestClassifier(
         criterion="entropy",
         class_weight="balanced_subsample",
         max_samples=cont["tW"].mean(),
-        max_depth=6,
+        max_depth=4,
         min_weight_fraction_leaf=0.05,
-        random_state=7,
     )
     est = weighted_estimator(classifier, cont, data_index)
-
-    cv_gen = PurgedKFold(n_splits=3, t1=cont["t1"], pct_embargo=0.01)
-    gs = GridSearchCV(
-        est,
-        param_grid={"scheme": ["unweighted", "return", "uniqueness"]},
-        cv=cv_gen,
-        scoring=scoring,
-        n_jobs=-1,
-        refit=False,
-    )
-    gs.fit(X, y)
-
     param_distributions = {
-        "scheme": [gs.best_params_["scheme"]],
+        "scheme": ["unweighted", "return", "uniqueness"],
         "decay": uniform(0, 1),  # decay factor between 0 and 1 inclusive
         "linear": [True, False],
     }
     gs = RandomizedSearchCV(
         est,
         param_distributions,
-        n_iter=10,
+        n_iter=n_iter,
         cv=cv_gen,
         scoring=scoring,
         n_jobs=-1,
@@ -773,10 +756,7 @@ def find_optimal_sample_weight(
     decay = params["decay"]
     linear = params["linear"]
     best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay}"
-    msg = " ".join(best_scheme.split("_")).title()[
-        : 7 - len(str(decay))
-    ]  # Display to 6 decimal places
-    logger.info(f"Best Weighting Scheme: {msg}")
+    logger.info(f"Best sample weight scheme: {best_scheme}")
 
     decay_vec = get_weights_by_time_decay_optimized(
         triple_barrier_events=cont,
@@ -864,9 +844,7 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
         if window > len(y_true):
             continue
 
-        accuracy, precision, recall, f1 = _rolling_metrics_numba(
-            y_true, y_pred, weights, window
-        )
+        accuracy, precision, recall, f1 = _rolling_metrics_numba(y_true, y_pred, weights, window)
 
         metrics[f"rolling_accuracy_{window}"] = accuracy
         metrics[f"rolling_precision_{window}"] = precision
@@ -1035,11 +1013,6 @@ class ModelDevelopmentPipeline:
         self.file_manager = ModelFileManager(base_dir)
         self.file_paths = self.file_manager.setup_model_directory(self.config)
 
-        # Initialize structured logger (for pipeline steps only)
-        self.step_logger = ModelDevelopmentLogger(
-            f"pipeline_{self.symbol}_{train_start}_{train_end}"
-        )
-
         # Storage for intermediate results
         self.bar_data = None
         self.features = None
@@ -1091,7 +1064,7 @@ class ModelDevelopmentPipeline:
         # Console sink (colors enabled automatically)
         logger.add(
             sys.stdout,
-            level="INFO",
+            level="DEBUG",
             format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
             "<cyan>{name}</cyan> | "
             "<level>{level}</level> | "
@@ -1139,138 +1112,53 @@ class ModelDevelopmentPipeline:
             print("=" * 70)
             print("\nConfiguration")
             print("-" * 50)
-            print(pd.Series(self.config).to_string())
-
-        # Log pipeline start
-        self.step_logger.log_step_start(
-            "pipeline_start",
-            {
-                "symbol": self.symbol,
-                "train_period": f"{self.train_start}_{self.train_end}",
-                "strategy": self.config["strategy"],
-            },
-        )
+            print(pd.Series(self.config).to_string(), "\n")
 
         try:
             # Step 1: Load data
             if verbose:
                 print("\n[Step 1/7] Loading training data...")
-            step_time = time.time()
+
             self.load_training_data()
-            step_duration = time.time() - step_time
-            self.step_logger.log_step_complete(
-                "data_loading",
-                metrics={"samples": len(self.bar_data)},
-                duration=step_duration,
-            )
-            if verbose:
-                print(f"✓ Loaded {len(self.bar_data):,} samples")
 
             # Step 2: Feature engineering
             if verbose:
                 print("\n[Step 2/7] Computing features...")
-            step_time = time.time()
             self.engineer_features()
-            step_duration = time.time() - step_time
-            self.step_logger.log_step_complete(
-                "feature_engineering",
-                metrics={"features_generated": len(self.features.columns)},
-                duration=step_duration,
-            )
             if verbose:
                 print(f"✓ Generated {len(self.features.columns)} features")
 
             # Step 3: Label generation
             if verbose:
                 print("\n[Step 3/7] Generating events...")
-            step_time = time.time()
+
             self.generate_labels()
-            step_duration = time.time() - step_time
-            self.step_logger.log_step_complete(
-                "label_generation",
-                metrics={
-                    "events_generated": len(self.events),
-                    "label_distribution": value_counts_data(self.events["bin"]),
-                    "average_uniqueness": float(self.events["tW"].mean()),
-                },
-                duration=step_duration,
-            )
-            if verbose:
-                print(f"✓ Generated events: \n{value_counts_data(self.events['bin'])}")
-                print(f"\nAverage Uniqueness: {self.events['tW'].mean():.4f}")
 
             # Step 4: Sample weights
             if verbose:
                 print("\n[Step 4/7] Computing sample weights...")
-            step_time = time.time()
+
             self.compute_sample_weights()
-            step_duration = time.time() - step_time
-            self.step_logger.log_step_complete(
-                "weight_computation",
-                metrics={
-                    "weighting_scheme": self.best_weighting_scheme,
-                    "weight_cv_score": self.weight_cv_results["best_score"],
-                },
-                duration=step_duration,
-            )
-            if verbose:
-                print(f"✓ Best weighting scheme: {self.best_weighting_scheme}")
 
             # Step 5: Rolling meta-label features
             if verbose:
                 print("\n[Step 5/7] Computing rolling meta-label features...")
-            step_time = time.time()
+
             self.add_meta_features()
             self.preprocess_features()
-            step_duration = time.time() - step_time
-            self.step_logger.log_step_complete(
-                "meta_features_preprocessing",
-                metrics={
-                    "meta_features_added": len(self.meta_features.columns),
-                    "features_after_preprocessing": len(
-                        self.preprocessed_features.columns
-                    ),
-                    "features_removed": len(self.features.columns)
-                    - len(self.preprocessed_features.columns),
-                },
-                duration=step_duration,
-            )
-            if verbose:
-                print("✓ Computed rolling meta-label features")
-                print(
-                    f"✓ Preprocessed features: {len(self.preprocessed_features.columns)} features retained"
-                )
 
             # Step 6: Model training
             if verbose:
                 print("\n[Step 6/7] Training model with cross-validation...")
-            step_time = time.time()
+
             self.train_model()
-            step_duration = time.time() - step_time
-            self.step_logger.log_step_complete(
-                "model_training",
-                metrics={
-                    "cv_score": self.cv_results["best_score"],
-                    "best_params": self.cv_results["best_params"],
-                    "n_splits": self.cv_splits,
-                },
-                duration=step_duration,
-            )
-            if verbose:
-                print(f"✓ Best CV score: {self.cv_results['best_score']:.4f}")
-                print(f"✓ Best params: {self.cv_results['best_params']}")
 
             # Step 7: Feature importance analysis
             if verbose:
                 print("\n[Step 7/7] Analyzing feature importance...")
-            step_time = time.time()
+
             self.analyze_features()
-            step_duration = time.time() - step_time
-            self.step_logger.log_step_complete(
-                "feature_analysis",
-                metrics={"top_feature": self.feature_importance.iloc[0]["feature"]},
-                duration=step_duration,
-            )
+
             if verbose:
                 print("\nTop 10 Features:")
                 print(self.feature_importance.head(10).to_string(index=False), "\n")
@@ -1282,11 +1170,8 @@ class ModelDevelopmentPipeline:
             if generate_reports:
                 if verbose:
                     print("\n[Generating Reports] Creating analysis reports...")
-                step_time = time.time()
+
                 self._generate_analysis_reports()
-                step_duration = time.time() - step_time
-                if verbose:
-                    print(f"✓ Reports generated in {step_duration:.2f}s")
 
             # Cache reports (optional)
             if cache_reports:
@@ -1302,15 +1187,6 @@ class ModelDevelopmentPipeline:
 
             # Log pipeline completion
             pipeline_duration = time.time() - time0
-            self.step_logger.log_step_complete(
-                "pipeline_complete",
-                metrics={
-                    "total_duration": pipeline_duration,
-                    "model_trained": True,
-                    "reports_generated": generate_reports,
-                },
-                duration=pipeline_duration,
-            )
 
             if verbose:
                 duration_str = pd.Timedelta(seconds=pipeline_duration).round("1s")
@@ -1399,7 +1275,7 @@ class ModelDevelopmentPipeline:
                     return obj.shape[0] if len(obj.shape) > 0 else 0
                 try:
                     return len(obj)
-                except:
+                except Exception:
                     return 0
 
             # Get safe values
@@ -1601,8 +1477,8 @@ class ModelDevelopmentPipeline:
                         self.events["tW"].mean() if "tW" in self.events.columns else 0
                     )
                     html_content += f"        <p><strong>Average Uniqueness:</strong> {avg_uniqueness:.4f}</p>\n"
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Could not compute average uniqueness: {e}")
 
                 if self.weight_cv_results:
                     weight_score = self.weight_cv_results.get("best_score", 0)
@@ -1742,7 +1618,7 @@ class ModelDevelopmentPipeline:
         self.preprocessed_features = preprocessor.fit_transform(enhanced_features)
 
         # Align events with preprocessed features
-        self.events = self.events.reindex(self.preprocessed_features.index)
+        self.events = self.events.loc[self.preprocessed_features.index]
 
     def train_model(self):
         """Step 6: Train model with cross-validation."""

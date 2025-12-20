@@ -1,158 +1,7 @@
 import hashlib
 import json
-from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
-
-import structlog
-
-# Create context variables for tracking
-_current_pipeline_id = ContextVar("pipeline_id", default=None)
-_current_step = ContextVar("current_step", default=None)
-
-
-class ModelDevelopmentLogger:
-    """Structured logging for model development pipeline"""
-
-    def __init__(self, name: str = "model_dev"):
-        self.logger = structlog.get_logger(name)
-        self.metrics_buffer = []
-
-    def log_step_start(self, step_name: str, step_data: Dict = None):
-        """Log the start of a pipeline step"""
-        log_data = {"step": step_name, "status": "started"}
-        if step_data:
-            log_data.update(step_data)
-
-        self.logger.info("pipeline_step", **log_data)
-        _current_step.set(step_name)
-
-    def log_step_complete(
-        self, step_name: str, metrics: Dict = None, duration: float = None
-    ):
-        """Log the completion of a pipeline step"""
-        log_data = {"step": step_name, "status": "completed"}
-        if metrics:
-            log_data["metrics"] = metrics
-        if duration:
-            log_data["duration_seconds"] = duration
-
-        self.logger.info("pipeline_step", **log_data)
-
-    def log_hyperparameter_search(
-        self, search_results: Dict, best_params: Dict, search_space: Dict
-    ):
-        """Log hyperparameter search results"""
-        self.logger.info(
-            "hyperparameter_search",
-            n_iterations=search_results.get("n_iter", 0),
-            best_score=search_results.get("best_score", 0),
-            best_params=best_params,
-            param_distribution_size=len(search_space),
-            cv_folds=search_results.get("cv", 5),
-        )
-
-    def log_model_metrics(self, metrics: Dict, model_info: Dict):
-        """Log model performance metrics"""
-        self.logger.info(
-            "model_performance",
-            cv_score=metrics.get("cv_score", 0),
-            feature_count=metrics.get("feature_count", 0),
-            training_samples=metrics.get("training_samples", 0),
-            model_type=model_info.get("model_type", "unknown"),
-            strategy=model_info.get("strategy", "unknown"),
-        )
-
-    def save_logs_to_file(self, file_path: Path):
-        """Save logs to JSONL file for analysis"""
-        # This requires structlog configuration to output JSON
-        pass
-
-
-class ModelDevelopmentCache:
-    """
-    Cache for model development pipeline with dictionary-based keys.
-    """
-
-    def __init__(self):
-        self._pipelines = {}  # config key -> ModelDevelopmentPipeline
-        self._results = {}  # config key -> results
-
-    @staticmethod
-    def create_config_key(base_config, param_grid):
-        """
-        Create a hashable key from configuration.
-
-        Parameters
-        ----------
-        base_config : dict
-            Base configuration dictionary
-        param_grid : dict
-            Parameter grid with lists of values
-
-        Returns
-        -------
-        tuple
-            Hashable key
-        """
-
-        def normalize_value(v):
-            """Normalize values for hashing."""
-            if isinstance(v, (list, tuple)):
-                return tuple(normalize_value(x) for x in v)
-            elif isinstance(v, dict):
-                return tuple(sorted((k, normalize_value(v2)) for k, v2 in v.items()))
-            elif hasattr(v, "__dict__"):
-                # For objects, use class name and string representation
-                return (type(v).__name__, str(v))
-            else:
-                return v
-
-        # Normalize both dictionaries
-        normalized_base = normalize_value(base_config)
-        normalized_grid = normalize_value(param_grid)
-
-        # Create tuple key
-        return (normalized_base, normalized_grid)
-
-    def store_pipeline(self, base_config, param_grid, pipeline):
-        """Store a pipeline in cache."""
-        key = self.create_config_key(base_config, param_grid)
-        self._pipelines[key] = pipeline
-
-    def get_pipeline(self, base_config, param_grid):
-        """Retrieve pipeline from cache."""
-        key = self.create_config_key(base_config, param_grid)
-        return self._pipelines.get(key)
-
-    def store_results(self, base_config, param_grid, results):
-        """Store results in cache."""
-        key = self.create_config_key(base_config, param_grid)
-        self._results[key] = results
-
-    def get_results(self, base_config, param_grid):
-        """Retrieve results from cache."""
-        key = self.create_config_key(base_config, param_grid)
-        return self._results.get(key)
-
-    def find_similar_configs(self, base_config, param_grid, threshold=0.8):
-        """
-        Find configurations similar to the given one.
-        Useful for parameter analysis.
-        """
-        from difflib import SequenceMatcher
-
-        current_key_str = str(self.create_config_key(base_config, param_grid))
-        similar = []
-
-        for key in self._pipelines.keys():
-            key_str = str(key)
-            similarity = SequenceMatcher(None, current_key_str, key_str).ratio()
-            if similarity >= threshold:
-                similar.append((key, similarity, self._pipelines[key]))
-
-        return sorted(similar, key=lambda x: x[1], reverse=True)
 
 
 class ConfigPathGenerator:
@@ -642,15 +491,13 @@ class ModelFileManager:
     def save_metrics(self, metrics: dict):
         """Save metrics to file."""
         if self.current_paths:
-            import json
-
             with open(self.current_paths["metrics"], "w") as f:
                 json.dump(metrics, f, indent=2, default=str)
 
     def save_dataframe(self, df, name: str):
         """Save DataFrame to appropriate format."""
         if self.current_paths and name in self.current_paths:
-            df.to_parquet(self.current_paths[name])
+            df.to_parquet(self.current_paths[name], engine="pyarrow", compression="zstd")
 
     def get_model_info(self, model_path: Path) -> dict:
         """
@@ -680,20 +527,6 @@ class ModelFileManager:
             "date_range": parts[-2] if len(parts) >= 2 else "Unknown",
             "config_hash": parts[-1] if len(parts) >= 1 else "Unknown",
         }
-
-        # Parse filename for more details
-        filename_parts = model_path.stem.split("_")
-        if len(filename_parts) >= 6:
-            info.update(
-                {
-                    "model_type": filename_parts[0],
-                    "strategy_from_file": filename_parts[1],
-                    "symbol_from_file": filename_parts[2],
-                    "bar_type_from_file": filename_parts[3],
-                    "bar_size_from_file": filename_parts[4],
-                    "date_range_from_file": filename_parts[5],
-                }
-            )
 
         return info
 

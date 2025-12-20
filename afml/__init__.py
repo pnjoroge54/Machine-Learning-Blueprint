@@ -121,10 +121,9 @@ try:
         sampling,
         util,
     )
-
     # Handle nested modules
     from .filters import filters
-    from .strategies import signals
+    from .strategies import trading_strategies
 
     logger.debug("Imported lightweight modules directly")
 except ImportError as e:
@@ -169,9 +168,9 @@ def __getattr__(name: str) -> ModuleType:
             raise AttributeError(f"Module 'afml' has no attribute '{name}'") from e
     if name == "strategies":
         try:
-            from .strategies import signals
+            from .strategies import trading_strategies
 
-            return signals
+            return trading_strategies
         except ImportError as e:
             raise AttributeError(f"Module 'afml' has no attribute '{name}'") from e
 
@@ -345,7 +344,7 @@ __all__ = [
     "sample_weights",
     "sampling",
     "bet_sizing",
-    "signals",
+    "trading_strategies",
     "filters",
     "mt5",
     "production",

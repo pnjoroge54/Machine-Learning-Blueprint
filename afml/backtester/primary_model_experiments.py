@@ -3,27 +3,15 @@
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    log_loss,
-    precision_score,
-    recall_score,
-)
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 from ..backtester.reporting import (
     print_meta_labeling_comparison,
     run_meta_labeling_analysis,
 )
-from ..cache import smart_cacheable
-from ..cross_validation import (
-    PurgedKFold,
-    PurgedSplit,
-    ml_cross_val_score,
-    probability_weighted_accuracy,
-)
+from ..cross_validation import PurgedSplit, probability_weighted_accuracy
 from ..data_structures.bars import make_bars
-from ..labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
+from ..labeling.triple_barrier import add_vertical_barrier
 from .logging_hooks import LoggingHooks
 from .research_framework import (
     ExperimentHook,

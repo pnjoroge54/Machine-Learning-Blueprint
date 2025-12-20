@@ -19,7 +19,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from ..backtest_statistics.performance_analysis import (
+from ..backtest_statistics.meta_labeling_analysis import (
     evaluate_meta_labeling_performance,
 )
 from .training import ModelData, get_optimal_threshold

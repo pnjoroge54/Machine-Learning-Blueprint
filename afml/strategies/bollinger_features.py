@@ -11,7 +11,7 @@ from ..features.returns import get_lagged_returns, rolling_autocorr_numba
 from ..util.misc import optimize_dtypes
 from ..util.volatility import get_garman_klass_vol, get_parkinson_vol, get_period_vol
 from .signal_processing import get_entries
-from .signals import BollingerStrategy
+from .trading_strategies import BollingerStrategy
 
 
 def create_bollinger_features(df: pd.DataFrame, window: int = 20, std: float = 2):
