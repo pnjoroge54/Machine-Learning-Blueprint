@@ -12,23 +12,28 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from . import cacheable, initialize_cache_system
+from .mql5_bridge import MQL5Bridge, SignalPacket
+
 # Configure logging
 logger.remove()
 logger.add(
     sys.stderr,
-    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
     level="INFO",
+    format="<green>{time:YYYY-MM-DD HH:mm:ss:ms}</green> | "
+    "<level>{level}</level> | "
+    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+    "<level>{message}</level>",
+    colorize=True,
+    enqueue=True,
 )
 logger.add(
     Path("logs", "mql5_bridge_{time:YYYY-MM-DD}.log"),
     rotation="1 day",
     retention="7 days",
     level="DEBUG",
+    enqueue=True,
 )
-
-from afml.cache import initialize_cache_system, robust_cacheable
-from afml.cache.mql5_bridge import MQL5Bridge, MQL5CachedStrategy, SignalPacket
-
 
 def wait_for_connection(bridge: MQL5Bridge, timeout: int = 60) -> bool:
     """
@@ -121,7 +126,7 @@ def check_port_available(port: int) -> bool:
         return False
 
 
-@robust_cacheable
+@cacheable()
 def generate_test_features(data: pd.DataFrame) -> pd.DataFrame:
     """Generate test features (cached)."""
     features = data.copy()
@@ -176,7 +181,7 @@ def run_startup_checks() -> bool:
     # Check 3: Test cache functionality
     try:
         test_data = pd.DataFrame({"close": np.random.randn(100) + 1.1000})
-        features = generate_test_features(test_data)
+        generate_test_features(test_data)
         logger.success("✅ Cache functionality verified")
     except Exception as e:
         logger.error(f"❌ Cache test failed: {e}")

@@ -890,14 +890,14 @@ def print_cache_report():
     # Get health report
     report = monitor.core_monitor.generate_health_report()
 
-    print(f"\nOverall:")
+    print("\nOverall:")
     print(f"  Functions: {report.total_functions}")
     print(f"  Hit Rate: {report.overall_hit_rate:.1%}")
     print(f"  Total Calls: {report.total_calls:,}")
     print(f"  Cache Size: {report.total_cache_size_mb:.1f} MB")
 
     if report.top_performers:
-        print(f"\nTop Performers:")
+        print("\nTop Performers:")
         for i, perf in enumerate(report.top_performers[:3], 1):
             name = perf.function_name.split(".")[-1]
             print(f"  {i}. {name}: {perf.hit_rate:.1%} ({perf.total_calls} calls)")

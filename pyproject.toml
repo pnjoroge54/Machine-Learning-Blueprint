@@ -1,0 +1,15 @@
+[tool.ruff]
+# Match your old Black line length
+line-length = 100
+
+# Enable Ruff’s built-in import sorting (replaces isort)
+extend-select = ["I"]
+
+# Optional: configure rules you want to ignore
+# ignore = ["E501"]  # example: ignore long-line warnings
+
+[tool.ruff.format]
+# Use Ruff’s formatter (replaces Black)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false

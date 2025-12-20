@@ -8,7 +8,6 @@ import sys
 from types import ModuleType
 from typing import Dict, List
 
-import numpy as np
 from loguru import logger
 
 from .cache import (

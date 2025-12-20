@@ -617,7 +617,7 @@ def diagnose_cache_issues():
 
     # 1. Basic cache stats
     stats = get_cache_stats()
-    print(f"\n1. BASIC STATS:")
+    print("\n1. BASIC STATS:")
     print(f"   Tracked functions: {len(stats)}")
 
     total_calls = sum(s["hits"] + s["misses"] for s in stats.values())
@@ -627,10 +627,10 @@ def diagnose_cache_issues():
     print(f"   Overall hit rate: {overall_hit_rate:.1%}")
 
     # 2. Cache efficiency report
-    print(f"\n2. CACHE EFFICIENCY:")
+    print("\n2. CACHE EFFICIENCY:")
     df = get_cache_efficiency_report()
     if not df.empty:
-        print(f"   Functions with issues:")
+        print("   Functions with issues:")
 
         zero_hit = df[df["hit_rate"] == "0.0%"]
         if len(zero_hit) > 0:
@@ -643,13 +643,13 @@ def diagnose_cache_issues():
             print(f"   - {len(low_hit)} functions with <50% hit rate")
 
     # 3. Cache sizes
-    print(f"\n3. CACHE SIZES:")
+    print("\n3. CACHE SIZES:")
     size_info = get_cache_size_info()
     for cache_type, info in size_info.items():
         print(f"   {cache_type}: {info['size_mb']:.2f} MB ({info['file_count']} files)")
 
     # 4. Monitor status
-    print(f"\n4. MONITOR STATUS:")
+    print("\n4. MONITOR STATUS:")
     monitor = get_cache_monitor()
     all_stats = monitor.get_all_function_stats()
     print(f"   Monitor tracking: {len(all_stats)} functions")
@@ -681,7 +681,7 @@ def debug_function_cache(func_name: str):
     # Check detailed stats
     func_stats = monitor.get_function_stats(func_name)
     if func_stats:
-        print(f"Detailed stats:")
+        print("Detailed stats:")
         print(f"  - Calls: {func_stats.total_calls}")
         print(f"  - Hit rate: {func_stats.hit_rate:.1%}")
         print(f"  - Cache size: {func_stats.cache_size_mb or 0:.2f} MB")

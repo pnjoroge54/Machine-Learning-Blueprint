@@ -261,16 +261,15 @@ def initialize_cache_system():
 
 # Import robust cache key generation - NOW SAFE (memory and cache_stats exist)
 from .data_access_tracker import (
-    DataAccessTracker,
+    DataAccessTracker,  # noqa: E402
     clear_data_access_log,
     get_data_tracker,
     log_data_access,
     print_contamination_report,
 )
-
 # Import selective cleaner functions after base components are defined
 from .selective_cleaner import (
-    analyze_cache_versions,
+    analyze_cache_versions,  # noqa: E402
     cache_maintenance,
     clean_orphaned_caches,
     cleanup_by_age,
@@ -282,15 +281,15 @@ from .selective_cleaner import (
     get_version_tracker,
     print_version_analysis,
 )
-
 # Add to imports
-from .unified_cache_system import robust_cacheable  # Backward compatibility alias
 from .unified_cache_system import (
-    cacheable,
+    cacheable,  # noqa: E402
     create_cacheable_param_grid,
     cv_cacheable,
+    data_tracking_cacheable,
     print_cache_report,
     reconstruct_param_grid,
+    robust_cacheable,
     time_aware_cacheable,
 )
 
@@ -312,16 +311,15 @@ except ImportError:
 # Backtest caching
 from .backtest_cache import (
     BacktestCache,
-    BacktestMetadata,
+    BacktestMetadata,  # noqa: E402
     BacktestResult,
     cached_backtest,
     get_backtest_cache,
 )
-
 # Cache monitoring
 from .cache_monitoring import (
     CacheHealthReport,
-    CacheMonitor,
+    CacheMonitor,  # noqa: E402
     FunctionCacheStats,
     analyze_cache_patterns,
     debug_function_cache,
@@ -330,9 +328,6 @@ from .cache_monitoring import (
     get_cache_monitor,
     print_cache_health,
 )
-
-# Cross-validation caching
-from .cv_cache import clear_cv_cache, cv_cache_with_classifier_state, cv_cacheable
 
 # =============================================================================
 # 9) ENHANCED CONVENIENCE FUNCTIONS
@@ -631,6 +626,7 @@ __all__ = [
     # - selective_cache_clear (replaced by clean_orphaned_caches)
     # Robust cache keys
     "CacheKeyGenerator",
+    "clear_data_access_log",
     "DataAccessTracker",
     "get_data_tracker",
     "log_data_access",
@@ -657,6 +653,7 @@ __all__ = [
     "CacheHealthReport",
     "get_cache_monitor",
     "print_cache_report",
+    "print_cache_health",
     "get_cache_efficiency_report",
     "analyze_cache_patterns",
     "debug_function_cache",
@@ -667,8 +664,6 @@ __all__ = [
     "setup_production_cache",
     # Cache cross-validation
     "cv_cacheable",  # Alias for cacheable()
-    "cv_cache_with_classifier_state",
-    "clear_cv_cache",
     # Additional utility functions
     "get_cache_size_info",
     "clear_cache_by_pattern",
@@ -691,3 +686,5 @@ logger.debug("  - MLflow integration: {}", "✓" if MLFLOW_INTEGRATION_AVAILABLE
 logger.debug("  - Backtest caching: ✓")
 logger.debug("  - Cache monitoring: ✓")
 logger.debug("  - Orphaned cache cleanup: ✓")
+logger.debug("  - Orphaned cache cleanup: ✓")
+logger.debug("  - Cache size info and selective clearing: ✓")

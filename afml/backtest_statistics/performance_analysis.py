@@ -7,11 +7,6 @@ from loguru import logger
 from numba import njit
 from scipy.stats import kurtosis, skew
 
-from ..bet_sizing.bet_sizing import (
-    bet_size_budget,
-    bet_size_probability,
-    bet_size_reserve,
-)
 from .perfomance_statistics import (
     all_bets_concentration,
     average_holding_period,

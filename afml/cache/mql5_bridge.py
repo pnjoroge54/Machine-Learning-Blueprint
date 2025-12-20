@@ -11,9 +11,8 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -554,7 +553,7 @@ def setup_mql5_monitoring(bridge: MQL5Bridge):
 
         # MQL5 stats
         mql5_stats = bridge.get_performance_stats()
-        print(f"\nMQL5 Bridge Status:")
+        print("\nMQL5 Bridge Status:")
         print(f"  Mode: {mql5_stats['mode']}")
         print(f"  Connected: {mql5_stats['connected']}")
         print(f"  Signals Sent: {mql5_stats['signals_sent']}")
@@ -563,7 +562,7 @@ def setup_mql5_monitoring(bridge: MQL5Bridge):
         print(f"  Uptime: {mql5_stats['uptime_seconds']:.0f}s")
 
         # Cache stats
-        print(f"\nCache Performance:")
+        print("\nCache Performance:")
         monitor.print_health_report(detailed=False)
 
         print("=" * 80 + "\n")

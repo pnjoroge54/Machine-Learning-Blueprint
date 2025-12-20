@@ -14,14 +14,11 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from distinctipy import distinctipy
 from loguru import logger
 from scipy import stats
 
-from ..bet_sizing.bet_sizing import (
-    bet_size_budget,
-    bet_size_probability,
-    bet_size_reserve,
-)
+from ..bet_sizing.bet_sizing import bet_size_budget, bet_size_probability, bet_size_reserve
 from ..cross_validation.cross_validation import PurgedSplit
 from ..production.model_development import (
     ModelDevelopmentPipeline,
@@ -30,10 +27,7 @@ from ..production.model_development import (
     generate_events_triple_barrier,
     load_and_prepare_training_data,
 )
-from .performance_analysis import (
-    analyze_trading_behavior,
-    calculate_performance_metrics,
-)
+from .performance_analysis import calculate_performance_metrics
 
 
 def evaluate_meta_labeling_performance(
@@ -267,11 +261,15 @@ def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
 
     # Mark which strategy is better for each metric
     comparison["Better"] = "Meta"
-    for metric in ["max_drawdown", "volatility", "avg_loss", "num_trades"]:
-        if metric in comparison.index:
+    for metric in comparison.index:
+        if metric in ["max_drawdown", "volatility", "avg_loss", "num_trades"]:
             # For these metrics, lower is better
             comparison.loc[metric, "Better"] = np.where(
                 comparison.loc[metric, "Improvement"] < 0, "Meta", "Primary"
+            )
+        else:
+            comparison.loc[metric, "Better"] = np.where(
+                comparison.loc[metric, "Improvement"] > 0, "Meta", "Primary"
             )
 
     if verbose:
@@ -1148,12 +1146,9 @@ def generate_meta_labeling_markdown_report(
                         - 1
                     )
                     * 100,
-                    meta_metrics.get("sharpe_ratio", 0)
-                    - primary_metrics.get("sharpe_ratio", 0),
-                    meta_metrics.get("sortino_ratio", 0)
-                    - primary_metrics.get("sortino_ratio", 0),
-                    meta_metrics.get("calmar_ratio", 0)
-                    - primary_metrics.get("calmar_ratio", 0),
+                    meta_metrics.get("sharpe_ratio", 0) - primary_metrics.get("sharpe_ratio", 0),
+                    meta_metrics.get("sortino_ratio", 0) - primary_metrics.get("sortino_ratio", 0),
+                    meta_metrics.get("calmar_ratio", 0) - primary_metrics.get("calmar_ratio", 0),
                     (
                         (
                             meta_metrics.get("max_drawdown", 0)
@@ -1170,15 +1165,9 @@ def generate_meta_labeling_markdown_report(
                         - 1
                     )
                     * 100,
-                    (
-                        meta_metrics.get("win_rate", 0)
-                        - primary_metrics.get("win_rate", 0)
-                    )
-                    * 100,
-                    meta_metrics.get("profit_factor", 0)
-                    - primary_metrics.get("profit_factor", 0),
-                    meta_metrics.get("num_trades", 0)
-                    - primary_metrics.get("num_trades", 0),
+                    (meta_metrics.get("win_rate", 0) - primary_metrics.get("win_rate", 0)) * 100,
+                    meta_metrics.get("profit_factor", 0) - primary_metrics.get("profit_factor", 0),
+                    meta_metrics.get("num_trades", 0) - primary_metrics.get("num_trades", 0),
                     "N/A",
                 ],
             }
@@ -1197,7 +1186,7 @@ def generate_meta_labeling_markdown_report(
                     color = "🟢" if improvement > 0 else "🔴"
 
                 if isinstance(improvement, float):
-                    metrics_table.at[i, "Improvement"] = f"{color} {improvement:+.2f}"
+                    metrics_table.at[i, "Improvement"] = f"{color} {improvement:+,.2f}"
 
         md_content.append(metrics_table.to_markdown(index=False))
         md_content.append("")
@@ -1348,49 +1337,6 @@ def generate_meta_labeling_markdown_report(
         md_content.append(f"**Best Sharpe/MaxDD Ratio**: `{best_sharpe_dd}`  ")
         md_content.append("")
 
-    # Trading Behavior Analysis
-    md_content.append("## 📈 Trading Behavior Analysis")
-    md_content.append("")
-
-    behavior_data = []
-    for bar_type, results in results_dict.items():
-        primary_returns = results.get("primary_returns", pd.Series())
-        meta_returns = results.get("meta_returns", pd.Series())
-
-        if len(primary_returns) > 0 and len(meta_returns) > 0:
-            primary_positions = pd.Series(
-                1, index=primary_returns.index
-            )  # Simplified position series
-            meta_positions = pd.Series(1, index=meta_returns.index)
-
-            primary_behavior = analyze_trading_behavior(
-                primary_positions, primary_returns
-            )
-            meta_behavior = analyze_trading_behavior(meta_positions, meta_returns)
-
-            behavior_data.append(
-                {
-                    "Bar Type": bar_type,
-                    "Total Signals": primary_behavior.get("total_critical_points", 0),
-                    "Meta Signals": meta_behavior.get("total_critical_points", 0),
-                    "Flip Count": meta_behavior.get("flip_count", 0),
-                    "Flattening Count": meta_behavior.get("flattening_count", 0),
-                    "Signal Reduction %": (
-                        (
-                            primary_behavior.get("total_critical_points", 1)
-                            - meta_behavior.get("total_critical_points", 0)
-                        )
-                        / primary_behavior.get("total_critical_points", 1)
-                    )
-                    * 100,
-                }
-            )
-
-    if behavior_data:
-        behavior_df = pd.DataFrame(behavior_data)
-        md_content.append(behavior_df.to_markdown(index=False))
-        md_content.append("")
-
     # Conclusions and Recommendations
     md_content.append("## 🎯 Conclusions and Recommendations")
     md_content.append("")
@@ -1467,11 +1413,11 @@ def generate_meta_labeling_markdown_report(
             if isinstance(avg_duration, pd.Timedelta):
                 if avg_duration.days > 7:
                     md_content.append(
-                        f"  • Long average trade duration ({avg_duration.days} days) - suitable for swing trading  "
+                        f"  • Long average trade duration ({avg_duration}) - suitable for swing trading  "
                     )
                 else:
                     md_content.append(
-                        f"  • Short average trade duration ({avg_duration.days} days) - suitable for day trading  "
+                        f"  • Short average trade duration ({avg_duration}) - suitable for day trading  "
                     )
 
         md_content.append("")
@@ -1609,7 +1555,8 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
     fig.suptitle("Strategy Evolution by Bar Type", fontsize=16, fontweight="bold")
 
     # Colors for different bar types
-    colors = plt.cm.tab10(np.linspace(0, 1, len(results_dict)))
+    # colors = plt.cm.tab10(np.linspace(0, 1, len(results_dict)))
+    colors = distinctipy.get_colors(len(results_dict))
 
     # Plot 1: Cumulative Returns
     ax1 = axes[0, 0]
@@ -2008,7 +1955,7 @@ def get_validation_metrics(
         df_test, pipeline.feature_config, pipeline.data_config
     )
     features = features.join(meta_features, how="inner").dropna()
-    events = events.loc[features.index]
+    events = events.reindex(features.index)
     X = features[pipeline.preprocessed_features.columns]
     y = events["bin"]
 
@@ -2037,6 +1984,10 @@ def get_validation_metrics(
             bar_size=pipeline.data_config["bar_size"],
             bar_type=pipeline.data_config["bar_type"],
             classification_report=classification_report(y_val, pred),
+            data=df_test,
+            X_test=X_test,
+            y_test=y_test,
+            events_test=events.iloc[test],
         )
     )
 
