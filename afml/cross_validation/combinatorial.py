@@ -6,6 +6,7 @@ from itertools import combinations
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 
 class CombinatorialPurgedKFold:
@@ -124,8 +125,8 @@ class CombinatorialPurgedKFold:
         self.n_combinations = int(comb(n_splits, n_test_splits))
 
         # Log initialization parameters (optional - for debugging)
-        # print(f"Initialized CPCV with {n_splits} splits, {n_test_splits} test splits, "
-        #       f"{pct_embargo:.1%} embargo, generating {self.n_combinations} combinations")
+        logger.debug(f"Initialized CPCV with {n_splits} splits, {n_test_splits} test splits, "
+              f"{pct_embargo:.1%} embargo, generating {self.n_combinations} combinations")
 
     def split(self, X, y=None, groups=None):
         """
@@ -189,7 +190,7 @@ class CombinatorialPurgedKFold:
         test_combinations = list(combinations(range(self.n_splits), self.n_test_splits))
 
         # Log combination count (optional - for debugging)
-        # print(f"Generating {len(test_combinations)} train/test combinations")
+        logger.debug(f"Generating {len(test_combinations)} train/test combinations")
 
         # Iterate through each combination of test splits
         for test_split_indices in test_combinations:
@@ -312,10 +313,6 @@ class CombinatorialPurgedKFold:
         for start, end in test_ranges:
             all_test_indices.update(range(start, end))
 
-        # Get information periods for test samples
-        test_info_starts = self.samples_info_sets.index[list(all_test_indices)]
-        test_info_ends = self.samples_info_sets.iloc[list(all_test_indices)].values
-
         # Convert candidate indices to list for processing
         candidate_list = list(candidate_indices)
 
@@ -353,7 +350,7 @@ class CombinatorialPurgedKFold:
                 safe_train_indices.add(train_idx)
 
         return safe_train_indices
-
+    
     def get_n_splits(self, X=None, y=None, groups=None):
         """
         Returns the number of splitting iterations in the cross-validator.

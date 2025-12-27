@@ -1,7 +1,11 @@
 import hashlib
 import json
+import pickle
 from datetime import datetime
 from pathlib import Path
+from typing import List, Union
+
+from .model_export import export_model_to_onnx
 
 
 class ConfigPathGenerator:
@@ -218,6 +222,8 @@ class ConfigPathGenerator:
         # Add appropriate extension
         extensions = {
             "model": ".pkl",
+            "feature_config": ".pkl",
+            "feature_names": ".pkl",
             "features": ".parquet",
             "events": ".parquet",
             "metrics": ".json",
@@ -227,6 +233,7 @@ class ConfigPathGenerator:
             "plot": ".png",
             "report": ".html",
             "log": ".log",
+            "strategy": ".pkl",
         }
 
         extension = extensions.get(file_type, ".dat")
@@ -272,7 +279,7 @@ class ConfigPathGenerator:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        filename = f"{model_type}_{strategy}_{symbol}_{bar_type}_{bar_size}_{date_range}_{params_str}_{timestamp}.pkl"
+        filename = f"{model_type}_{strategy}_{symbol}_{bar_type}_{bar_size}_{date_range}_{params_str}_{timestamp}.joblib"
 
         return filename
 
@@ -326,6 +333,7 @@ class ConfigPathGenerator:
 
         # Generate filenames
         model_filename = self.create_model_filename(config)
+        model_filename_onxx = model_filename.replace(".joblib", ".onnx")
         config_filename = self.generate_filename(
             config, "config", include_timestamp=False
         )
@@ -336,16 +344,23 @@ class ConfigPathGenerator:
             config, "feature_importance"
         )
         weights_filename = self.generate_filename(config, "weights")
+        strategy_filename = self.generate_filename(config, "strategy")
+        feature_config_filename = self.generate_filename(config, "feature_config")
+        feature_names_filename = self.generate_filename(config, "feature_names")
 
         return {
             "base_dir": base_dir,
             "model": base_dir / model_filename,
+            "model_onxx": base_dir / model_filename_onxx,
             "config": base_dir / config_filename,
             "metrics": base_dir / metrics_filename,
-            "features": base_dir / features_filename,
             "events": base_dir / events_filename,
+            "feature_names": base_dir / feature_names_filename,
+            "feature_config": base_dir / feature_config_filename,
             "feature_importance": base_dir / feature_importance_filename,
+            "features": base_dir / features_filename,
             "weights": base_dir / weights_filename,
+            "strategy": base_dir / strategy_filename,
             "logs": base_dir / "logs",
             "plots": base_dir / "plots",
             "reports": base_dir / "reports",
@@ -391,12 +406,12 @@ class ConfigPathGenerator:
                 <h1>Model Artifacts</h1>
                 <p>Generated on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
             </div>
-            
+
             <div class="config">
                 <h2>Configuration</h2>
                 <pre>{json.dumps(config, indent=2, default=str)}</pre>
             </div>
-            
+
             <div class="files">
                 <h2>Files</h2>
         """
@@ -488,6 +503,17 @@ class ModelFileManager:
 
             joblib.dump(save_data, self.current_paths["model"])
 
+    def save_model_as_onxx(self, model, feature_names: List[str], metadata: dict = None):
+        """Export model to ONNX format."""
+        if self.current_paths:
+            export_model_to_onnx(model, feature_names, self.current_paths["model_onxx"], metadata)
+
+    def save_object(self, object, name: str):
+        """Save objects to file."""
+        if self.current_paths and name in self.current_paths:
+            with open(self.current_paths[name], "wb") as f:
+                pickle.dump(object, f)
+
     def save_metrics(self, metrics: dict):
         """Save metrics to file."""
         if self.current_paths:
@@ -499,13 +525,13 @@ class ModelFileManager:
         if self.current_paths and name in self.current_paths:
             df.to_parquet(self.current_paths[name], engine="pyarrow", compression="zstd")
 
-    def get_model_info(self, model_path: Path) -> dict:
+    def get_model_info(self, model_path: Union[str, Path]) -> dict:
         """
         Get information about a saved model.
 
         Parameters
         ----------
-        model_path : Path
+        model_path : str | Path
             Path to model file.
 
         Returns
@@ -514,18 +540,19 @@ class ModelFileManager:
             Model information.
         """
         # Extract info from filename and directory structure
+        model_path = Path(model_path)
         parts = model_path.parts
 
         info = {
             "file_path": str(model_path),
             "file_name": model_path.name,
-            "strategy": parts[-7] if len(parts) >= 7 else "Unknown",
-            "symbol": parts[-6] if len(parts) >= 6 else "Unknown",
-            "account": parts[-5] if len(parts) >= 5 else "Unknown",
-            "bar_type": parts[-4] if len(parts) >= 4 else "Unknown",
-            "bar_size": parts[-3] if len(parts) >= 3 else "Unknown",
-            "date_range": parts[-2] if len(parts) >= 2 else "Unknown",
-            "config_hash": parts[-1] if len(parts) >= 1 else "Unknown",
+            "strategy": parts[-8] if len(parts) >= 8 else "Unknown",
+            "symbol": parts[-7] if len(parts) >= 7 else "Unknown",
+            "account": parts[-6] if len(parts) >= 6 else "Unknown",
+            "bar_type": parts[-5] if len(parts) >= 5 else "Unknown",
+            "bar_size": parts[-4] if len(parts) >= 4 else "Unknown",
+            "date_range": parts[-3] if len(parts) >= 3 else "Unknown",
+            "config_hash": parts[-2] if len(parts) >= 2 else "Unknown",
         }
 
         return info
@@ -550,7 +577,7 @@ class ModelFileManager:
             base_dir = self.path_generator.base_dir
 
         search_dir = Path(base_dir)
-        model_files = list(search_dir.rglob("*.pkl"))
+        model_files = list(search_dir.rglob("*.joblib"))
 
         results = []
         for model_file in model_files:
@@ -569,3 +596,48 @@ class ModelFileManager:
             results.append(info)
 
         return results
+
+    def load_artifacts(self, search_criteria: dict = None, base_dir: str = None) -> dict:
+        import json
+        import os
+
+        import joblib
+        import pandas as pd
+
+        data = self.find_models(search_criteria, base_dir)
+        result = {}
+
+        for d in data:
+            model_data = {}
+            fname = Path(d["file_path"])
+            folder = fname.parent
+
+            model_dict = joblib.load(fname)
+            for k, v in model_dict.items():
+                model_data[k] = v
+
+            for fp in os.listdir(folder):
+                f = str(folder / fp)
+                key = (
+                    fp.split("_")[0]
+                    if not fp.startswith(("feature_"))
+                    else "_".join(fp.split("_")[:2])
+                )
+                if key not in model_data:
+                    if f.endswith("csv"):
+                        model_data[key] = pd.read_csv(f)
+                    elif f.endswith("parquet"):
+                        model_data[key] = pd.read_parquet(f)
+                    elif f.endswith(("json", "pkl")):
+                        with open(f, "rb") as g:
+                            if f.endswith("json"):
+                                model_data[key] = json.load(g)
+                            elif f.endswith("pkl"):
+                                model_data[key] = pickle.load(g)
+
+            barriers = f'{d["date_range"]}' + "_".join(fname.name.split(d["date_range"])[1].split("_")[:-2])
+            result.setdefault(barriers, {})
+            result[barriers].setdefault(d["bar_size"], {})
+            result[barriers][d["bar_size"]][d["bar_type"]] = model_data
+
+        return result

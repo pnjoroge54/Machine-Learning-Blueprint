@@ -1,5 +1,3 @@
-
-import numpy as np
 import pandas as pd
 from sklearn.base import clone
 from sklearn.ensemble import BaggingClassifier
@@ -27,7 +25,7 @@ def clf_hyper_fit(
     bagging_max_features=1.0,
     rnd_search_iter=0,
     n_jobs=-1,
-    pct_embargo=0.01,
+    pct_embargo=0.02,
     random_state=None,
     verbose=0,
     **fit_params,
@@ -71,7 +69,7 @@ def clf_hyper_fit(
         RandomizedSearchCV with this many iterations.
     n_jobs : int, default=-1
         Number of parallel jobs. -1 uses all available cores.
-    pct_embargo : float, default=0
+    pct_embargo : float, default=0.02
         Percentage of samples to embargo in test folds to prevent leakage
         from serially correlated labels. Range: [0, 1).
     random_state : int, RandomState instance or None, default=None
@@ -176,22 +174,22 @@ def clf_hyper_fit(
         return Pipeline(best_estimator.steps), cv_results
 
 
-@cacheable(time_aware=True)
+@cacheable()
 def clf_hyper_fit_internal(
     features,
     labels,
     t1,
     pipe_clf,
-    param_grid_cacheable,  # ← Now accepts cacheable version
-    cv=5,
-    bagging_n_estimators=0,
-    bagging_max_samples=1.0,
-    bagging_max_features=1.0,
-    rnd_search_iter=0,
-    n_jobs=-1,
-    pct_embargo=0.01,
-    random_state=None,
-    verbose=0,
+    param_grid_cacheable,
+    cv,
+    bagging_n_estimators,
+    bagging_max_samples,
+    bagging_max_features,
+    rnd_search_iter,
+    n_jobs,
+    pct_embargo,
+    random_state,
+    verbose,
     **fit_params,
 ):
     """
@@ -229,16 +227,16 @@ def clf_hyper_fit_cached(
     labels,
     t1,
     pipe_clf,
-    param_grid,  # ← Accepts scipy distributions directly
-    cv=5,
-    bagging_n_estimators=0,
-    bagging_max_samples=1.0,
-    bagging_max_features=1.0,
-    rnd_search_iter=0,
-    n_jobs=-1,
-    pct_embargo=0.01,
-    random_state=None,
-    verbose=0,
+    param_grid,
+    cv,
+    bagging_n_estimators,
+    bagging_max_samples,
+    bagging_max_features,
+    rnd_search_iter,
+    n_jobs,
+    pct_embargo,
+    random_state,
+    verbose,
     **fit_params,
 ):
     """
@@ -278,55 +276,3 @@ def clf_hyper_fit_cached(
         verbose=verbose,
         **fit_params,
     )
-
-
-def print_result(clf, n_splits):
-    num_nodes = len(clf.cv_results_["rank_test_score"])
-    total_time = clf.refit_time_ * num_nodes * n_splits
-
-    best_scores, best_scores_idx, mean_score_time, mean_fit_time = [], 0, 0.0, 0.0
-
-    for i in np.arange(n_splits):
-        best_scores.append(
-            clf.cv_results_["split" + str(i) + "_test_score"][clf.best_index_]
-        )
-        idx = np.where(max(best_scores) == best_scores)[0][
-            0
-        ]  # always + 1 because index starts from 0 as default
-
-    best_scores_idx = (clf.best_index_ + 1) + len(
-        clf.cv_results_["mean_score_time"]
-    ) * idx
-    print(
-        f"Best params for estimator: {clf.best_estimator_} \n"
-        f"Best CV Score: {max(best_scores):.6f}\n"
-    )
-    print(
-        f"A total of {best_scores_idx} was performed before optimal CV score found! \n"
-        f"(Under split{idx}_test_score / {idx + 1}th split)\n"
-    )
-
-    print(
-        f"Estimated time taken for entire process: {total_time:.6f} seconds \n"
-        f"Total number of candidates / nodes: {num_nodes}\n"
-    )
-
-    i = 0
-    while i < (clf.best_index_ + 1):
-        mean_score_time += clf.cv_results_["mean_score_time"][i]
-        mean_fit_time += clf.cv_results_["mean_fit_time"][i]
-        i += 1
-    print("=" * 55)
-    print(
-        "Estimated total mean time required for optimal solution: \n\n"
-        f"Score Time: {mean_score_time:.6f}s \n"
-        f"Fit Time:  {mean_fit_time:.6f}s"
-    )
-
-
-def param_grid_size(param_grid: dict):
-    # Compute total combinations
-    from functools import reduce
-    from operator import mul
-
-    return reduce(mul, [len(v) for v in param_grid.values()])

@@ -19,8 +19,12 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 from loguru import logger
-from scipy.stats._distn_infrastructure import rv_continuous_frozen, rv_discrete_frozen
+from scipy.stats._distn_infrastructure import (rv_continuous_frozen,
+                                               rv_discrete_frozen)
+from sklearn.base import BaseEstimator
+from sklearn.pipeline import Pipeline
 
+from ..util.pipelines import MyPipeline
 from . import cache_stats, memory
 from .cache_monitoring import get_cache_monitor
 
@@ -132,7 +136,7 @@ class UnifiedCacheKeyGenerator:
         args: tuple,
         kwargs: dict,
         time_aware: bool = False,
-        auto_versioning: bool = True,  # NOW DEFAULT!
+        auto_versioning: bool = True,
     ) -> str:
         """
         Generate unified cache key.
@@ -227,9 +231,7 @@ class UnifiedCacheKeyGenerator:
 
         # 3. Sklearn estimators
         try:
-            from sklearn.base import BaseEstimator
-
-            if isinstance(value, BaseEstimator):
+            if isinstance(value, (BaseEstimator, Pipeline, MyPipeline)):
                 return UnifiedCacheKeyGenerator._hash_estimator(name, value)
         except ImportError:
             pass
@@ -268,7 +270,11 @@ class UnifiedCacheKeyGenerator:
         args = dist.args if hasattr(dist, "args") else ()
         kwds = dist.kwds if hasattr(dist, "kwds") else {}
 
-        params = {"type": dist_type, "args": args, "kwds": kwds}
+        # Serialize args and kwds for deterministic hashing
+        args_serialized = UnifiedCacheKeyGenerator._serialize_for_hashing(args)
+        kwds_serialized = UnifiedCacheKeyGenerator._serialize_for_hashing(kwds)
+
+        params = {"type": dist_type, "args": args_serialized, "kwds": kwds_serialized}
         param_str = json.dumps(params, sort_keys=True, default=str)
         param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
 
@@ -276,124 +282,163 @@ class UnifiedCacheKeyGenerator:
 
     @staticmethod
     def _hash_dict(name: str, d: dict) -> str:
-        """Hash dictionary recursively (handles nested scipy distributions)."""
+        """Hash dictionary recursively using deterministic serialization."""
         if not d:
             return f"{name}_empty_dict"
 
-        sorted_items = []
-        for key, value in sorted(d.items()):
-            val_hash = UnifiedCacheKeyGenerator._hash_parameter(f"{name}_{key}", value)
-            sorted_items.append(f"{key}={val_hash}")
-
-        combined = "_".join(sorted_items)
-        return hashlib.md5(combined.encode()).hexdigest()[:8]
+        # Use the new serialization method
+        serialized = UnifiedCacheKeyGenerator._serialize_for_hashing(d)
+        serialized_str = json.dumps(serialized, sort_keys=True, default=str)
+        return hashlib.md5(serialized_str.encode()).hexdigest()[:8]
 
     @staticmethod
     def _hash_estimator(name: str, estimator) -> str:
         """
         Hash sklearn estimator recursively to handle Pipelines.
 
-        Key insight: We need to recursively hash nested estimators
-        in Pipeline steps, not just store their type names.
+        FIX: Use deterministic parameter extraction instead of recursive hashing
+        to ensure consistent cache keys.
         """
         try:
-            from sklearn.base import BaseEstimator
-            from sklearn.pipeline import Pipeline
-
             est_type = type(estimator).__name__
 
-            # Special handling for Pipeline - recursively hash steps
-            if isinstance(estimator, Pipeline):
-                step_hashes = []
-                for step_name, step_estimator in estimator.steps:
-                    # Recursively hash each step
-                    step_hash = UnifiedCacheKeyGenerator._hash_estimator(
-                        f"{name}_{step_name}", step_estimator
-                    )
-                    step_hashes.append(f"{step_name}:{step_hash}")
+            # Special handling for Pipeline - serialize all parameters including nested steps
+            if isinstance(estimator, (Pipeline, MyPipeline)):
+                # Serialize the entire pipeline with all parameters
+                params = estimator.get_params(deep=True)  # Use deep=True to get nested params
 
-                pipeline_hash = hashlib.md5("_".join(step_hashes).encode()).hexdigest()[
-                    :12
-                ]
-                return f"{name}_Pipeline_{pipeline_hash}"
+                # Extract step information for better debugging
+                step_info = []
+                if hasattr(estimator, "steps"):
+                    for step_name, step_estimator in estimator.steps:
+                        step_info.append(
+                            {
+                                "name": step_name,
+                                "type": type(step_estimator).__name__,
+                                "params": step_estimator.get_params(),
+                            }
+                        )
 
-            # For regular estimators, get params (but not deep for nested objects)
-            params = estimator.get_params(deep=False)
+                # Create deterministic serialization
+                serializable = {
+                    "type": est_type,
+                    "params": UnifiedCacheKeyGenerator._serialize_for_hashing(params),
+                    "steps": UnifiedCacheKeyGenerator._serialize_for_hashing(step_info),
+                }
 
-            # Now recursively process each parameter
-            serializable = {}
-            for k, v in params.items():
-                serializable[k] = UnifiedCacheKeyGenerator._serialize_param_value(v)
+                param_str = json.dumps(serializable, sort_keys=True, default=str)
+                param_hash = hashlib.md5(param_str.encode()).hexdigest()[:12]
 
-            param_str = json.dumps(serializable, sort_keys=True, default=str)
-            param_hash = hashlib.md5(param_str.encode()).hexdigest()[:12]
+                return f"{name}_est_{param_hash}"
 
-            return f"{name}_est_{est_type}_{param_hash}"
+            elif isinstance(estimator, BaseEstimator):
+                # For regular estimators, get ALL parameters (deep=True)
+                params = estimator.get_params(deep=True)
+
+                # Create deterministic serialization
+                serializable = {
+                    "type": est_type,
+                    "params": UnifiedCacheKeyGenerator._serialize_for_hashing(params),
+                }
+
+                param_str = json.dumps(serializable, sort_keys=True, default=str)
+                param_hash = hashlib.md5(param_str.encode()).hexdigest()[:12]
+
+                return f"{name}_est_{param_hash}"
 
         except Exception as e:
             logger.warning(f"Estimator hashing failed for {name}: {e}")
-            # Fallback that at least captures the type
-            return f"{name}_est_{type(estimator).__name__}_fallback"
+            # Fallback: use type and hash of repr
+            return f"{name}_est_{type(estimator).__name__}_{hash(repr(estimator))}"
 
     @staticmethod
-    def _serialize_param_value(value: Any) -> Any:
+    def _serialize_for_hashing(obj: Any) -> Any:
         """
-        Recursively serialize parameter values for consistent hashing.
+        Serialize any object for consistent hashing.
 
-        This handles:
-        - Nested estimators (common in Pipelines)
-        - Scipy distributions
-        - Lists/tuples of estimators
-        - Regular Python types
+        This ensures deterministic serialization for all parameter types.
         """
-        from sklearn.base import BaseEstimator
-
         # Handle None
-        if value is None:
-            return "None"
+        if obj is None:
+            return None
 
-        # Handle primitives
-        if isinstance(value, (int, float, str, bool)):
-            return value
+        # Handle basic types
+        if isinstance(obj, (int, float, str, bool)):
+            return obj
+
+        # Handle numpy types
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            # For arrays, use shape and a sample for hashing
+            if obj.size > 1000:
+                sample = obj.flat[:: max(1, obj.size // 100)]
+                rounded = np.round(sample, decimals=6)
+                content = rounded.tolist()
+            else:
+                rounded = np.round(obj, decimals=6)
+                content = rounded.tolist()
+            return {
+                "_type": "np_array",
+                "shape": obj.shape,
+                "dtype": str(obj.dtype),
+                "content": content[:100],  # Limit size
+            }
 
         # Handle scipy distributions
-        if isinstance(value, (rv_discrete_frozen, rv_continuous_frozen)):
-            dist_type = type(value).__name__
-            args = value.args if hasattr(value, "args") else ()
-            kwds = value.kwds if hasattr(value, "kwds") else {}
+        if isinstance(obj, (rv_discrete_frozen, rv_continuous_frozen)):
             return {
                 "_type": "scipy_dist",
-                "dist": dist_type,
-                "args": args,
-                "kwds": kwds,
+                "dist": type(obj).__name__,
+                "args": obj.args if hasattr(obj, "args") else (),
+                "kwds": obj.kwds if hasattr(obj, "kwds") else {},
             }
 
-        # Handle nested estimators (THIS IS THE KEY FIX)
-        if isinstance(value, BaseEstimator):
-            # Hash the nested estimator properly
-            nested_hash = UnifiedCacheKeyGenerator._hash_estimator("nested", value)
-            return {"_type": "estimator", "hash": nested_hash}
-
-        # Handle lists/tuples (may contain estimators)
-        if isinstance(value, (list, tuple)):
-            serialized = [
-                UnifiedCacheKeyGenerator._serialize_param_value(item) for item in value
-            ]
-            return {"_type": "sequence", "items": serialized}
-
-        # Handle dicts (may contain estimators)
-        if isinstance(value, dict):
-            serialized = {
-                k: UnifiedCacheKeyGenerator._serialize_param_value(v)
-                for k, v in value.items()
-            }
-            return {"_type": "dict", "items": serialized}
-
-        # For unknown types, use type name + attempt to get repr
+        # Handle sklearn estimators
         try:
-            return {"_type": type(value).__name__, "repr": repr(value)}
-        except:
-            return {"_type": type(value).__name__, "id": id(value)}
+            if isinstance(obj, BaseEstimator):
+                # For estimators in parameters, get their params but don't nest recursively
+                return {
+                    "_type": "estimator",
+                    "class": type(obj).__name__,
+                    "params": obj.get_params(deep=False),  # shallow only to avoid recursion
+                }
+        except Exception as e:
+            logger.error(e)
+
+        # Handle sequences
+        if isinstance(obj, (list, tuple)):
+            return [UnifiedCacheKeyGenerator._serialize_for_hashing(item) for item in obj]
+
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            return {
+                k: UnifiedCacheKeyGenerator._serialize_for_hashing(v)
+                for k, v in sorted(obj.items())  # Sort for deterministic ordering
+            }
+
+        # Handle pandas objects
+        if isinstance(obj, pd.DataFrame):
+            return {
+                "_type": "dataframe",
+                "shape": obj.shape,
+                "columns": list(obj.columns),
+                "index_type": type(obj.index).__name__,
+                "dtypes": {col: str(dtype) for col, dtype in obj.dtypes.items()},
+            }
+
+        if isinstance(obj, pd.Series):
+            return {
+                "_type": "series",
+                "shape": obj.shape,
+                "dtype": str(obj.dtype),
+                "index_type": type(obj.index).__name__,
+            }
+
+        # For everything else, use repr but with type prefix
+        return {"_type": type(obj).__name__, "repr": repr(obj)}
 
     @staticmethod
     def _hash_cv_generator(name: str, cv_gen) -> str:
@@ -412,7 +457,7 @@ class UnifiedCacheKeyGenerator:
                 params["t1_start"] = str(t1.index[0])
                 params["t1_end"] = str(t1.index[-1])
 
-            param_str = json.dumps(params, sort_keys=True)
+            param_str = json.dumps(params, sort_keys=True, default=str)
             param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
 
             return f"{name}_cv_{cv_type}_{param_hash}"
@@ -494,7 +539,7 @@ class UnifiedCacheKeyGenerator:
         """Fallback for unknown types."""
         try:
             return f"{name}_{type(obj).__name__}_{hash(repr(obj))}"
-        except:
+        except Exception:
             return f"{name}_{type(obj).__name__}_{id(obj)}"
 
     @staticmethod
@@ -698,7 +743,7 @@ def cacheable(
                 # Clear corrupted cache
                 try:
                     cached_func.clear()
-                except:
+                except Exception:
                     pass
 
                 # Execute directly
@@ -847,6 +892,7 @@ def create_cacheable_param_grid(param_distributions: Dict) -> Dict:
 
 def reconstruct_param_grid(cacheable_params: Dict) -> Dict:
     """Reconstruct scipy distributions from cacheable representation."""
+    import scipy.stats as stats
     from scipy.stats import randint, uniform
 
     reconstructed = {}
@@ -861,11 +907,9 @@ def reconstruct_param_grid(cacheable_params: Dict) -> Dict:
                 reconstructed[key] = uniform(*args, **kwds)
             else:
                 try:
-                    import scipy.stats as stats
-
                     dist_class = getattr(stats, dist_type.replace("_frozen", ""))
                     reconstructed[key] = dist_class(*args, **kwds)
-                except:
+                except Exception:
                     logger.warning(f"Could not reconstruct: {dist_type}")
                     reconstructed[key] = value
         else:

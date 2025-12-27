@@ -1,31 +1,37 @@
-import json
 import sys
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
+from feature_engine.selection import (DropConstantFeatures,
+                                      DropDuplicateFeatures)
 from loguru import logger
 from numba import njit, prange
 from scipy.stats import uniform
-from sklearn.base import BaseEstimator, ClassifierMixin, clone
+from sklearn import clone
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 
-from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
+from afml.cache.unified_cache_system import create_cacheable_param_grid
+
+from ..cache import (cacheable, get_cache_monitor, log_data_access,
+                     print_contamination_report)
 from ..cross_validation import PurgedKFold, clf_hyper_fit_cached
-from ..cross_validation.hyper_fit_analysis import generate_hyperparameter_markdown_report
+from ..cross_validation.hyper_fit_analysis import \
+    generate_complete_hyperparameter_report
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..features.trading_session import get_time_features
-from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
+from ..labeling.triple_barrier import (add_vertical_barrier, get_event_weights,
+                                       triple_barrier_labels)
 from ..mt5.load_data import load_tick_data, save_data_to_parquet
-from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
+from ..sample_weights.optimized_attribution import \
+    get_weights_by_time_decay_optimized
 from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
 from ..util.misc import date_conversion, value_counts_data
@@ -57,16 +63,12 @@ class TickDataLoader:
         Parameters
         ----------
         max_cache_size_mb : int, optional
-            Maximum cache size in MB (default: 500MB)
+            Maximum cache size in MB (default: 5000MB)
         max_cached_symbols : int, optional
             Maximum number of symbols to keep in cache (default: 20)
         """
-        self._cache: Dict[Tuple[str, str], pd.DataFrame] = (
-            {}
-        )  # (symbol, account_name) -> DataFrame
-        self._cache_metadata: Dict[Tuple[str, str], Dict] = (
-            {}
-        )  # (symbol, account_name) -> metadata
+        self._cache: Dict[Tuple[str, str], pd.DataFrame] = {}  # (symbol, account_name) -> DataFrame
+        self._cache_metadata: Dict[Tuple[str, str], Dict] = {}  # (symbol, account_name) -> metadata
         self.max_cache_size_mb = max_cache_size_mb
         self.max_cached_symbols = max_cached_symbols
         self.cache_stats = {
@@ -133,9 +135,7 @@ class TickDataLoader:
         # No cache hit, load all data
         self.cache_stats["misses"] += 1
         logger.debug(f"Cache miss for {symbol} {start_date} to {end_date}")
-        return self._load_and_cache_data(
-            symbol, start_date, end_date, account_name, cache_key
-        )
+        return self._load_and_cache_data(symbol, start_date, end_date, account_name, cache_key)
 
     def _load_with_partial_cache(
         self,
@@ -171,16 +171,12 @@ class TickDataLoader:
 
         # Check if we need data after cached range
         if end_dt > cached_end:
-            load_ranges.append(
-                ((cached_end + timedelta(days=1)).strftime("%Y-%m-%d"), end_date)
-            )
+            load_ranges.append(((cached_end + timedelta(days=1)).strftime("%Y-%m-%d"), end_date))
 
         # Load missing data ranges
         new_data = []
         for load_start, load_end in load_ranges:
-            logger.info(
-                f"Loading additional data for {symbol}: {load_start} to {load_end}"
-            )
+            logger.info(f"Loading additional data for {symbol}: {load_start} to {load_end}")
             df_part = self._load_data(symbol, load_start, load_end, account_name)
             if not df_part.empty:
                 new_data.append(df_part)
@@ -276,9 +272,7 @@ class TickDataLoader:
         # Check if we have too many symbols
         if len(self._cache) > self.max_cached_symbols:
             # Remove least recently used
-            lru_items = sorted(
-                self._cache_metadata.items(), key=lambda x: x[1]["last_accessed"]
-            )
+            lru_items = sorted(self._cache_metadata.items(), key=lambda x: x[1]["last_accessed"])
 
             for key, _ in lru_items[: len(self._cache) - self.max_cached_symbols]:
                 del self._cache[key]
@@ -304,13 +298,9 @@ class TickDataLoader:
                 removed_size += meta["size_mb"]
                 del self._cache[key]
                 del self._cache_metadata[key]
-                logger.debug(
-                    f"Removed {key} from cache (size: {meta['size_mb']:.2f}MB)"
-                )
+                logger.debug(f"Removed {key} from cache (size: {meta['size_mb']:.2f}MB)")
 
-    def clear_cache(
-        self, symbol: Optional[str] = None, account_name: Optional[str] = None
-    ):
+    def clear_cache(self, symbol: Optional[str] = None, account_name: Optional[str] = None):
         """
         Clear cache for specific symbol/account or all cache.
 
@@ -357,11 +347,7 @@ class TickDataLoader:
         """
         total_size = sum(meta["size_mb"] for meta in self._cache_metadata.values())
         total_requests = self.cache_stats["hits"] + self.cache_stats["misses"]
-        hit_rate = (
-            (self.cache_stats["hits"] / total_requests * 100)
-            if total_requests > 0
-            else 0
-        )
+        hit_rate = (self.cache_stats["hits"] / total_requests * 100) if total_requests > 0 else 0
 
         cached_symbols_info = []
         for (symbol, account), meta in self._cache_metadata.items():
@@ -385,9 +371,7 @@ class TickDataLoader:
             "cached_symbols": cached_symbols_info,
         }
 
-    def preload_data(
-        self, symbols: List[str], start_date: str, end_date: str, account_name: str
-    ):
+    def preload_data(self, symbols: List[str], start_date: str, end_date: str, account_name: str):
         """
         Preload data for multiple symbols into cache.
 
@@ -440,7 +424,7 @@ loader = TickDataLoader()
 #     }
 
 
-@cacheable(time_aware=True)
+@cacheable()
 def get_bar_size(tick_df, bar_size):
     """
     Compute tick-based bar size.
@@ -556,7 +540,7 @@ def create_feature_engineering_pipeline(
     return features.join(time_feat).dropna()
 
 
-@cacheable(time_aware=True)
+@cacheable()
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: BaseStrategy,
@@ -628,61 +612,95 @@ def generate_events_triple_barrier(
     return events
 
 
+class _WeightedEstimator(BaseEstimator, ClassifierMixin):
+    """Static class for weighted estimators - essential for caching."""
+
+    def __init__(
+        self,
+        base_estimator,
+        events,
+        data_index,
+        scheme="unweighted",
+        decay=1.0,
+        linear=True,
+        **params,
+    ):
+        self.base_estimator = base_estimator
+        self.base_estimator.set_params(**params)
+        self.scheme = scheme
+        self.decay = decay
+        self.linear = linear
+        self.events = events
+        self.data_index = data_index
+
+    def fit(self, X, y):
+        if self.scheme == "uniqueness":
+            weights = self.events["tW"]
+        elif self.scheme == "return":
+            weights = self.events["w"]
+        else:
+            weights = pd.Series(np.ones(len(y)), index=y.index)
+
+        valid = X.index.intersection(y.index)
+        X, y, w = X.loc[valid], y.loc[valid], weights.loc[valid]
+
+        # Apply decay factor
+        if self.decay != 1.0:
+            decay_vec = get_weights_by_time_decay_optimized(
+                triple_barrier_events=self.events,
+                close_index=self.data_index,
+                last_weight=self.decay,
+                linear=self.linear,
+                av_uniqueness=self.events.loc[X.index, "tW"],
+            )
+            w *= decay_vec
+
+        self.base_estimator.fit(X, y, sample_weight=w)
+        return self
+
+    def predict(self, X):
+        return self.base_estimator.predict(X)
+
+    def get_params(self, deep=True):
+        # Include ALL parameters for consistent hashing
+        params = {
+            "scheme": self.scheme,
+            "decay": self.decay,
+            "linear": self.linear,
+            "base_estimator": self.base_estimator,
+            "events": self.events,
+            "data_index": self.data_index,
+        }
+
+        if deep:
+            # Get nested params from base estimator
+            base_params = self.base_estimator.get_params(deep=True)
+            params.update({f"base_{k}": v for k, v in base_params.items()})
+
+        return params
+
+    def set_params(self, **params):
+        # Handle base estimator params
+        base_params = {}
+        for key in list(params.keys()):
+            if key.startswith("base_"):
+                base_params[key[5:]] = params.pop(key)
+
+        # Set our params
+        for key in ["scheme", "decay", "linear", "base_estimator", "events", "data_index"]:
+            if key in params:
+                setattr(self, key, params.pop(key))
+
+        # Set base estimator params
+        if base_params:
+            self.base_estimator.set_params(**base_params)
+
+        return self
+
+
 def weighted_estimator(base_estimator, events, data_index):
-    class EstimatorWithWeights(BaseEstimator, ClassifierMixin):
-        def __init__(self, scheme="unweighted", decay=1.0, linear=True, **params):
-            self.scheme = scheme
-            self.decay = decay
-            self.linear = linear
-            self.events = events
-            self.data_index = data_index
-            self.base_estimator = clone(base_estimator)
-            self.base_estimator.set_params(**params)
-
-        def fit(self, X, y):
-            if self.scheme == "uniqueness":
-                weights = self.events["tW"]
-            elif self.scheme == "return":
-                weights = self.events["w"]
-            else:
-                weights = pd.Series(np.ones(len(y)), index=y.index)
-
-            valid = X.index.intersection(y.index)
-            X, y, w = X.loc[valid], y.loc[valid], weights.loc[valid]
-
-            # Apply decay factor
-            if self.decay != 1.0:
-                decay_vec = get_weights_by_time_decay_optimized(
-                    triple_barrier_events=self.events,
-                    close_index=self.data_index,
-                    last_weight=self.decay,
-                    linear=self.linear,
-                    av_uniqueness=self.events.loc[X.index, "tW"],
-                )
-                w *= decay_vec
-
-            self.base_estimator.fit(X, y, sample_weight=w)
-            return self
-
-        def predict(self, X):
-            return self.base_estimator.predict(X)
-
-        def get_params(self, deep=True):
-            return {
-                "scheme": self.scheme,
-                "decay": self.decay,
-                "linear": self.linear,
-                **self.base_estimator.get_params(deep=deep),
-            }
-
-        def set_params(self, **params):
-            for key in ["scheme", "decay", "linear"]:
-                if key in params:
-                    setattr(self, key, params.pop(key))
-            self.base_estimator.set_params(**params)
-            return self
-
-    return EstimatorWithWeights()
+    """Factory function that returns an instance of the static class."""
+    return _WeightedEstimator(base_estimator=base_estimator, events=events, data_index=data_index)
 
 
 @cacheable(time_aware=True)
@@ -691,7 +709,7 @@ def find_optimal_sample_weight(
     events: pd.DataFrame,
     features: pd.DataFrame,
     cv_splits: int = 5,
-    n_iter: int = 15,
+    n_iter: int = 10,
 ) -> pd.Series:
     """
     Compute best sample weight with time decay.
@@ -707,7 +725,7 @@ def find_optimal_sample_weight(
     cv_splits : int, optional
         Number of cross-validation splits (default: 5).
     n_iter : int, optional
-        Number of random search iterations (default: 15).
+        Number of random search iterations (default: 10).
 
     Returns
     -------
@@ -724,7 +742,7 @@ def find_optimal_sample_weight(
     y = cont["bin"]
 
     scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
-    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
+    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.02)
 
     classifier = RandomForestClassifier(
         criterion="entropy",
@@ -735,13 +753,13 @@ def find_optimal_sample_weight(
     )
     est = weighted_estimator(classifier, cont, data_index)
     param_distributions = {
-        "scheme": ["unweighted", "return", "uniqueness"],
+        "scheme": ["return", "unweighted", "uniqueness"],
         "decay": uniform(0, 1),  # decay factor between 0 and 1 inclusive
         "linear": [True, False],
     }
     gs = RandomizedSearchCV(
-        est,
-        param_distributions,
+        estimator=est,
+        param_distributions=param_distributions,
         n_iter=n_iter,
         cv=cv_gen,
         scoring=scoring,
@@ -751,10 +769,7 @@ def find_optimal_sample_weight(
     )
     gs.fit(X, y)
 
-    params = gs.best_params_
-    scheme = params["scheme"]
-    decay = params["decay"]
-    linear = params["linear"]
+    scheme, decay, linear = [gs.best_params_[k] for k in ["scheme", "decay", "linear"]]
     best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay}"
     logger.info(f"Best sample weight scheme: {best_scheme}")
 
@@ -766,21 +781,22 @@ def find_optimal_sample_weight(
         av_uniqueness=cont["tW"],
     )
 
+    weights = decay_vec.copy()
+
     if scheme == "uniqueness":
-        weights = cont["tW"] * decay_vec
+        weights *= cont["tW"]
     elif scheme == "return":
-        weights = cont["w"] * decay_vec
-    else:
-        weights = decay_vec
+        weights *= cont["w"]
 
     cv_results = {
         "best_params": gs.best_params_,
         "best_score": gs.best_score_,
         "cv_results": pd.DataFrame(gs.cv_results_),
         "scoring": scoring,
+        "best_scheme": best_scheme,
     }
 
-    return weights, cv_results, best_scheme
+    return weights, cv_results
 
 
 @njit(parallel=True, fastmath=True, cache=True)
@@ -827,7 +843,7 @@ def _rolling_metrics_numba(y_true, y_pred, weights, window):
     return accuracy, precision, recall, f1
 
 
-@cacheable(time_aware=True)
+@cacheable()
 def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     """
     Calculate rolling performance metrics with Numba acceleration.
@@ -871,9 +887,9 @@ def train_model_with_cv(
     bagging_max_features: float = 1.0,
     rnd_search_iter: int = 0,
     n_jobs: int = -1,
-    pct_embargo: float = 0.01,
+    pct_embargo: float = 0.02,
     random_state: int = None,
-    verbose: bool = False,
+    verbose: int = 0,
 ) -> Tuple[RandomForestClassifier, Dict]:
     """
     Train model with cross-validation using cached hyperparameter search.
@@ -902,11 +918,11 @@ def train_model_with_cv(
         Randomized search iterations.
     n_jobs : int, default=-1
         Parallel jobs.
-    pct_embargo : float, default=0.01
+    pct_embargo : float, default=0.02
         Embargo percentage for purging CV splits.
     random_state : int, optional
         Random seed.
-    verbose : bool, default=False
+    verbose : int, default=0
         Verbosity flag.
 
     Returns
@@ -925,20 +941,20 @@ def train_model_with_cv(
     w = sample_weight.loc[valid_index]
 
     best_model, cv_results = clf_hyper_fit_cached(
-        X,
-        y,
-        t1,
-        pipe_clf,
-        param_grid,
-        cv_splits,
-        bagging_n_estimators,
-        bagging_max_samples,
-        bagging_max_features,
-        rnd_search_iter,
-        n_jobs,
-        pct_embargo,
-        random_state,
-        verbose,
+        features=X,
+        labels=y,
+        t1=t1,
+        pipe_clf=pipe_clf,
+        param_grid=param_grid,
+        cv=cv_splits,
+        bagging_n_estimators=bagging_n_estimators,
+        bagging_max_samples=bagging_max_samples,
+        bagging_max_features=bagging_max_features,
+        rnd_search_iter=rnd_search_iter,
+        n_jobs=n_jobs,
+        pct_embargo=pct_embargo,
+        random_state=random_state,
+        verbose=verbose,
         sample_weight=w,
     )
 
@@ -953,9 +969,6 @@ class ModelDevelopmentPipeline:
 
     def __init__(
         self,
-        symbol: str,
-        train_start: str,
-        train_end: str,
         strategy: BaseStrategy,
         data_config: dict,
         feature_config: dict,
@@ -968,16 +981,16 @@ class ModelDevelopmentPipeline:
 
         Parameters
         ----------
-        symbol : str
-            Trading instrument symbol.
-        train_start : str
-            Training start date ('YYYY-MM-DD').
-        train_end : str
-            Training end date ('YYYY-MM-DD').
-        strategy : BaseStrategy
-            Signal generating strategy.
         data_config : dict
             Bar construction configuration.
+            - symbol : str
+                Trading instrument symbol.
+            - start_date : str
+                Training start date ('YYYY-MM-DD').
+            - end_date : str
+                Training end date ('YYYY-MM-DD').
+        strategy : BaseStrategy
+            Signal generating strategy.
         feature_config : dict
             Feature engineering configuration.
         label_config : dict
@@ -988,26 +1001,25 @@ class ModelDevelopmentPipeline:
             Path to save pipeline data
         """
         # Configuration
-        self.symbol = symbol
-        self.train_start = train_start
-        self.train_end = train_end
-        self.strategy = strategy
         self.data_config = data_config
+        self.symbol = data_config["symbol"]
+        self.train_start = data_config["start_date"]
+        self.train_end = data_config["end_date"]
+        self.strategy = strategy
         self.feature_config = feature_config
         self.label_config = label_config
         self.model_params = model_params
         self.account_name = data_config.get("account_name", "default")
 
         # Build complete config
-        self.config = {
-            "strategy": strategy.get_strategy_name(),
-            "symbol": symbol,
-            "training_start": train_start,
-            "training_end": train_end,
-            "account_name": self.account_name,
-        }
-        self.config.update(data_config)
+        self.config = data_config.copy()
+        self.config["training_start"] = self.config.pop("start_date")
+        self.config["training_end"] = self.config.pop("end_date")
+        self.config["strategy"] = strategy.get_strategy_name()
+        self.config["feature_func"] = feature_config["func"].__name__
+        self.config["feature_params"] = feature_config["params"]
         self.config.update(label_config)
+        self.config.update(create_cacheable_param_grid(model_params))
 
         # Initialize file management and logging
         self.file_manager = ModelFileManager(base_dir)
@@ -1066,7 +1078,7 @@ class ModelDevelopmentPipeline:
             sys.stdout,
             level="DEBUG",
             format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-            "<cyan>{name}</cyan> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{level}</level> | "
             "<yellow>{message}</yellow>",
             colorize=True,
@@ -1083,6 +1095,7 @@ class ModelDevelopmentPipeline:
         generate_reports: bool = True,
         cache_reports: bool = False,
         save: bool = True,
+        export_onxx: bool = False,
         verbose: bool = True,
     ) -> Tuple[RandomForestClassifier, List[str], Dict]:
         """
@@ -1096,6 +1109,8 @@ class ModelDevelopmentPipeline:
             Display cache performance reports (default: False).
         save : bool, optional
             Save model and artifacts (default: True).
+        export_onxx : bool, optional
+            Export model to ONNX format (default: False).
         verbose : bool, optional
             Print progress information (default: True).
 
@@ -1105,6 +1120,7 @@ class ModelDevelopmentPipeline:
             (best_model, features_columns, metrics, config)
         """
         time0 = time.time()
+        self.export_onxx = export_onxx
 
         if verbose:
             print("\n" + "=" * 70)
@@ -1192,7 +1208,7 @@ class ModelDevelopmentPipeline:
                 duration_str = pd.Timedelta(seconds=pipeline_duration).round("1s")
                 duration_str = str(duration_str).replace("0 days ", "")
                 print(f"\n✓ Pipeline completed in {duration_str}")
-                print("=" * 70)
+                print("=" * 70, "\n")
 
             return (
                 self.best_model,
@@ -1202,11 +1218,6 @@ class ModelDevelopmentPipeline:
             )
 
         except Exception as e:
-            self.step_logger.logger.error(
-                "pipeline_failed",
-                error=str(e),
-                traceback=str(e),
-            )
             logger.error(f"Pipeline failed: {e}")
             raise
 
@@ -1217,16 +1228,14 @@ class ModelDevelopmentPipeline:
             if self.cv_results and "cv_results" in self.cv_results:
                 cv_results_df = pd.DataFrame(self.cv_results["cv_results"])
 
-                report_path = (
-                    self.file_paths["reports"] / "hyperparameter_analysis_report.md"
-                )
+                report_path = self.file_paths["reports"] / "hyperparameter_analysis_report.md"
 
-                generate_hyperparameter_markdown_report(
+                generate_complete_hyperparameter_report(
                     cv_results=cv_results_df,
                     strategy_config=self.config,
-                    filename=report_path,
+                    output_dir=self.file_paths["reports"],
+                    filename=report_path.name,
                     target_metric="mean_test_score",
-                    stability_threshold=0.03,
                 )
 
                 logger.info(f"Generated hyperparameter report: {report_path}")
@@ -1282,16 +1291,14 @@ class ModelDevelopmentPipeline:
             n_bar_data = safe_len(self.bar_data)
             n_events = safe_len(self.events)
             n_features = len(self._get_feature_names()) if self.best_model else 0
-            cv_score = (
-                self.cv_results.get("best_score", 0.0) if self.cv_results else 0.0
-            )
+            cv_score = self.cv_results.get("best_score", 0.0) if self.cv_results else 0.0
 
             # Safe config access
             strategy_name = self.config.get("strategy", "Unknown")
 
             html_content = f"""
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>Training Summary - {self.symbol}</title>
     <style>
@@ -1386,9 +1393,7 @@ class ModelDevelopmentPipeline:
                     value_str = str(value)[:100]  # Truncate long values
                 else:
                     value_str = str(value)
-                html_content += (
-                    f"            <tr><td>{key}</td><td>{value_str}</td></tr>\n"
-                )
+                html_content += f"            <tr><td>{key}</td><td>{value_str}</td></tr>\n"
 
             html_content += """
         </table>
@@ -1405,9 +1410,7 @@ class ModelDevelopmentPipeline:
 """
                 for key, value in self.cv_results["best_params"].items():
                     value_str = str(value)[:100]  # Truncate long values
-                    html_content += (
-                        f"            <tr><td>{key}</td><td>{value_str}</td></tr>\n"
-                    )
+                    html_content += f"            <tr><td>{key}</td><td>{value_str}</td></tr>\n"
 
                 html_content += """
         </table>
@@ -1424,9 +1427,9 @@ class ModelDevelopmentPipeline:
 """
                 for i, row in self.feature_importance.head(10).iterrows():
                     html_content += f"""            <tr>
-                <td>{i+1}</td>
-                <td>{row['feature']}</td>
-                <td>{row['importance']:.6f}</td>
+                <td>{i + 1}</td>
+                <td>{row["feature"]}</td>
+                <td>{row["importance"]:.6f}</td>
             </tr>
 """
                 html_content += """
@@ -1473,16 +1476,16 @@ class ModelDevelopmentPipeline:
         <p><strong>Best Scheme:</strong> <span class="success">{self.best_weighting_scheme}</span></p>
 """
                 try:
-                    avg_uniqueness = (
-                        self.events["tW"].mean() if "tW" in self.events.columns else 0
-                    )
+                    avg_uniqueness = self.events["tW"].mean() if "tW" in self.events.columns else 0
                     html_content += f"        <p><strong>Average Uniqueness:</strong> {avg_uniqueness:.4f}</p>\n"
                 except Exception as e:
                     logger.error(f"Could not compute average uniqueness: {e}")
 
                 if self.weight_cv_results:
                     weight_score = self.weight_cv_results.get("best_score", 0)
-                    html_content += f"        <p><strong>Weight CV Score:</strong> {weight_score:.4f}</p>\n"
+                    html_content += (
+                        f"        <p><strong>Weight CV Score:</strong> {weight_score:.4f}</p>\n"
+                    )
 
                 html_content += """
     </div>
@@ -1503,9 +1506,7 @@ class ModelDevelopmentPipeline:
                     else '<span class="warning">❌ Not Run</span>'
                 )
                 step_name = step.replace("_", " ").title()
-                html_content += (
-                    f"            <tr><td>{step_name}</td><td>{status}</td></tr>\n"
-                )
+                html_content += f"            <tr><td>{step_name}</td><td>{status}</td></tr>\n"
 
             html_content += """
         </table>
@@ -1531,35 +1532,32 @@ class ModelDevelopmentPipeline:
             # Save model with metadata
             metadata = {
                 "cv_results": self.cv_results,
+                "strategy": self.strategy,
+                "feature_config": self.feature_config,
                 "feature_importance": self.feature_importance.to_dict("records"),
+                "feature_names": self._get_feature_names(),
                 "training_samples": len(self.bar_data),
                 "best_weighting_scheme": self.best_weighting_scheme,
-                "pipeline_version": "2.0",
+                "pipeline_version": "3.0",
                 "weight_cv_results": self.weight_cv_results,
             }
             self.file_manager.save_model(self.best_model, metadata)
+
+            if self.features is not None:
+                self.file_manager.save_dataframe(self.preprocessed_features, "features")
+
+            if self.events is not None:
+                self.file_manager.save_dataframe(self.events, "events")
+
+            if self.sample_weight is not None:
+                self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
 
             # Save metrics
             if self.metrics:
                 self.file_manager.save_metrics(self.metrics)
 
-            # Save dataframes
-            if self.features is not None:
-                self.features.to_parquet(self.file_paths["features"])
-
-            if self.events is not None:
-                self.events.to_parquet(self.file_paths["events"])
-
-            if self.feature_importance is not None:
-                self.feature_importance.to_csv(
-                    self.file_paths["feature_importance"], index=False
-                )
-
-            # Save sample weights
-            if self.sample_weight is not None:
-                self.sample_weight.to_frame("weight").to_parquet(
-                    self.file_paths["weights"]
-                )
+            if self.export_onxx and self.best_model is not None:
+                self.file_manager.save_model_as_onxx(self.best_model, self._get_feature_names())
 
             logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
 
@@ -1569,12 +1567,7 @@ class ModelDevelopmentPipeline:
 
     def load_training_data(self):
         """Step 1: Load tick data and construct bars."""
-        self.bar_data = load_and_prepare_training_data(
-            symbol=self.symbol,
-            start_date=self.train_start,
-            end_date=self.train_end,
-            **self.data_config,
-        )
+        self.bar_data = load_and_prepare_training_data(**self.data_config)
         self.completed_steps["data_loading"] = True
 
     def engineer_features(self):
@@ -1593,9 +1586,10 @@ class ModelDevelopmentPipeline:
 
     def compute_sample_weights(self):
         """Step 4: Compute optimal sample weights."""
-        self.sample_weight, self.weight_cv_results, self.best_weighting_scheme = (
+        self.sample_weight, self.weight_cv_results = (
             find_optimal_sample_weight(self.bar_data.index, self.events, self.features)
         )
+        self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
         self.completed_steps["weight_computation"] = True
 
     def add_meta_features(self):
@@ -1623,17 +1617,14 @@ class ModelDevelopmentPipeline:
     def train_model(self):
         """Step 6: Train model with cross-validation."""
         # Configure pipeline
-        self.model_params["pipe_clf"] = make_custom_pipeline(
-            self.model_params["pipe_clf"]
-        )
-        pipe = self.model_params["pipe_clf"]
-        self.base_estimator = pipe.steps[-1][1]
+        self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
+        pipe = clone(self.model_params["pipe_clf"])
 
-        if is_tree(self.base_estimator):
+        if is_tree(pipe.steps[-1][-1]):
             av_uniqueness = self.events["tW"].mean()
             pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
 
-        if isinstance(pipe, SequentiallyBootstrappedBaggingClassifier):
+        if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
             pipe = set_pipeline_params(
                 samples_info_sets=self.events["t1"],
                 price_bars_index=self.bar_data.index,
@@ -1681,9 +1672,7 @@ class ModelDevelopmentPipeline:
             "label_distribution": value_counts_data(self.events["bin"]),
             "average_uniqueness": self.events["tW"].mean(),
             "sample_weight_stats": (
-                self.sample_weight.describe().to_dict()
-                if self.sample_weight is not None
-                else None
+                self.sample_weight.describe().to_dict() if self.sample_weight is not None else None
             ),
             "events_count": len(self.events),
             "features_shape": self.preprocessed_features.shape,
@@ -1747,9 +1736,7 @@ class ModelDevelopmentPipeline:
                         "Type": dtype,
                         "Rows": shape[0] if isinstance(shape, tuple) else shape,
                         "Columns": (
-                            shape[1]
-                            if isinstance(shape, tuple) and len(shape) > 1
-                            else columns
+                            shape[1] if isinstance(shape, tuple) and len(shape) > 1 else columns
                         ),
                         "Memory (MB)": (
                             data.memory_usage(deep=True).sum() / (1024**2)
@@ -1792,46 +1779,8 @@ class ModelDevelopmentPipeline:
         plt.title(f"Top {top_n} Feature Importance - {self.symbol}")
         plt.tight_layout()
         plt.show()
-
-    def export_results(self, export_dir: Union[str, Path]):
-        """Export all pipeline results to files."""
-        export_dir = Path(export_dir)
-        export_dir.mkdir(parents=True, exist_ok=True)
-
-        # Export data
-        if self.bar_data is not None:
-            self.bar_data.to_parquet(export_dir / "bar_data.parquet")
-
-        if self.features is not None:
-            self.features.to_parquet(export_dir / "features.parquet")
-
-        if self.preprocessed_features is not None:
-            self.preprocessed_features.to_parquet(
-                export_dir / "preprocessed_features.parquet"
-            )
-
-        if self.events is not None:
-            self.events.to_parquet(export_dir / "events.parquet")
-
-        # Export metadata
-        with open(export_dir / "config.json", "w") as f:
-            json.dump(self.config, f, indent=2, default=str)
-
-        with open(export_dir / "metrics.json", "w") as f:
-            metrics_serializable = {}
-            for key, value in self.metrics.items():
-                if isinstance(value, pd.DataFrame):
-                    metrics_serializable[key] = value.to_dict(orient="records")
-                elif hasattr(value, "__dict__"):
-                    metrics_serializable[key] = str(value)
-                else:
-                    metrics_serializable[key] = value
-            json.dump(metrics_serializable, f, indent=2, default=str)
-
-        # Export feature importance
-        if self.feature_importance is not None:
-            self.feature_importance.to_csv(
-                export_dir / "feature_importance.csv", index=False
-            )
-
-        logger.info(f"Exported all results to {export_dir}")
+        plt.yticks(range(len(top_features)), top_features["feature"][::-1])
+        plt.xlabel("Importance")
+        plt.title(f"Top {top_n} Feature Importance - {self.symbol}")
+        plt.tight_layout()
+        plt.show()

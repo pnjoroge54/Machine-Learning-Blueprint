@@ -14,12 +14,8 @@ from sklearn.ensemble._bagging import BaseBagging
 from sklearn.ensemble._base import _partition_estimators
 from sklearn.metrics import accuracy_score, r2_score
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.utils import (
-    check_array,
-    check_consistent_length,
-    check_random_state,
-    check_X_y,
-)
+from sklearn.utils import (check_array, check_consistent_length,
+                           check_random_state, check_X_y)
 from sklearn.utils.random import sample_without_replacement
 from sklearn.utils.validation import has_fit_parameter
 
@@ -258,7 +254,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     Examples
     --------
     >>> from sklearn.tree import DecisionTreeClassifier
-    >>> base = DecisionTreeClassifier(max_depth=6)
+    >>> base = DecisionTreeClassifier(max_depth=4)
     >>> ens = SequentiallyBootstrappedBaseBagging(
     ...     base_estimator=base,
     ...     n_estimators=50,
@@ -588,7 +584,7 @@ class SequentiallyBootstrappedBaggingClassifier(
                 class_weight="balanced",
                 max_features="sqrt",
                 min_weight_fraction_leaf=0.05,
-                max_depth=6,
+                max_depth=4,
                 min_impurity_decrease=0.0001,
             )
         )
@@ -809,7 +805,7 @@ class SequentiallyBootstrappedBaggingRegressor(
             default=DecisionTreeRegressor(
                 max_features="sqrt",
                 min_weight_fraction_leaf=0.05,
-                max_depth=6,
+                max_depth=4,
                 min_impurity_decrease=0.0001,
             )
         )

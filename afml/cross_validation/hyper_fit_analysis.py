@@ -4,7 +4,7 @@ import warnings
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,15 +15,6 @@ from IPython.display import Markdown, display
 def _get_param_columns(cv_results: pd.DataFrame) -> List[str]:
     """Extract parameter columns from cv_results."""
     return [col for col in cv_results.columns if col.startswith("param_")]
-
-
-def _get_param_value(
-    cv_results: pd.DataFrame, param_name: str, row_idx: int = 0
-) -> Any:
-    """Safely get parameter value from cv_results."""
-    if param_name in cv_results.columns:
-        return cv_results.iloc[row_idx][param_name]
-    return None
 
 
 def _safe_groupby_param(
@@ -510,7 +501,7 @@ def analyze_hyperparameter_results(
 
     # Save plot to analysis dict
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    plt.savefig(buf, format="png", dpi=100, bbox_inches="tight")
     buf.seek(0)
     analysis["plots"]["main_comparison"] = base64.b64encode(buf.read()).decode("utf-8")
     plt.close()
@@ -535,11 +526,11 @@ def analyze_hyperparameter_results(
 
             # Risk assessment
             if best_std_val > 0.04:
-                print(f"\n⚠️  RISK WARNING: High variance in CV folds")
-                print(f"   Strategy may perform inconsistently in live trading")
+                print("\n⚠️  RISK WARNING: High variance in CV folds")
+                print("   Strategy may perform inconsistently in live trading")
             elif best_std_val < 0.02:
-                print(f"\n✅ LOW RISK: Excellent consistency across CV folds")
-                print(f"   Strategy likely to perform similarly in live trading")
+                print("\n✅ LOW RISK: Excellent consistency across CV folds")
+                print("   Strategy likely to perform similarly in live trading")
 
     # 10. FINAL SUMMARY
     analysis["summary"] = {
@@ -560,7 +551,7 @@ def analyze_hyperparameter_results(
         ),
     }
 
-    print(f"\n" + "=" * 80)
+    print("\n" + "=" * 80)
     print("ANALYSIS COMPLETE")
     print("=" * 80)
 
@@ -793,6 +784,8 @@ def generate_hyperparameter_markdown_report(
         config_descriptions = {
             "strategy": "Trading strategy name",
             "symbol": "Trading instrument",
+            "training_start": "Training period start date",
+            "training_end": "Training period end date",
             "account_name": "Trading account identifier",
             "bar_type": "Bar type (tick/volume/time)",
             "bar_size": "Bar timeframe",
@@ -841,9 +834,6 @@ def generate_hyperparameter_markdown_report(
             f"- **Best Model Performance**: `{best_score:.4f} ± {best_std:.4f}`"
         )
         md_content.append(f"- **Risk Level**: `{risk_level}`")
-        md_content.append(
-            f"- **Expected Accuracy**: `~{summary.get('expected_accuracy', 0) * 100:.1f}%`"
-        )
         md_content.append("")
 
         if risk_level == "HIGH":
@@ -975,7 +965,7 @@ def generate_hyperparameter_markdown_report(
         md_content.append("")
 
         for param in param_columns[:3]:  # Show top 3 parameters
-            param_name = param.replace("param_", "")
+            param_name = param.replace("param_", "").split("__")[-1]
 
             param_stats = _safe_groupby_param(cv_results, param)
 
@@ -1126,19 +1116,65 @@ def generate_hyperparameter_markdown_report(
         md_content.append("")
 
         top_models_detailed = analysis_results["top_models"].head(10).copy()
-
-        md_content.append("| Rank | Mean Score | Std Score | Fit Time | Parameters |")
-        md_content.append("|------|------------|-----------|----------|------------|")
-
-        for i, (_, row) in enumerate(top_models_detailed.iterrows()):
-            params = str(row.get("params", ""))
-            if len(params) > 80:
-                params = params[:77] + "..."
-
-            md_content.append(
-                f"| {i + 1} | `{row[target_metric]:.4f}` | `{row.get('std_test_score', 0):.4f}` | `{row.get('mean_fit_time', 0):.2f}s` | `{params}` |"
-            )
-
+        
+        # Get individual parameter columns
+        param_columns = _get_param_columns(cv_results)
+        
+        # Define which columns to show
+        # Core metrics first, then individual parameters
+        core_columns = [
+            target_metric,
+            'std_test_score',
+            'mean_fit_time'
+        ]
+        
+        # Filter to only include columns that exist
+        existing_core_columns = [col for col in core_columns if col in top_models_detailed.columns]
+        existing_param_columns = [col for col in param_columns if col in top_models_detailed.columns]
+        
+        # Remove 'param_' prefix for display
+        display_param_columns = [col.replace('param_', '').split('__')[-1] for col in existing_param_columns]
+        
+        # Create header
+        headers = ["Rank"] + existing_core_columns + display_param_columns
+        md_content.append("| " + " | ".join(headers) + " |")
+        
+        # Create separator
+        separators = ["---"] * len(headers)
+        md_content.append("| " + " | ".join(separators) + " |")
+        
+        # Add rows
+        for i, (_, row) in enumerate(top_models_detailed.iterrows(), 1):
+            row_values = [str(i)]  # Rank
+            
+            # Add core metrics
+            for col in existing_core_columns:
+                if col == target_metric:
+                    row_values.append(f"`{row[col]:.4f}`")
+                elif col == 'mean_fit_time':
+                    row_values.append(f"`{row[col]:.2f}s`")
+                elif col == 'std_test_score':
+                    row_values.append(f"`{row[col]:.4f}`")
+                else:
+                    row_values.append(f"`{row[col]}`")
+            
+            # Add individual parameters
+            for param_col in existing_param_columns:
+                value = row[param_col]
+                # Format based on type
+                if isinstance(value, (int, np.integer)):
+                    row_values.append(f"`{value}`")
+                elif isinstance(value, (float, np.float_)):
+                    # For floats, show 4 decimal places if < 1, otherwise no decimals
+                    if abs(value) < 1:
+                        row_values.append(f"`{value:.4f}`")
+                    else:
+                        row_values.append(f"`{value:.0f}`")
+                else:
+                    row_values.append(f"`{value}`")
+            
+            md_content.append("| " + " | ".join(row_values) + " |")
+        
         md_content.append("")
 
     # Appendix
