@@ -1,6 +1,7 @@
 import sys
 import time
 from datetime import datetime, timedelta
+from itertools import product
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -16,12 +17,19 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
+from tqdm import tqdm
 
-from afml.cache.unified_cache_system import create_cacheable_param_grid
+from afml.cross_validation.hyper_fit import clf_hyper_fit
 
-from ..cache import (cacheable, get_cache_monitor, log_data_access,
-                     print_contamination_report)
+from ..cache import (
+    cacheable,
+    create_cacheable_param_grid,
+    get_cache_monitor,
+    log_data_access,
+    print_contamination_report,
+)
 from ..cross_validation import PurgedKFold, clf_hyper_fit_cached
+from ..cross_validation.cross_validation import ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import \
     generate_complete_hyperparameter_report
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
@@ -544,13 +552,14 @@ def create_feature_engineering_pipeline(
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: BaseStrategy,
-    target_lookback: int,
+    target_config: dict,
     profit_target: float = 1,
     stop_loss: float = 1,
     max_holding_period: Dict[str, int] = dict(days=1),
     min_ret: float = 0.0,
     vertical_barrier_zero: bool = True,
     filter_as_series: bool = True,
+    on_crossover: bool = True,
 ) -> pd.DataFrame:
     """
     Generate trading events using the triple-barrier method.
@@ -561,7 +570,7 @@ def generate_events_triple_barrier(
         Price bars with 'close' column.
     strategy : BaseStrategy
         Strategy instance implementing `generate_signals()`.
-    target_lookback : int
+    target_config : int
         Lookback window for volatility estimation.
     profit_target : float, default=1
         Profit-taking threshold multiplier.
@@ -575,7 +584,8 @@ def generate_events_triple_barrier(
         Set label to zero if vertical barrier is reached.
     filter_as_series : bool, default=True
         Pass volatility threshold as series instead of scalar.
-
+    on_crossover : bool, default=True
+        Whether strategy expects crossover for signal
     Returns
     -------
     pd.DataFrame
@@ -591,10 +601,18 @@ def generate_events_triple_barrier(
     """
     # Compute barriers
     close = data["close"]
-    target = get_daily_vol(close, target_lookback)
-    filter_threshold = target if filter_as_series else target.mean()
-    side, t_events = get_entries(strategy, data, filter_threshold)
+    target_func = target_config["func"]
+    target_params = target_config["params"]
+    target = target_func(close, target_params)
+
+    if strategy.get_objective() == "mean_reversion":
+        filter_threshold = target if filter_as_series else target.mean()
+    else:
+        filter_threshold = None
+
+    side, t_events = get_entries(strategy, data, filter_threshold, on_crossover)
     vb = add_vertical_barrier(t_events, close, **max_holding_period)
+
     events = triple_barrier_labels(
         close,
         target,
@@ -608,7 +626,9 @@ def generate_events_triple_barrier(
         drop=True,
         verbose=False,
     )
+
     events = get_event_weights(events, close)
+
     return events
 
 
@@ -799,6 +819,120 @@ def find_optimal_sample_weight(
     return weights, cv_results
 
 
+@cacheable()
+def get_optimal_sample_weight(
+    data_index: pd.DatetimeIndex,
+    events: pd.DataFrame,
+    features: pd.DataFrame,
+    cv_splits: int = 3,
+    n_iter: int = 10,
+) -> pd.Series:
+    """
+    Compute best sample weight with time decay.
+
+    Parameters
+    ----------
+    data_index: pd.DatetimeIndex
+        Price data index.
+    events : pd.DataFrame
+        Event labels with uniqueness weights.
+    features: pd.DataFrame
+        Training features
+    cv_splits : int, optional
+        Number of cross-validation splits (default: 3).
+    n_iter : int, optional
+        Number of random search iterations (default: 10).
+
+    Returns
+    -------
+    weights : pd.Series
+        Computed sample weights.
+    cv_results : dict
+        Cross-validation results.
+    """
+    valid_index = features.index.intersection(events.index)
+    cont = events.loc[valid_index]
+    X = features.loc[valid_index]
+    y = cont["bin"]
+
+    classifier = RandomForestClassifier(
+        criterion="entropy",
+        class_weight="balanced_subsample",
+        max_samples=cont["tW"].mean(),
+        max_depth=4,
+        min_weight_fraction_leaf=0.05,
+    )
+    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.02)
+    weights = [("return", cont["w"]), ("unweighted", None), ("uniqueness", cont["tW"])]
+    best_score = 0
+    cv_results = pd.DataFrame()
+
+    for scheme, weight in weights:
+        scores = ml_cross_val_score(
+            classifier,
+            X,
+            y,
+            cv_gen,
+            sample_weight_train=weight,
+            sample_weight_score=weight,
+            scoring=scoring,
+        )
+        score = scores.mean()
+        cv_results[scheme] = scores
+
+        if not np.isinf(score) and score > best_score:
+            best_score = score
+            best_weight = weight
+            best_scheme = scheme
+
+    # Apply decay factors for best weight
+    decay_factors = np.linspace(0.01, 0.95, n_iter // 2)
+    best_scheme_ = best_scheme
+    for decay, linear in tqdm(
+        product(decay_factors, [True, False]),
+        desc=f"{best_scheme.title()} Decay Optimization",
+        total=n_iter,
+    ):
+        if decay != 1.0:
+            decay_vec = get_weights_by_time_decay_optimized(
+                triple_barrier_events=cont,
+                close_index=data_index,
+                last_weight=decay,
+                linear=linear,
+                av_uniqueness=cont["tW"],
+            )
+            weight = best_weight * decay_vec
+            scores = ml_cross_val_score(
+                classifier,
+                X,
+                y,
+                cv_gen,
+                sample_weight_train=weight,
+                sample_weight_score=weight,
+                scoring=scoring,
+            )
+            score = scores.mean()
+            scheme = f"{best_scheme_}_{'linear' if linear else 'exp'}_{decay}"
+            cv_results[scheme] = scores
+
+            if not np.isinf(score) and score > best_score:
+                best_score = score
+                best_weight = weight
+                best_scheme = scheme
+
+    logger.info(f"Best sample weight scheme: {best_scheme}")
+
+    cv_results = {
+        "best_score": best_score,
+        "cv_results": cv_results,
+        "scoring": scoring,
+        "best_scheme": best_scheme,
+    }
+
+    return best_weight, cv_results
+
+
 @njit(parallel=True, fastmath=True, cache=True)
 def _rolling_metrics_numba(y_true, y_pred, weights, window):
     """Numba-accelerated rolling metrics calculation."""
@@ -940,7 +1074,7 @@ def train_model_with_cv(
     t1 = cont["t1"]
     w = sample_weight.loc[valid_index]
 
-    best_model, cv_results = clf_hyper_fit_cached(
+    best_model, cv_results = clf_hyper_fit(
         features=X,
         labels=y,
         t1=t1,
@@ -995,6 +1129,14 @@ class ModelDevelopmentPipeline:
             Feature engineering configuration.
         label_config : dict
             Triple-barrier labeling configuration.
+            - target_config : dict
+                Volatility target configuration.
+            - profit_target : float
+            - stop_loss : float
+            - max_holding_period : int
+            - min_ret : float
+            - vertical_barrier_zero : bool
+            - filter_as_series : bool
         model_params : dict
             Model training configuration.
         base_dir: str
@@ -1018,7 +1160,13 @@ class ModelDevelopmentPipeline:
         self.config["strategy"] = strategy.get_strategy_name()
         self.config["feature_func"] = feature_config["func"].__name__
         self.config["feature_params"] = feature_config["params"]
+
         self.config.update(label_config)
+        target_config = label_config["target_config"]
+        self.config["target_func"] = target_config["func"].__name__
+        self.config["target_params"] = target_config["params"]
+        self.config.pop("target_config")
+
         self.config.update(create_cacheable_param_grid(model_params))
 
         # Initialize file management and logging
@@ -1531,15 +1679,11 @@ class ModelDevelopmentPipeline:
         try:
             # Save model with metadata
             metadata = {
-                "cv_results": self.cv_results,
                 "strategy": self.strategy,
-                "feature_config": self.feature_config,
-                "feature_importance": self.feature_importance.to_dict("records"),
                 "feature_names": self._get_feature_names(),
-                "training_samples": len(self.bar_data),
+                "training_samples": len(self.events),
                 "best_weighting_scheme": self.best_weighting_scheme,
                 "pipeline_version": "3.0",
-                "weight_cv_results": self.weight_cv_results,
             }
             self.file_manager.save_model(self.best_model, metadata)
 
@@ -1554,7 +1698,7 @@ class ModelDevelopmentPipeline:
 
             # Save metrics
             if self.metrics:
-                self.file_manager.save_metrics(self.metrics)
+                self.file_manager.save_object(self.metrics, "metrics")
 
             if self.export_onxx and self.best_model is not None:
                 self.file_manager.save_model_as_onxx(self.best_model, self._get_feature_names())
@@ -1586,8 +1730,8 @@ class ModelDevelopmentPipeline:
 
     def compute_sample_weights(self):
         """Step 4: Compute optimal sample weights."""
-        self.sample_weight, self.weight_cv_results = (
-            find_optimal_sample_weight(self.bar_data.index, self.events, self.features)
+        self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
+            self.bar_data.index, self.events, self.features
         )
         self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
         self.completed_steps["weight_computation"] = True
@@ -1626,6 +1770,7 @@ class ModelDevelopmentPipeline:
 
         if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
             pipe = set_pipeline_params(
+                pipe,
                 samples_info_sets=self.events["t1"],
                 price_bars_index=self.bar_data.index,
             )
@@ -1774,11 +1919,6 @@ class ModelDevelopmentPipeline:
         plt.style.use("dark_background")
         plt.figure(figsize=(12, 8))
         plt.barh(range(len(top_features)), top_features["importance"][::-1])
-        plt.yticks(range(len(top_features)), top_features["feature"][::-1])
-        plt.xlabel("Importance")
-        plt.title(f"Top {top_n} Feature Importance - {self.symbol}")
-        plt.tight_layout()
-        plt.show()
         plt.yticks(range(len(top_features)), top_features["feature"][::-1])
         plt.xlabel("Importance")
         plt.title(f"Top {top_n} Feature Importance - {self.symbol}")
