@@ -19,8 +19,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from afml.cross_validation.hyper_fit import clf_hyper_fit
-
 from ..cache import (
     cacheable,
     create_cacheable_param_grid,
@@ -28,7 +26,7 @@ from ..cache import (
     log_data_access,
     print_contamination_report,
 )
-from ..cross_validation import PurgedKFold, clf_hyper_fit_cached
+from ..cross_validation import PurgedKFold, clf_hyper_fit
 from ..cross_validation.cross_validation import ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import \
     generate_complete_hyperparameter_report
@@ -44,7 +42,6 @@ from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
 from ..util.misc import date_conversion, value_counts_data
 from ..util.pipelines import make_custom_pipeline, set_pipeline_params
-from ..util.volatility import get_daily_vol
 from .utils import ModelFileManager
 
 
@@ -406,32 +403,6 @@ class TickDataLoader:
 loader = TickDataLoader()
 
 
-# def generate_features_with_dual_price(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
-#     """
-#     Generate features using both bid and ask prices separately.
-#     Returns features for analysis and conservative estimates for trading.
-#     """
-#     # For signal generation (use mid)
-#     df["mid_price"] = (df["bid"] + df["ask"]) / 2
-#     mid_features = calculate_features(df, price_col="mid_price")
-
-#     # For conservative trading estimates (use worse case)
-#     # Assume you buy at ask, sell at bid
-#     df["conservative_long"] = df["ask"]  # Entry for longs
-#     df["conservative_short"] = df["bid"]  # Entry for shorts
-
-#     # For bid-ask spread analysis
-#     df["spread"] = df["ask"] - df["bid"]
-#     df["spread_bps"] = df["spread"] / df["mid_price"] * 10000
-
-#     return {
-#         "mid_features": mid_features,  # For signal generation
-#         "bid_features": calculate_features(df, "bid"),
-#         "ask_features": calculate_features(df, "ask"),
-#         "spread_features": df[["spread", "spread_bps"]],
-#     }
-
-
 @cacheable()
 def get_bar_size(tick_df, bar_size):
     """
@@ -603,7 +574,7 @@ def generate_events_triple_barrier(
     close = data["close"]
     target_func = target_config["func"]
     target_params = target_config["params"]
-    target = target_func(close, target_params)
+    target = target_func(close=close, **target_params)
 
     if strategy.get_objective() == "mean_reversion":
         filter_threshold = target if filter_as_series else target.mean()
@@ -723,7 +694,7 @@ def weighted_estimator(base_estimator, events, data_index):
     return _WeightedEstimator(base_estimator=base_estimator, events=events, data_index=data_index)
 
 
-@cacheable(time_aware=True)
+@cacheable()
 def find_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
@@ -824,7 +795,7 @@ def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
     features: pd.DataFrame,
-    cv_splits: int = 3,
+    cv_splits: int = 5,
     n_iter: int = 10,
 ) -> pd.Series:
     """
@@ -839,7 +810,7 @@ def get_optimal_sample_weight(
     features: pd.DataFrame
         Training features
     cv_splits : int, optional
-        Number of cross-validation splits (default: 3).
+        Number of cross-validation splits (default: 5).
     n_iter : int, optional
         Number of random search iterations (default: 10).
 
@@ -864,11 +835,15 @@ def get_optimal_sample_weight(
     )
     scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
     cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.02)
-    weights = [("return", cont["w"]), ("unweighted", None), ("uniqueness", cont["tW"])]
+    weights = [
+        ("return", cont["w"]),
+        ("unweighted", pd.Series(1.0, index=cont.index)),
+        ("uniqueness", cont["tW"]),
+    ]
     best_score = 0
     cv_results = pd.DataFrame()
 
-    for scheme, weight in weights:
+    for scheme, weight in tqdm(weights, desc="Analyzing weighting schemes", total=len(weights)):
         scores = ml_cross_val_score(
             classifier,
             X,
@@ -886,42 +861,74 @@ def get_optimal_sample_weight(
             best_weight = weight
             best_scheme = scheme
 
-    # Apply decay factors for best weight
-    decay_factors = np.linspace(0.01, 0.95, n_iter // 2)
-    best_scheme_ = best_scheme
-    for decay, linear in tqdm(
-        product(decay_factors, [True, False]),
-        desc=f"{best_scheme.title()} Decay Optimization",
-        total=n_iter,
-    ):
-        if decay != 1.0:
-            decay_vec = get_weights_by_time_decay_optimized(
-                triple_barrier_events=cont,
-                close_index=data_index,
-                last_weight=decay,
-                linear=linear,
-                av_uniqueness=cont["tW"],
-            )
-            weight = best_weight * decay_vec
-            scores = ml_cross_val_score(
-                classifier,
-                X,
-                y,
-                cv_gen,
-                sample_weight_train=weight,
-                sample_weight_score=weight,
-                scoring=scoring,
-            )
-            score = scores.mean()
-            scheme = f"{best_scheme_}_{'linear' if linear else 'exp'}_{decay}"
-            cv_results[scheme] = scores
+    # # Apply decay factors for best weight
+    # decay_factors = np.linspace(0.01, 0.95, n_iter // 2)
+    # best_scheme_ = best_scheme
+    # for decay, linear in tqdm(
+    #     product(decay_factors, [True, False]),
+    #     desc=f"{best_scheme.title()} Decay Optimization",
+    #     total=n_iter,
+    # ):
+    #     if decay != 1.0:
+    #         decay_vec = get_weights_by_time_decay_optimized(
+    #             triple_barrier_events=cont,
+    #             close_index=data_index,
+    #             last_weight=decay,
+    #             linear=linear,
+    #             av_uniqueness=cont["tW"],
+    #         )
+    #         weight = best_weight * decay_vec
+    #         scores = ml_cross_val_score(
+    #             classifier,
+    #             X,
+    #             y,
+    #             cv_gen,
+    #             sample_weight_train=weight,
+    #             sample_weight_score=weight,
+    #             scoring=scoring,
+    #         )
+    #         score = scores.mean()
+    #         scheme = f"{best_scheme_}_{'linear' if linear else 'exp'}_{decay}"
+    #         cv_results[scheme] = scores
 
-            if not np.isinf(score) and score > best_score:
-                best_score = score
-                best_weight = weight
-                best_scheme = scheme
+    #         if not np.isinf(score) and score > best_score:
+    #             best_score = score
+    #             best_weight = weight
+    #             best_scheme = scheme
 
+    # logger.info(f"Best sample weight scheme: {best_scheme}")
+
+    est = weighted_estimator(classifier, cont, data_index)
+    param_distributions = {
+        "scheme": [best_scheme],
+        "decay": uniform(0, 1),  # decay factor between 0 and 1 inclusive
+        "linear": [True, False],
+    }
+    gs = RandomizedSearchCV(
+        estimator=est,
+        param_distributions=param_distributions,
+        n_iter=n_iter,
+        cv=cv_gen,
+        scoring=scoring,
+        n_jobs=-1,
+        random_state=42,
+        refit=False,
+    )
+    gs.fit(X, y)
+
+    scheme, decay, linear = [gs.best_params_[k] for k in ["scheme", "decay", "linear"]]
+    best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay}"
     logger.info(f"Best sample weight scheme: {best_scheme}")
+
+    decay_vec = get_weights_by_time_decay_optimized(
+        triple_barrier_events=cont,
+        close_index=data_index,
+        last_weight=decay,
+        linear=linear,
+        av_uniqueness=cont["tW"],
+    )
+
+    best_weight *= decay_vec
 
     cv_results = {
         "best_score": best_score,
@@ -1167,8 +1174,6 @@ class ModelDevelopmentPipeline:
         self.config["target_params"] = target_config["params"]
         self.config.pop("target_config")
 
-        self.config.update(create_cacheable_param_grid(model_params))
-
         # Initialize file management and logging
         self.file_manager = ModelFileManager(base_dir)
         self.file_paths = self.file_manager.setup_model_directory(self.config)
@@ -1215,7 +1220,7 @@ class ModelDevelopmentPipeline:
         logger.add(
             self.log_file,
             level="INFO",
-            format="{time:YYYY-MM-DD HH:mm:ss} | {name} | {level} | {message}",
+            format="{time:YYYY-MM-DD HH:mm:ss:SS} | {name} | {level} | {message}",
             rotation="10 MB",
             retention="7 days",
             enqueue=True,
@@ -1223,9 +1228,10 @@ class ModelDevelopmentPipeline:
 
         # Console sink (colors enabled automatically)
         logger.add(
-            sys.stdout,
+            # sys.stdout,
+            lambda msg: tqdm.write(msg, end=""),
             level="DEBUG",
-            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            format="<green>{time:YYYY-MM-DD HH:mm:ss:SS}</green> | "
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{level}</level> | "
             "<yellow>{message}</yellow>",
@@ -1680,10 +1686,13 @@ class ModelDevelopmentPipeline:
             # Save model with metadata
             metadata = {
                 "strategy": self.strategy,
+                "feature_config": self.feature_config,
                 "feature_names": self._get_feature_names(),
+                "feature_count": len(self._get_feature_names()),
                 "training_samples": len(self.events),
                 "best_weighting_scheme": self.best_weighting_scheme,
                 "pipeline_version": "3.0",
+                "created_by": "AFML Production Pipeline",
             }
             self.file_manager.save_model(self.best_model, metadata)
 
@@ -1701,7 +1710,9 @@ class ModelDevelopmentPipeline:
                 self.file_manager.save_object(self.metrics, "metrics")
 
             if self.export_onxx and self.best_model is not None:
-                self.file_manager.save_model_as_onxx(self.best_model, self._get_feature_names())
+                self.file_manager.save_model_as_onxx(
+                    self.best_model, self._get_feature_names(), metadata
+                )
 
             logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
 
