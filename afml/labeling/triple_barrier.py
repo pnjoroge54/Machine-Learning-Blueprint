@@ -187,7 +187,7 @@ def get_events(
         {"t1": vertical_barrier_times, "trgt": target, "side": side}, axis=1
     )
     events = events.dropna(subset=["trgt"])
-    events[["pt", "sl"]] = np.full((events.shape[0], 2), pt_sl, dtype="int8")
+    events[["pt", "sl"]] = np.full((events.shape[0], 2), pt_sl, dtype="float32")
 
     # Apply Triple Barrier
     first_touch_dates = apply_pt_sl_on_t1_optimized(close, events, pt_sl)
@@ -317,8 +317,8 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
     Compute event's outcome (including side information, if provided).
     events is a DataFrame where:
 
-    Now the possible values for labels in out['bin'] are {0,1}, as opposed to whether to take the bet or pass,
-    a purely binary prediction. When the predicted label the previous feasible values {−1,0,1}.
+    Now the possible values for labels in out['bin'] are {0,1}, whether to take the bet or pass,
+    a purely binary prediction, as opposed to the previous feasible values {−1,0,1}.
     The ML algorithm will be trained to decide is 1, we can use the probability of this secondary prediction
     to derive the size of the bet, where the side (sign) of the position has been set by the primary model.
 
@@ -368,14 +368,14 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
         )
     else:
         # Label is the sign of the return
-        out_df["bin"] = np.where(out_df["ret"] > 0, 1, -1).astype("int8")
+        out_df["bin"] = np.where(out_df["ret"].values > 0, 1, -1).astype("int8")
 
     # Meta labeling: label incorrect events with a 0
     if "side" in events:
-        out_df.loc[out_df["ret"] <= 0, "bin"] = 0
+        out_df.loc[out_df["ret"].values <= 0, "bin"] = 0
 
     # Add the side to the output. This is useful for when a meta label model must be fit
-    if "side" in triple_barrier_events.columns:
+    if "side" in triple_barrier_events:
         out_df["side"] = events["side"].astype("int8")
 
     return out_df
