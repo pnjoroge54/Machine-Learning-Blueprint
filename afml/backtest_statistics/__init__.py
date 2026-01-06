@@ -6,11 +6,13 @@ from .backtests import CampbellBacktesting
 from .meta_labeling_analysis import (
     analyze_signal_quality,
     calculate_risk_adjusted_metrics,
-    compare_strategies,
     evaluate_meta_labeling_performance,
+    get_validation_metrics,
+)
+from .meta_labeling_analysis_reports import (
+    compare_strategies,
     generate_complete_meta_labeling_report,
     generate_summary_report,
-    get_validation_metrics,
     plot_strategy_comparison,
 )
 from .perfomance_statistics import (
@@ -32,6 +34,7 @@ from .performance_analysis import (
 )
 
 __all__ = [
+    "analyze_signal_quality",
     "CampbellBacktesting",
     "calculate_performance_metrics",
     "get_annualization_factors",
@@ -53,4 +56,5 @@ __all__ = [
     "plot_strategy_comparison",
     "generate_complete_meta_labeling_report",
     "generate_summary_report",
+    "get_validation_metrics",
 ]
