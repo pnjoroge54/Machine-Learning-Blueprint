@@ -97,9 +97,10 @@ def _make_bar_type_grouper(
         return bar_group, bar_size, None
 
     # Dynamic bar sizing
-    if isinstance(bar_size, str) and bar_type == "tick":
+    if bar_type == "tick" and isinstance(bar_size, str):
         bar_size = calculate_ticks_per_period(df, bar_size)
-    elif not isinstance(bar_size, int):
+
+    if not isinstance(bar_size, int):
         raise NotImplementedError(
             f"{bar_type} bars require integer bar_size, but you input '{bar_size}'"
         )

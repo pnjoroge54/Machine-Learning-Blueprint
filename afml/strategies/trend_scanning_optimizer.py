@@ -40,8 +40,16 @@ class TrendScanningEvaluator:
         # Strategy-specific objective weights
         # NOTE: ParetoOptimizer expects to minimize the last weight.
         self.objective_weights = {
-            "mean_reversion": {"sortino_ratio": 0.4, "win_rate": 0.3, "ulcer_index": -0.3},
-            "trend_following": {"calmar_ratio": 0.4, "profit_factor": 0.3, "ulcer_index": -0.3},
+            "mean_reversion": {
+                "sortino_ratio": 0.4,
+                "win_rate": 0.3,
+                "ulcer_index": -0.3,
+            },
+            "trend_following": {
+                "calmar_ratio": 0.4,
+                "profit_factor": 0.3,
+                "ulcer_index": -0.3,
+            },
         }
 
         # Create data fingerprint for cache invalidation
@@ -107,7 +115,11 @@ class TrendScanningEvaluator:
     ) -> pd.Series:
         """Compute performance metrics from strategy returns"""
         return calculate_label_metrics(
-            self.data, self.target, self.primary_signals, events, self.trading_hours_per_day
+            self.data,
+            self.target,
+            self.primary_signals,
+            events,
+            self.trading_hours_per_day,
         )
 
     def calculate_strategy_metrics(self, events: pd.DataFrame) -> pd.Series:

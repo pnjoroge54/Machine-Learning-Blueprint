@@ -12,31 +12,16 @@ import warnings
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from numba import njit, prange
 from tqdm import tqdm
 
 from ..cache import cacheable
 from ..production.model_development import load_and_prepare_training_data
 from ..strategies.trading_strategies import BaseStrategy
-
-try:
-    from numba import njit, prange
-
-    NUMBA_AVAILABLE = True
-except ImportError:
-    NUMBA_AVAILABLE = False
-
-    def njit(*args, **kwargs):
-        def decorator(func):
-            return func
-
-        return decorator if not args else decorator(args[0])
-
-    def prange(x):
-        return range(x)
 
 
 @dataclass
@@ -187,7 +172,7 @@ def estimate_ou_parameters(
 # ============================================================================
 
 
-@njit
+@njit(cache=True)
 def simulate_ou_path(
     phi: float, forecast: float, sigma: float, seed: float, max_hp: int
 ) -> Tuple[np.ndarray, int]:
@@ -214,7 +199,7 @@ def simulate_ou_path(
     return path, max_hp
 
 
-@njit
+@njit(cache=True)
 def check_barrier_hit(
     path: np.ndarray, profit_taking: float, stop_loss: float, max_hp: int, seed: float
 ) -> Tuple[float, int]:
@@ -245,7 +230,7 @@ def check_barrier_hit(
     return path[-1] - seed, len(path) - 1
 
 
-@njit(parallel=True)
+@njit(cache=True, parallel=True)
 def simulate_barrier_outcomes(
     phi: float,
     forecast: float,
@@ -334,30 +319,16 @@ def optimize_barriers(
 
     for pt, sl in tqdm(product(pt_scaled, sl_scaled), total=total_combinations, desc="Progress"):
         # Run Monte Carlo simulations
-        if NUMBA_AVAILABLE:
-            returns, holding_periods = simulate_barrier_outcomes(
-                ou_params.phi,
-                ou_params.forecast,
-                ou_params.sigma,
-                seed,
-                pt,
-                sl,
-                n_iter,
-                max_holding_period,
-            )
-        else:
-            # Fallback without numba
-            returns = []
-            holding_periods = []
-            for _ in tqdm(range(n_iter), total=total_combinations, desc="Progress:"):
-                path, _ = simulate_ou_path(
-                    ou_params.phi, ou_params.forecast, ou_params.sigma, seed, max_holding_period
-                )
-                exit_ret, hp = check_barrier_hit(path, pt, sl, max_holding_period, seed)
-                returns.append(exit_ret)
-                holding_periods.append(hp)
-            returns = np.array(returns)
-            holding_periods = np.array(holding_periods)
+        returns, holding_periods = simulate_barrier_outcomes(
+            ou_params.phi,
+            ou_params.forecast,
+            ou_params.sigma,
+            seed,
+            pt,
+            sl,
+            n_iter,
+            max_holding_period,
+        )
 
         # Calculate metrics
         mean_ret = np.mean(returns)
@@ -405,16 +376,9 @@ def optimize_barriers(
         print("\n" + "=" * 70)
         print("OPTIMAL BARRIERS FOUND")
         print("=" * 70)
-        print(
-            f"Profit Taking: {optimal.profit_taking:.4f} "
-            f"({optimal.profit_taking / ou_params.sigma:.2f}σ)"
-        )
-        print(
-            f"Stop Loss:     {optimal.stop_loss:.4f} ({optimal.stop_loss / ou_params.sigma:.2f}σ)"
-        )
-        print(
-            f"Max Bars:      {max_holding_period:,}"
-        )
+        print(f"Profit Taking: {optimal.profit_taking:.4f} ({optimal.pt_sigma_multiple:.2f}σ)")
+        print(f"Stop Loss:     {optimal.stop_loss:.4f} ({optimal.sl_sigma_multiple:.2f}σ)")
+        print(f"Max Bars:      {max_holding_period:,}")
 
         print(f"Sharpe Ratio:  {optimal.sharpe_ratio:.4f}")
         print(f"Win Rate:      {optimal.win_rate:.2%}")
@@ -646,8 +610,55 @@ def generate_optimal_label_config(
     vertical_barrier_zero: bool = False,
     filter_as_series: bool = False,
     verbose: bool = True,
-) -> tuple[dict[str, float | dict[str, Any]], BarrierOptimizationResult]:
-    """Generate an optimal label configuration from synthetic data."""
+) -> Tuple[Dict[str, float | Dict[str, Any]], BarrierOptimizationResult]:
+    """
+    Generate an optimal label configuration from synthetic data.
+
+    Args:
+        data_config: Configuration to obtain OHLCV DataFrame
+        strategy: Instance of BaseStrategy (e.g., BollingerStrategy)
+        forecast_window: Window for rolling calculations (default: 20)
+            - For mean reversion: Use your strategy's lookback (e.g., Bollinger window)
+            - For trend following: Use your trend detection window
+            - For pairs trading: Use half-life of cointegration
+        forecast_method: Method to calculate E0[Pi,Ti] (see estimate_ou_parameters)
+            - 'signal_based': Direction * expected move (DEFAULT, recommended)
+            - 'zero': Random walk assumption
+            - 'mean_return': Historical mean
+            - 'moving_average': Rolling MA
+            - 'custom': User-provided value
+        custom_forecast: Custom forecast value (required if forecast_method='custom')
+        pt_range: Profit-taking range (multiples of sigma)
+        sl_range: Stop-loss range (multiples of sigma)
+        max_holding_period: Vertical barrier (max bars held, default: 100)
+        min_ret: Minimum return to generate triple-barrier events
+        n_iter: Monte Carlo iterations (default: 100000)
+        vertical_barrier_zero: vertical_barrier_zero setting for label config
+        filter_as_series: filter_as_series setting for label config
+        verbose: Print progress
+
+    Returns:
+        BarrierOptimizationResult with optimal barriers and full grid
+
+    Example:
+        # For Bollinger Bands (mean reversion)
+        strategy = BollingerStrategy(window=20, std=2.0)
+        result = optimize_strategy_barriers(
+            strategy=strategy,
+            data=data,
+            forecast_method='signal_based',  # Recommended
+            forecast_window=20  # Match Bollinger window
+        )
+
+        # For MA Crossover (trend following)
+        strategy = MACrossoverStrategy(fast=10, slow=30)
+        result = optimize_strategy_barriers(
+            strategy=strategy,
+            data=data,
+            forecast_method='signal_based',
+            forecast_window=30  # Use slower MA window
+        )
+    """
 
     data = load_and_prepare_training_data(**data_config)
 
@@ -667,7 +678,6 @@ def generate_optimal_label_config(
     optimal_barriers = result.optimal
 
     label_config = dict(
-        target_lookback=forecast_window,
         profit_target=optimal_barriers.pt_sigma_multiple,
         stop_loss=optimal_barriers.sl_sigma_multiple,
         max_holding_period=dict(num_bars=max_holding_period),
@@ -682,6 +692,7 @@ def generate_optimal_label_config(
 # ============================================================================
 # VISUALIZATION
 # ============================================================================
+
 
 def plot_barrier_heatmap(
     result,
@@ -712,10 +723,7 @@ def plot_barrier_heatmap(
 
     # Create pivot table for heatmap
     pivot = df.pivot_table(
-        values=metric,
-        index="sl_sigma_multiple",
-        columns="pt_sigma_multiple",
-        aggfunc="mean"
+        values=metric, index="sl_sigma_multiple", columns="pt_sigma_multiple", aggfunc="mean"
     )
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -768,12 +776,14 @@ def plot_barrier_heatmap(
 
     plt.tight_layout()
 
+    if display:
+        plt.show()
+
     if save_path:
         plt.savefig(save_path, dpi=100, bbox_inches="tight")
         print(f"Saved heatmap to {save_path}")
+        plt.close()
 
-    if display:
-        plt.show()
 
 def plot_barrier_comparison(
     results: List[BarrierOptimizationResult], figsize: Tuple[int, int] = (14, 10), display: bool = True,
@@ -836,7 +846,7 @@ def plot_barrier_comparison(
             ax.text(
                 bar.get_x() + bar.get_width() / 2.0,
                 height,
-                f"{val:.3f}" if abs(val) < 10 else f"{val:.1f}",
+                f"{val:.5f}" if abs(val) < 10 else f"{val:.2f}",
                 ha="center",
                 va="bottom",
                 fontsize=9,
@@ -975,12 +985,13 @@ def plot_ou_parameter_distribution(
     plt.suptitle(f"{result.strategy_name} - O-U Process Analysis", fontsize=14, fontweight="bold")
     plt.tight_layout()
 
+    if display:
+        plt.show()
+
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved O-U analysis plot to {save_path}")
-
-    if display:
-        plt.show()
+        plt.close()
 
 
 def create_full_report(result: BarrierOptimizationResult, save_dir: str = None, display: bool = True):

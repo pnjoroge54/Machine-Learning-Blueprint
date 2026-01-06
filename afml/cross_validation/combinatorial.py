@@ -29,7 +29,7 @@ class CombinatorialPurgedKFold:
 
     Args:
         n_splits (int): Total number of splits to divide the dataset into.
-            Each split represents a contiguous time block. Default: 3.
+            Each split represents a contiguous time block. Default: 6.
         n_test_splits (int): Number of test splits to use in each combination.
             Must be less than n_splits. Default: 2.
         samples_info_sets (pd.Series): Series containing the information ranges for each sample.
@@ -94,7 +94,7 @@ class CombinatorialPurgedKFold:
 
     def __init__(
         self,
-        n_splits: int = 3,
+        n_splits: int = 6,
         n_test_splits: int = 2,
         samples_info_sets: pd.Series = None,
         pct_embargo: float = 0.01,
@@ -350,7 +350,7 @@ class CombinatorialPurgedKFold:
                 safe_train_indices.add(train_idx)
 
         return safe_train_indices
-    
+
     def get_n_splits(self, X=None, y=None, groups=None):
         """
         Returns the number of splitting iterations in the cross-validator.
@@ -501,9 +501,10 @@ def demonstrate_combinatorial_cv():
         print(
             f"Fold {fold + 1}: Train size={len(train_idx)}, Test size={len(test_idx)}, "
             f"Accuracy={accuracy:.4f}"
+            # f"\ntrain_idx: {train_idx} \ntest_idx: {test_idx})"
         )
 
-    print(f"\nCross-validation results:")
+    print("\nCross-validation results:")
     print(f"Mean accuracy: {np.mean(scores):.4f} ± {np.std(scores):.4f}")
     print(f"Min accuracy: {np.min(scores):.4f}")
     print(f"Max accuracy: {np.max(scores):.4f}")

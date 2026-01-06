@@ -221,12 +221,13 @@ class ConfigPathGenerator:
 
         # Add appropriate extension
         extensions = {
-            "model": ".pkl",
+            "model": ".joblib",
             "feature_config": ".pkl",
+            "target_config": ".pkl",
             "feature_names": ".pkl",
             "features": ".parquet",
             "events": ".parquet",
-            "metrics": ".json",
+            "metrics": ".pkl",
             "config": ".json",
             "feature_importance": ".csv",
             "weights": ".parquet",
@@ -387,7 +388,7 @@ class ConfigPathGenerator:
 
         html = f"""
         <!DOCTYPE html>
-        <html>
+        <html lang="en">
         <head>
             <title>Model Artifacts - {config.get("symbol", "Unknown")}</title>
             <style>
@@ -628,16 +629,29 @@ class ModelFileManager:
                         model_data[key] = pd.read_csv(f)
                     elif f.endswith("parquet"):
                         model_data[key] = pd.read_parquet(f)
-                    elif f.endswith(("json", "pkl")):
-                        with open(f, "rb") as g:
-                            if f.endswith("json"):
+                    elif f.endswith("json"):
+                        try:
+                            with open(f, "r") as g:
                                 model_data[key] = json.load(g)
-                            elif f.endswith("pkl"):
+                        except UnicodeDecodeError:
+                            # f = Path(f).rename(f.replace(".json", ".pkl"))
+                            with open(f, "rb") as g:
                                 model_data[key] = pickle.load(g)
+                    elif f.endswith("pkl"):
+                        with open(f, "rb") as g:
+                            model_data[key] = pickle.load(g)
 
-            barriers = f'{d["date_range"]}' + "_".join(fname.name.split(d["date_range"])[1].split("_")[:-2])
+            date_range, bar_size, bar_type = d["date_range"], d["bar_size"], d["bar_type"]
+            barriers = f"{date_range}" + "_".join(fname.name.split(date_range)[1].split("_")[:-2])
             result.setdefault(barriers, {})
-            result[barriers].setdefault(d["bar_size"], {})
-            result[barriers][d["bar_size"]][d["bar_type"]] = model_data
+            result[barriers].setdefault(bar_size, {})
+            result[barriers][bar_size][bar_type] = model_data
+
+            # key = date_range
+            # barriers = "_".join(fname.name.split(date_range)[1].split("_")[:-2])[1:]
+            # result.setdefault(key, {})
+            # result[key].setdefault(bar_size, {}).setdefault(bar_type, {})
+            # # result[key][bar_size].setdefault(bar_type, {})
+            # result[key][bar_size][bar_type].setdefault(barriers, model_data)
 
         return result

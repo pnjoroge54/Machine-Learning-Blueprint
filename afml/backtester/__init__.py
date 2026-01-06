@@ -3,13 +3,6 @@ Implements general backtest statistics
 """
 
 from .log_analyser import load_model_logs
-from .multi_process_barrier_optimizer import (
-    CEVProcess,
-    GeometricBrownianMotion,
-    OrnsteinUhlenbeck,
-    ProcessSelector,
-    RegimeSwitching,
-)
 from .primary_model_experiments import (
     DataSetupHook,
     ModelTrainingHook,
@@ -32,7 +25,12 @@ from .reporting import (
     run_meta_labeling_analysis,
 )
 from .research_framework import ExperimentHook, ExperimentRunner, ResearchExperiment
-from .training import ModelData, get_optimal_threshold, train_model, train_model_with_trend
+from .training import (
+    ModelData,
+    get_optimal_threshold,
+    train_model,
+    train_model_with_trend,
+)
 
 __all__ = [
     "DataSetupHook",
@@ -60,9 +58,4 @@ __all__ = [
     "compare_pr_curves",
     "compare_roc_pr_curves",
     "load_model_logs",
-    "ProcessSelector",
-    "OrnsteinUhlenbeck",
-    "CEVProcess",
-    "GeometricBrownianMotion",
-    "RegimeSwitching",
 ]

@@ -1,13 +1,10 @@
-import sys
 import time
 from datetime import datetime, timedelta
-from itertools import product
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from feature_engine.selection import (DropConstantFeatures,
-                                      DropDuplicateFeatures)
+from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
 from loguru import logger
 from numba import njit, prange
 from scipy.stats import uniform
@@ -19,25 +16,16 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from ..cache import (
-    cacheable,
-    create_cacheable_param_grid,
-    get_cache_monitor,
-    log_data_access,
-    print_contamination_report,
-)
+from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..cross_validation import PurgedKFold, clf_hyper_fit
 from ..cross_validation.cross_validation import ml_cross_val_score
-from ..cross_validation.hyper_fit_analysis import \
-    generate_complete_hyperparameter_report
+from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..features.trading_session import get_time_features
-from ..labeling.triple_barrier import (add_vertical_barrier, get_event_weights,
-                                       triple_barrier_labels)
+from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
 from ..mt5.load_data import load_tick_data, save_data_to_parquet
-from ..sample_weights.optimized_attribution import \
-    get_weights_by_time_decay_optimized
+from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
 from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
 from ..util.misc import date_conversion, value_counts_data
@@ -445,7 +433,7 @@ def load_and_prepare_training_data(
     bar_size : int or str
         Bar size. If 'tick' and str, converted via `get_bar_size`.
     price : str
-        Price type ('bid', 'ask', 'mid_price').
+        Price type ('bid', 'ask', 'mid_price', 'bid_ask').
 
     Returns
     -------
@@ -695,102 +683,6 @@ def weighted_estimator(base_estimator, events, data_index):
 
 
 @cacheable()
-def find_optimal_sample_weight(
-    data_index: pd.DatetimeIndex,
-    events: pd.DataFrame,
-    features: pd.DataFrame,
-    cv_splits: int = 5,
-    n_iter: int = 10,
-) -> pd.Series:
-    """
-    Compute best sample weight with time decay.
-
-    Parameters
-    ----------
-    data_index: pd.DatetimeIndex
-        Price data index.
-    events : pd.DataFrame
-        Event labels with uniqueness weights.
-    features: pd.DataFrame
-        Training features
-    cv_splits : int, optional
-        Number of cross-validation splits (default: 5).
-    n_iter : int, optional
-        Number of random search iterations (default: 10).
-
-    Returns
-    -------
-    weights : pd.Series
-        Computed sample weights.
-    cv_results : dict
-        Cross-validation results.
-    best_scheme : str
-        Best weighting scheme description.
-    """
-    valid_index = features.index.intersection(events.index)
-    cont = events.loc[valid_index]
-    X = features.loc[valid_index]
-    y = cont["bin"]
-
-    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
-    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.02)
-
-    classifier = RandomForestClassifier(
-        criterion="entropy",
-        class_weight="balanced_subsample",
-        max_samples=cont["tW"].mean(),
-        max_depth=4,
-        min_weight_fraction_leaf=0.05,
-    )
-    est = weighted_estimator(classifier, cont, data_index)
-    param_distributions = {
-        "scheme": ["return", "unweighted", "uniqueness"],
-        "decay": uniform(0, 1),  # decay factor between 0 and 1 inclusive
-        "linear": [True, False],
-    }
-    gs = RandomizedSearchCV(
-        estimator=est,
-        param_distributions=param_distributions,
-        n_iter=n_iter,
-        cv=cv_gen,
-        scoring=scoring,
-        n_jobs=-1,
-        random_state=42,
-        refit=False,
-    )
-    gs.fit(X, y)
-
-    scheme, decay, linear = [gs.best_params_[k] for k in ["scheme", "decay", "linear"]]
-    best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay}"
-    logger.info(f"Best sample weight scheme: {best_scheme}")
-
-    decay_vec = get_weights_by_time_decay_optimized(
-        triple_barrier_events=cont,
-        close_index=data_index,
-        last_weight=decay,
-        linear=linear,
-        av_uniqueness=cont["tW"],
-    )
-
-    weights = decay_vec.copy()
-
-    if scheme == "uniqueness":
-        weights *= cont["tW"]
-    elif scheme == "return":
-        weights *= cont["w"]
-
-    cv_results = {
-        "best_params": gs.best_params_,
-        "best_score": gs.best_score_,
-        "cv_results": pd.DataFrame(gs.cv_results_),
-        "scoring": scoring,
-        "best_scheme": best_scheme,
-    }
-
-    return weights, cv_results
-
-
-@cacheable()
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
@@ -861,43 +753,6 @@ def get_optimal_sample_weight(
             best_weight = weight
             best_scheme = scheme
 
-    # # Apply decay factors for best weight
-    # decay_factors = np.linspace(0.01, 0.95, n_iter // 2)
-    # best_scheme_ = best_scheme
-    # for decay, linear in tqdm(
-    #     product(decay_factors, [True, False]),
-    #     desc=f"{best_scheme.title()} Decay Optimization",
-    #     total=n_iter,
-    # ):
-    #     if decay != 1.0:
-    #         decay_vec = get_weights_by_time_decay_optimized(
-    #             triple_barrier_events=cont,
-    #             close_index=data_index,
-    #             last_weight=decay,
-    #             linear=linear,
-    #             av_uniqueness=cont["tW"],
-    #         )
-    #         weight = best_weight * decay_vec
-    #         scores = ml_cross_val_score(
-    #             classifier,
-    #             X,
-    #             y,
-    #             cv_gen,
-    #             sample_weight_train=weight,
-    #             sample_weight_score=weight,
-    #             scoring=scoring,
-    #         )
-    #         score = scores.mean()
-    #         scheme = f"{best_scheme_}_{'linear' if linear else 'exp'}_{decay}"
-    #         cv_results[scheme] = scores
-
-    #         if not np.isinf(score) and score > best_score:
-    #             best_score = score
-    #             best_weight = weight
-    #             best_scheme = scheme
-
-    # logger.info(f"Best sample weight scheme: {best_scheme}")
-
     est = weighted_estimator(classifier, cont, data_index)
     param_distributions = {
         "scheme": [best_scheme],
@@ -932,7 +787,8 @@ def get_optimal_sample_weight(
 
     cv_results = {
         "best_score": best_score,
-        "cv_results": cv_results,
+        "cv_results_scheme": cv_results,
+        "cv_results": pd.DataFrame(gs.cv_results_),
         "scoring": scoring,
         "best_scheme": best_scheme,
     }
@@ -1113,6 +969,7 @@ class ModelDevelopmentPipeline:
         strategy: BaseStrategy,
         data_config: dict,
         feature_config: dict,
+        target_config: dict,
         label_config: dict,
         model_params: dict,
         base_dir: str = "Models",
@@ -1130,14 +987,26 @@ class ModelDevelopmentPipeline:
                 Training start date ('YYYY-MM-DD').
             - end_date : str
                 Training end date ('YYYY-MM-DD').
+            - account_name : str
+                Name of trading account
+            - bar_type : str
+                Type of bar ('tick', 'volume', 'time').
+            - bar_size : str
+                Bar size specification (e.g., 'M1', 'M5').
+            - price : str
+                Price type ('bid', 'ask', 'mid_price', 'bid_ask').
         strategy : BaseStrategy
             Signal generating strategy.
         feature_config : dict
             Feature engineering configuration.
+            - func: Feature engineering function
+            - params: Function parameters
+        target_config : dict
+            Volatility target configuration.
+            - func: Volatility target function
+            - params: Function parameters
         label_config : dict
             Triple-barrier labeling configuration.
-            - target_config : dict
-                Volatility target configuration.
             - profit_target : float
             - stop_loss : float
             - max_holding_period : int
@@ -1146,6 +1015,35 @@ class ModelDevelopmentPipeline:
             - filter_as_series : bool
         model_params : dict
             Model training configuration.
+                - pipe_clf : BaseEstimator or sklearn.pipeline.Pipeline or MyPipeline
+                    A BaseEstimator or Pipeline containing preprocessing and classification steps.
+                - param_grid : dict or list of dicts
+                    Hyperparameter grid for search. Keys should include pipeline step
+                    names as prefixes (e.g., 'classifier__max_depth').
+                - cv : int, default=5
+                    Number of folds for purged k-fold cross-validation.
+                - bagging_n_estimators : int, default=0
+                    Number of base estimators in bagging ensemble. If 0, no bagging
+                    is applied and the best single estimator is returned. If > 0,
+                    returns a BaggingClassifier fitted on the full dataset.
+                - bagging_max_samples : float or int, default=1.0
+                    For bagging: fraction (if float in (0, 1]) or number (if int) of
+                    samples to draw for each base estimator.
+                - bagging_max_features : float or int, default=1.0
+                    For bagging: fraction (if float in (0, 1]) or number (if int) of
+                    features to draw for each base estimator.
+                - rnd_search_iter : int, default=0
+                    If 0, uses GridSearchCV (exhaustive search). If > 0, uses
+                    RandomizedSearchCV with this many iterations.
+                - n_jobs : int, default=-1
+                    Number of parallel jobs. -1 uses all available cores.
+                - pct_embargo : float, default=0.02
+                    Percentage of samples to embargo in test folds to prevent leakage
+                    from serially correlated labels. Range: [0, 1).
+                - random_state : int, RandomState instance or None, default=None
+                    Random state for reproducibility.
+                - verbose : int, default=0
+                    Controls verbosity of output.
         base_dir: str
             Path to save pipeline data
         """
@@ -1157,6 +1055,7 @@ class ModelDevelopmentPipeline:
         self.strategy = strategy
         self.feature_config = feature_config
         self.label_config = label_config
+        self.target_config = target_config
         self.model_params = model_params
         self.account_name = data_config.get("account_name", "default")
 
@@ -1167,12 +1066,11 @@ class ModelDevelopmentPipeline:
         self.config["strategy"] = strategy.get_strategy_name()
         self.config["feature_func"] = feature_config["func"].__name__
         self.config["feature_params"] = feature_config["params"]
-
-        self.config.update(label_config)
-        target_config = label_config["target_config"]
         self.config["target_func"] = target_config["func"].__name__
         self.config["target_params"] = target_config["params"]
-        self.config.pop("target_config")
+        self.config.update(label_config)
+
+        self.label_config["target_config"] = target_config
 
         # Initialize file management and logging
         self.file_manager = ModelFileManager(base_dir)
@@ -1687,6 +1585,7 @@ class ModelDevelopmentPipeline:
             metadata = {
                 "strategy": self.strategy,
                 "feature_config": self.feature_config,
+                "label_config": self.label_config,
                 "feature_names": self._get_feature_names(),
                 "feature_count": len(self._get_feature_names()),
                 "training_samples": len(self.events),
@@ -1723,6 +1622,9 @@ class ModelDevelopmentPipeline:
     def load_training_data(self):
         """Step 1: Load tick data and construct bars."""
         self.bar_data = load_and_prepare_training_data(**self.data_config)
+        if self.data_config == "tick":
+            self.config["tick_bar_size"] = self.bar_data["tick_volume"].iloc[0]
+            self.file_manager.save_config(self.config)
         self.completed_steps["data_loading"] = True
 
     def engineer_features(self):

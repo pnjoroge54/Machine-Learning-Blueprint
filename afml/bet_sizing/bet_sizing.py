@@ -147,7 +147,7 @@ def bet_size_reserve(
     factor=5,
     variant=2,
     max_iter=10_000,
-    num_workers=1,
+    num_workers=-1,
     return_parameters=False,
 ):
     """
@@ -171,7 +171,7 @@ def bet_size_reserve(
     :param variant: (int) The EF3M variant to execute, options are 1: EF3M using first 4 moments, 2: EF3M using first 5 moments.
     :param max_iter: (int) Maximum number of iterations after which to terminate loop.
     :param num_workers: (int) Number of CPU cores to use for multiprocessing execution, set to -1 to use all
-     CPU cores. Default is 1.
+     CPU cores. Default is -1.
     :param return_parameters: (bool) If True, function also returns a dictionary of the fited mixture parameters.
     :return: (pandas.DataFrame) The 'events_t1' and 'sides' arguments as columns, with the number of concurrent
      active long, short bets, the difference between long and short, and the bet size in additional columns.

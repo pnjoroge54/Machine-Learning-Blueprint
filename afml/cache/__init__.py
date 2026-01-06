@@ -260,15 +260,16 @@ def initialize_cache_system():
 # =============================================================================
 
 # Import robust cache key generation - NOW SAFE (memory and cache_stats exist)
-from .data_access_tracker import (
+from .data_access_tracker import (  # noqa: E402
     DataAccessTracker,  # noqa: E402
     clear_data_access_log,
     get_data_tracker,
     log_data_access,
     print_contamination_report,
 )
+
 # Import selective cleaner functions after base components are defined
-from .selective_cleaner import (
+from .selective_cleaner import (  # noqa: E402
     analyze_cache_versions,  # noqa: E402
     cache_maintenance,
     clean_orphaned_caches,
@@ -281,6 +282,7 @@ from .selective_cleaner import (
     get_version_tracker,
     print_version_analysis,
 )
+
 # Add to imports
 from .unified_cache_system import (
     cacheable,  # noqa: E402

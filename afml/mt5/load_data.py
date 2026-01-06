@@ -460,8 +460,9 @@ def load_tick_data(
             )
             return pd.DataFrame()
 
+        size = df.memory_usage(deep=True).sum() / 1024**2
         logger.success(
-            f"Loaded {len(df):,} rows of {symbol} tick data for account {account_name}"
+            f"Loaded {len(df):,} rows of {symbol} ({size:,.2f} MB) tick data for account {account_name}"
         )
 
         to_drop = []

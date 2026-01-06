@@ -9,8 +9,7 @@ from .combinatorial import CombinatorialPurgedKFold
 from .cross_validation import (PurgedKFold, PurgedSplit, PurgedWalkForwardCV,
                                analyze_cross_val_scores, ml_cross_val_score,
                                ml_get_train_times)
-from .hyper_fit import (MyPipeline, clf_hyper_fit, clf_hyper_fit_cached,
-                        param_grid_size)
+from .hyper_fit import clf_hyper_fit, clf_hyper_fit_cached
 from .scoring import probability_weighted_accuracy
 
 scoring_methods = {
@@ -31,10 +30,8 @@ __all__ = [
     "PurgedSplit",
     "PurgedWalkForwardCV",
     "probability_weighted_accuracy",
-    "MyPipeline",
     "clf_hyper_fit",
     "clf_hyper_fit_cached",
     "CombinatorialPurgedKFold",
-    "param_grid_size",
     "scoring_methods",
 ]

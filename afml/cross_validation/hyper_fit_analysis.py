@@ -58,6 +58,7 @@ def analyze_hyperparameter_results(
     target_metric: str = "mean_test_score",
     time_constraint: Optional[float] = None,
     stability_threshold: float = 0.03,
+    verbose: bool = True,
 ) -> Dict:
     """
     Comprehensive analysis of hyperparameter search results.
@@ -81,16 +82,18 @@ def analyze_hyperparameter_results(
     analysis = {}
     analysis["plots"] = {}
 
-    print("=" * 80)
-    print("HYPERPARAMETER ANALYSIS REPORT")
-    print("=" * 80)
+    if verbose:
+        print("=" * 80)
+        print("HYPERPARAMETER ANALYSIS REPORT")
+        print("=" * 80)
 
     # 1. BASIC METRICS
     top_models = cv_results.sort_values(target_metric, ascending=False).head(10)
     analysis["top_models"] = top_models
 
-    print(f"\n1. TOP PERFORMING MODELS (sorted by {target_metric}):")
-    print("-" * 50)
+    if verbose:
+        print(f"\n1. TOP PERFORMING MODELS (sorted by {target_metric}):")
+        print("-" * 50)
 
     # Select available columns
     available_columns = []
@@ -98,14 +101,16 @@ def analyze_hyperparameter_results(
         if col in cv_results.columns:
             available_columns.append(col)
 
-    if available_columns:
-        print(top_models[available_columns].to_string())
-    else:
-        print("No standard columns found in results")
+    if verbose:
+        if available_columns:
+            print(top_models[available_columns].to_string())
+        else:
+            print("No standard columns found in results")
 
     # 2. PERFORMANCE ANALYSIS
-    print("\n2. PERFORMANCE SUMMARY:")
-    print("-" * 50)
+    if verbose:
+        print("\n2. PERFORMANCE SUMMARY:")
+        print("-" * 50)
 
     if target_metric in cv_results.columns:
         mean_score = cv_results[target_metric].mean()
@@ -113,38 +118,46 @@ def analyze_hyperparameter_results(
         max_score = cv_results[target_metric].max()
         min_score = cv_results[target_metric].min()
 
-        print(f"Average {target_metric}: {mean_score:.4f} ± {std_score:.4f}")
-        print(f"Best {target_metric}: {max_score:.4f}")
-        print(f"Worst {target_metric}: {min_score:.4f}")
-        print(f"Performance Range: {max_score - min_score:.4f}")
+        if verbose:
+            print(f"Average {target_metric}: {mean_score:.4f} ± {std_score:.4f}")
+            print(f"Best {target_metric}: {max_score:.4f}")
+            print(f"Worst {target_metric}: {min_score:.4f}")
+            print(f"Performance Range: {max_score - min_score:.4f}")
     else:
-        print(f"Target metric '{target_metric}' not found in results")
+        if verbose:
+            print(f"Target metric '{target_metric}' not found in results")
         mean_score = max_score = min_score = std_score = 0
 
     # 3. STABILITY ANALYSIS
-    print("\n3. STABILITY ANALYSIS:")
-    print("-" * 50)
+    if verbose:
+        print("\n3. STABILITY ANALYSIS:")
+        print("-" * 50)
 
     if "std_test_score" in cv_results.columns:
         stable_models = cv_results[cv_results["std_test_score"] <= stability_threshold]
         analysis["stable_models"] = stable_models
 
         if not stable_models.empty:
-            print(
-                f"Models with stable performance (std ≤ {stability_threshold}): {len(stable_models)}"
-            )
+            if verbose:
+                print(
+                    f"Models with stable performance (std ≤ {stability_threshold}): {len(stable_models)}"
+                )
             best_stable = stable_models.nlargest(1, target_metric)
-            print(
-                f"Best stable model: {best_stable[target_metric].iloc[0]:.4f} ± {best_stable['std_test_score'].iloc[0]:.4f}"
-            )
+            if verbose:
+                print(
+                    f"Best stable model: {best_stable[target_metric].iloc[0]:.4f} ± {best_stable['std_test_score'].iloc[0]:.4f}"
+                )
         else:
-            print(f"No models meet stability threshold of {stability_threshold}")
+            if verbose:
+                print(f"No models meet stability threshold of {stability_threshold}")
     else:
-        print("No stability metrics available")
+        if verbose:
+            print("No stability metrics available")
 
     # 4. TIME-EFFICIENCY ANALYSIS
-    print("\n4. TIME-EFFICIENCY ANALYSIS:")
-    print("-" * 50)
+    if verbose:
+        print("\n4. TIME-EFFICIENCY ANALYSIS:")
+        print("-" * 50)
 
     if "mean_fit_time" in cv_results.columns:
         cv_results["efficiency_score"] = (
@@ -155,17 +168,21 @@ def analyze_hyperparameter_results(
             time_efficient = cv_results[cv_results["mean_fit_time"] <= time_constraint]
             if not time_efficient.empty:
                 best_time_efficient = time_efficient.nlargest(1, target_metric)
-                print(f"Best model under {time_constraint}s constraint:")
-                print(f"  Score: {best_time_efficient[target_metric].iloc[0]:.4f}")
-                print(f"  Time: {best_time_efficient['mean_fit_time'].iloc[0]:.2f}s")
+                if verbose:
+                    print(f"Best model under {time_constraint}s constraint:")
+                    print(f"  Score: {best_time_efficient[target_metric].iloc[0]:.4f}")
+                    print(f"  Time: {best_time_efficient['mean_fit_time'].iloc[0]:.2f}s")
             else:
-                print(f"No models meet time constraint of {time_constraint}s")
+                if verbose:
+                    print(f"No models meet time constraint of {time_constraint}s")
     else:
-        print("No training time data available")
+        if verbose:
+            print("No training time data available")
 
     # 5. HYPERPARAMETER TREND ANALYSIS
-    print("\n5. HYPERPARAMETER TRENDS:")
-    print("-" * 50)
+    if verbose:
+        print("\n5. HYPERPARAMETER TRENDS:")
+        print("-" * 50)
 
     param_columns = _get_param_columns(cv_results)
 
@@ -174,7 +191,7 @@ def analyze_hyperparameter_results(
             param_name = param.replace("param_", "")
             param_stats = _safe_groupby_param(cv_results, param)
 
-            if param_stats is not None and not param_stats.empty:
+            if verbose and param_stats is not None and not param_stats.empty:
                 print(f"\nParameter: {param_name}")
                 print(
                     f"Optimal value: {param_stats.index[0]} (score: {param_stats['score_mean'].iloc[0]:.4f})"
@@ -182,11 +199,13 @@ def analyze_hyperparameter_results(
                 print("Performance by value:")
                 print(param_stats.to_string())
     else:
-        print("No hyperparameter columns found")
+        if verbose:
+            print("No hyperparameter columns found")
 
     # 6. CROSS-VALIDATION FOLD CONSISTENCY
-    print("\n6. CROSS-VALIDATION CONSISTENCY:")
-    print("-" * 50)
+    if verbose:
+        print("\n6. CROSS-VALIDATION CONSISTENCY:")
+        print("-" * 50)
 
     fold_columns = [
         col for col in cv_results.columns if "split" in col and "test" in col
@@ -197,23 +216,27 @@ def analyze_hyperparameter_results(
         fold_means = fold_scores.mean(axis=0)
         fold_stds = fold_scores.std(axis=0)
 
-        print("Fold performance consistency:")
-        for i, (fold_mean, fold_std) in enumerate(zip(fold_means, fold_stds)):
-            print(f"  Fold {i}: {fold_mean:.4f} ± {fold_std:.4f}")
+        if verbose:
+            print("Fold performance consistency:")
+            for i, (fold_mean, fold_std) in enumerate(zip(fold_means, fold_stds)):
+                print(f"  Fold {i}: {fold_mean:.4f} ± {fold_std:.4f}")
 
         problem_folds = [
             (i, std) for i, std in enumerate(fold_stds) if std > stability_threshold
         ]
         if problem_folds:
-            print(f"\n⚠️  High variance folds detected (std > {stability_threshold}):")
-            for fold, std in problem_folds:
-                print(f"  Fold {fold}: std = {std:.4f}")
+            if verbose:
+                print(f"\n⚠️  High variance folds detected (std > {stability_threshold}):")
+                for fold, std in problem_folds:
+                    print(f"  Fold {fold}: std = {std:.4f}")
     else:
-        print("No fold-specific data available")
+        if verbose:
+            print("No fold-specific data available")
 
     # 7. MODEL SELECTION RECOMMENDATION
-    print("\n7. MODEL SELECTION RECOMMENDATION:")
-    print("-" * 50)
+    if verbose:
+        print("\n7. MODEL SELECTION RECOMMENDATION:")
+        print("-" * 50)
 
     if target_metric in cv_results.columns:
         best_by_score = cv_results.nlargest(1, target_metric)
@@ -232,53 +255,52 @@ def analyze_hyperparameter_results(
 
                     score_diff = best_score - stable_score
                     if score_diff < 0.005:
-                        print("✅ RECOMMENDATION: Choose stable model")
-                        print(
-                            f"   Score: {stable_score:.4f} (vs best: {best_score:.4f})"
-                        )
-                        print(
-                            f"   Stability: {stable_std:.4f} (vs best: {best_std:.4f})"
-                        )
-                        print(
-                            f"   Performance difference: {score_diff:.4f} (insignificant)"
-                        )
+                        if verbose:
+                            print("✅ RECOMMENDATION: Choose stable model")
+                            print(f"   Score: {stable_score:.4f} (vs best: {best_score:.4f})")
+                            print(f"   Stability: {stable_std:.4f} (vs best: {best_std:.4f})")
+                            print(f"   Performance difference: {score_diff:.4f} (insignificant)")
                         recommended_model = best_stable
                     else:
-                        print("✅ RECOMMENDATION: Choose best performing model")
-                        print(
-                            f"   Score: {best_score:.4f} (vs stable: {stable_score:.4f})"
-                        )
-                        print(
-                            f"   Stability: {best_std:.4f} (slightly higher variance)"
-                        )
-                        print(f"   Performance gain: {score_diff:.4f} (worth the risk)")
+                        if verbose:
+                            print("✅ RECOMMENDATION: Choose best performing model")
+                            print(f"   Score: {best_score:.4f} (vs stable: {stable_score:.4f})")
+                            print(f"   Stability: {best_std:.4f} (slightly higher variance)")
+                            print(f"   Performance gain: {score_diff:.4f} (worth the risk)")
                         recommended_model = best_by_score
                 else:
-                    print("⚠️  RECOMMENDATION: No stable models found")
-                    print(f"   Best model: {best_score:.4f} ± {best_std:.4f}")
+                    if verbose:
+                        print("⚠️  RECOMMENDATION: No stable models found")
+                        print(f"   Best model: {best_score:.4f} ± {best_std:.4f}")
                     recommended_model = best_by_score
             else:
-                print("✅ RECOMMENDATION: Choose best performing model")
-                print(f"   Score: {best_score:.4f}")
+                if verbose:
+                    print("✅ RECOMMENDATION: Choose best performing model")
+                    print(f"   Score: {best_score:.4f}")
                 recommended_model = best_by_score
 
             # Add practical considerations
             if "params" in recommended_model.columns:
                 recommended_params = recommended_model["params"].iloc[0]
-                print("\n🎯 RECOMMENDED HYPERPARAMETERS:")
-                for key, value in recommended_params.items():
-                    print(f"   {key}: {value}")
+                if verbose:
+                    print("\n🎯 RECOMMENDED HYPERPARAMETERS:")
+                    for key, value in recommended_params.items():
+                        print(f"   {key}: {value}")
             else:
-                print("No parameter information available")
+                if verbose:
+                    print("No parameter information available")
         else:
-            print("No models found in results")
+            if verbose:
+                print("No models found in results")
             recommended_model = pd.DataFrame()
     else:
-        print(f"Target metric '{target_metric}' not found")
+        if verbose:
+            print(f"Target metric '{target_metric}' not found")
         recommended_model = pd.DataFrame()
 
     # 8. GENERATE VISUALIZATIONS
-    print("\n8. GENERATING VISUALIZATIONS...")
+    if verbose:
+        print("\n8. GENERATING VISUALIZATIONS...")
 
     # Create a figure with subplots
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
@@ -507,30 +529,33 @@ def analyze_hyperparameter_results(
     plt.close()
 
     # 9. PRACTICAL INTERPRETATION FOR TRADING
-    print("\n9. PRACTICAL INTERPRETATION FOR TRADING:")
-    print("-" * 50)
+    if verbose:
+        print("\n9. PRACTICAL INTERPRETATION FOR TRADING:")
+        print("-" * 50)
 
     if target_metric in cv_results.columns and not cv_results.empty:
         best_score_val = cv_results[target_metric].max()
 
-        print("Expected Strategy Performance:")
-        print(f"  • Best {target_metric}: {best_score_val:.4f}")
+        if verbose:
+            print("Expected Strategy Performance:")
+            print(f"  • Best {target_metric}: {best_score_val:.4f}")
 
         if "std_test_score" in cv_results.columns:
             best_std_val = cv_results.loc[
                 cv_results[target_metric].idxmax(), "std_test_score"
             ]
-            print(
-                f"  • Cross-validation Consistency: {'Good' if best_std_val < 0.03 else 'Moderate'}"
-            )
+            if verbose:
+                print(
+                    f"  • Cross-validation Consistency: {'Good' if best_std_val < 0.03 else 'Moderate'}"
+                )
 
-            # Risk assessment
-            if best_std_val > 0.04:
-                print("\n⚠️  RISK WARNING: High variance in CV folds")
-                print("   Strategy may perform inconsistently in live trading")
-            elif best_std_val < 0.02:
-                print("\n✅ LOW RISK: Excellent consistency across CV folds")
-                print("   Strategy likely to perform similarly in live trading")
+                # Risk assessment
+                if best_std_val > 0.04:
+                    print("\n⚠️  RISK WARNING: High variance in CV folds")
+                    print("   Strategy may perform inconsistently in live trading")
+                elif best_std_val < 0.02:
+                    print("\n✅ LOW RISK: Excellent consistency across CV folds")
+                    print("   Strategy likely to perform similarly in live trading")
 
     # 10. FINAL SUMMARY
     analysis["summary"] = {
@@ -551,26 +576,28 @@ def analyze_hyperparameter_results(
         ),
     }
 
-    print("\n" + "=" * 80)
-    print("ANALYSIS COMPLETE")
-    print("=" * 80)
+    if verbose:
+        print("\n" + "=" * 80)
+        print("ANALYSIS COMPLETE")
+        print("=" * 80)
 
     return analysis
 
 
-def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
+def analyze_your_results(cv_results: pd.DataFrame, verbose: bool = True) -> Dict:
     """
     Custom analysis for your specific hyperparameter search results.
     Handles missing parameters gracefully.
     """
     analysis = {}
 
-    print("SPECIFIC INSIGHTS FROM YOUR RESULTS:")
-    print("=" * 80)
+    if verbose:
+        print("SPECIFIC INSIGHTS FROM YOUR RESULTS:")
+        print("=" * 80)
 
-    # Your specific observations
-    print("\n1. KEY OBSERVATIONS:")
-    print("-" * 50)
+        # Your specific observations
+        print("\n1. KEY OBSERVATIONS:")
+        print("-" * 50)
 
     # Find best model safely
     if cv_results.empty:
@@ -613,15 +640,17 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
     # Add extracted parameters to analysis
     for key, value in extracted_params.items():
         analysis[key] = value
-        print(f"{key}: {value}")
+        if verbose:
+            print(f"{key}: {value}")
 
-    print(f"Best Model {target_metric}: {best_model[target_metric]:.4f}")
+    if verbose:
+        print(f"Best Model {target_metric}: {best_model[target_metric]:.4f}")
 
-    if "std_test_score" in best_model.index:
-        print(f"Standard Deviation: {best_model['std_test_score']:.4f}")
+        if "std_test_score" in best_model.index:
+            print(f"Standard Deviation: {best_model['std_test_score']:.4f}")
 
-    if "mean_fit_time" in best_model.index:
-        print(f"Training Time: {best_model['mean_fit_time']:.2f}s")
+        if "mean_fit_time" in best_model.index:
+            print(f"Training Time: {best_model['mean_fit_time']:.2f}s")
 
     # Compare with simpler models if max_depth parameter exists
     max_depth_col = None
@@ -634,11 +663,12 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
         simple_models = cv_results[cv_results[max_depth_col] <= 4]
         if not simple_models.empty:
             best_simple = simple_models.nlargest(1, target_metric)
-            print(f"\nBest Simple Model ({max_depth_col} ≤ 4):")
-            print(f"  {max_depth_col}={best_simple[max_depth_col].iloc[0]}")
-            print(
-                f"  {target_metric}: {best_simple[target_metric].iloc[0]:.4f} (vs best: {best_model[target_metric]:.4f})"
-            )
+            if verbose:
+                print(f"\nBest Simple Model ({max_depth_col} ≤ 4):")
+                print(f"  {max_depth_col}={best_simple[max_depth_col].iloc[0]}")
+                print(
+                    f"  {target_metric}: {best_simple[target_metric].iloc[0]:.4f} (vs best: {best_model[target_metric]:.4f})"
+                )
 
             analysis["best_simple_model"] = best_simple.iloc[0].to_dict()
             analysis["performance_diff"] = (
@@ -647,52 +677,57 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
 
     # Performance saturation analysis for depth if available
     if max_depth_col and max_depth_col in cv_results.columns:
-        print("\n2. PERFORMANCE SATURATION:")
-        print("-" * 50)
+        if verbose:
+            print("\n2. PERFORMANCE SATURATION:")
+            print("-" * 50)
 
         depth_groups = cv_results.groupby(max_depth_col)[target_metric].max()
-        print("Maximum performance by max_depth:")
-        for depth, score in depth_groups.items():
-            print(f"  depth={depth}: {score:.4f}")
+        if verbose:
+            print("Maximum performance by max_depth:")
+            for depth, score in depth_groups.items():
+                print(f"  depth={depth}: {score:.4f}")
 
         analysis["depth_groups"] = depth_groups.to_dict()
 
     # 3. ACTIONABLE RECOMMENDATIONS
-    print("\n3. ACTIONABLE RECOMMENDATIONS:")
-    print("-" * 50)
+    if verbose:
+        print("\n3. ACTIONABLE RECOMMENDATIONS:")
+        print("-" * 50)
 
     best_score_val = best_model[target_metric]
 
     if best_score_val > 0.68:
-        print("✅ Excellent performance achieved!")
-        print("   Consider testing with additional features or ensemble methods")
+        if verbose:
+            print("✅ Excellent performance achieved!")
+            print("   Consider testing with additional features or ensemble methods")
         analysis["performance_level"] = "EXCELLENT"
     elif best_score_val < 0.65:
-        print("⚠️  Performance could be improved")
-        print(
-            "   Consider: feature engineering, different model architecture, or more data"
-        )
+        if verbose:
+            print("⚠️  Performance could be improved")
+            print("   Consider: feature engineering, different model architecture, or more data")
         analysis["performance_level"] = "MODERATE"
     else:
-        print("✅ Good baseline performance achieved")
-        print("   Ready for forward testing with proper risk management")
+        if verbose:
+            print("✅ Good baseline performance achieved")
+            print("   Ready for forward testing with proper risk management")
         analysis["performance_level"] = "GOOD"
 
     # 4. PRODUCTION CONSIDERATIONS
-    print(f"\n4. PRODUCTION CONSIDERATIONS:")
-    print("-" * 50)
+    if verbose:
+        print("\n4. PRODUCTION CONSIDERATIONS:")
+        print("-" * 50)
 
     if "mean_score_time" in cv_results.columns:
         avg_score_time = cv_results["mean_score_time"].mean()
-        print(
-            f"Expected Inference Speed: ~{avg_score_time * 1000:.1f}ms per prediction"
-        )
+        if verbose:
+            print(f"Expected Inference Speed: ~{avg_score_time * 1000:.1f}ms per prediction")
         analysis["avg_inference_time"] = avg_score_time * 1000
 
     if "mean_fit_time" in cv_results.columns:
-        print(
-            f"Training Time Range: {cv_results['mean_fit_time'].min():.2f}s to {cv_results['mean_fit_time'].max():.2f}s"
-        )
+        if verbose:
+            print(
+                f"Training Time Range: {cv_results['mean_fit_time'].min():.2f}s to {cv_results['mean_fit_time'].max():.2f}s"
+            )
         analysis["training_time_range"] = (
             cv_results["mean_fit_time"].min(),
             cv_results["mean_fit_time"].max(),
@@ -707,7 +742,8 @@ def analyze_your_results(cv_results: pd.DataFrame) -> Dict:
 
     if n_estimators_col and n_estimators_col in cv_results.columns:
         avg_estimators = cv_results[n_estimators_col].mean()
-        print(f"Average Model Size: ~{avg_estimators:.0f} trees")
+        if verbose:
+            print(f"Average Model Size: ~{avg_estimators:.0f} trees")
         analysis["avg_estimators"] = avg_estimators
 
     # Add stability rating
@@ -764,9 +800,10 @@ def generate_hyperparameter_markdown_report(
         target_metric=target_metric,
         time_constraint=time_constraint,
         stability_threshold=stability_threshold,
+        verbose=False,
     )
 
-    specific_analysis = analyze_your_results(cv_results)
+    specific_analysis = analyze_your_results(cv_results, verbose=False)
 
     # Generate timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -787,7 +824,7 @@ def generate_hyperparameter_markdown_report(
             "training_start": "Training period start date",
             "training_end": "Training period end date",
             "account_name": "Trading account identifier",
-            "bar_type": "Bar type (tick/volume/time)",
+            "bar_type": "Bar type (tick/volume/time/dollar/...)",
             "bar_size": "Bar timeframe",
             "price": "Price type (bid/ask/mid)",
             "target_lookback": "Target calculation lookback periods",
@@ -797,12 +834,14 @@ def generate_hyperparameter_markdown_report(
             "min_ret": "Minimum return threshold",
             "vertical_barrier_zero": "Vertical barrier at zero crossing",
             "filter_as_series": "Filter as time series",
+            "target_func": "Volatility function that sets barrier targets",
+            "target_params": "Parameters for target volatility function",
         }
 
         for key, value in strategy_config.items():
             description = config_descriptions.get(key, "No description")
             if isinstance(value, dict):
-                value_str = json.dumps(value)
+                value_str = json.dumps(value, sort_keys=True, default=str)
             else:
                 value_str = str(value)
             md_content.append(f"| `{key}` | `{value_str}` | {description} |")
@@ -1116,10 +1155,10 @@ def generate_hyperparameter_markdown_report(
         md_content.append("")
 
         top_models_detailed = analysis_results["top_models"].head(10).copy()
-        
+
         # Get individual parameter columns
         param_columns = _get_param_columns(cv_results)
-        
+
         # Define which columns to show
         # Core metrics first, then individual parameters
         core_columns = [
@@ -1127,37 +1166,41 @@ def generate_hyperparameter_markdown_report(
             'std_test_score',
             'mean_fit_time'
         ]
-        
+
         # Filter to only include columns that exist
         existing_core_columns = [col for col in core_columns if col in top_models_detailed.columns]
-        existing_param_columns = [col for col in param_columns if col in top_models_detailed.columns]
-        
+        existing_param_columns = [
+            col for col in param_columns if col in top_models_detailed.columns
+        ]
+
         # Remove 'param_' prefix for display
-        display_param_columns = [col.replace('param_', '').split('__')[-1] for col in existing_param_columns]
-        
+        display_param_columns = [
+            col.replace("param_", "").split("__")[-1] for col in existing_param_columns
+        ]
+
         # Create header
         headers = ["Rank"] + existing_core_columns + display_param_columns
         md_content.append("| " + " | ".join(headers) + " |")
-        
+
         # Create separator
         separators = ["---"] * len(headers)
         md_content.append("| " + " | ".join(separators) + " |")
-        
+
         # Add rows
         for i, (_, row) in enumerate(top_models_detailed.iterrows(), 1):
             row_values = [str(i)]  # Rank
-            
+
             # Add core metrics
             for col in existing_core_columns:
                 if col == target_metric:
                     row_values.append(f"`{row[col]:.4f}`")
-                elif col == 'mean_fit_time':
+                elif col == "mean_fit_time":
                     row_values.append(f"`{row[col]:.2f}s`")
-                elif col == 'std_test_score':
+                elif col == "std_test_score":
                     row_values.append(f"`{row[col]:.4f}`")
                 else:
                     row_values.append(f"`{row[col]}`")
-            
+
             # Add individual parameters
             for param_col in existing_param_columns:
                 value = row[param_col]
@@ -1172,9 +1215,9 @@ def generate_hyperparameter_markdown_report(
                         row_values.append(f"`{value:.0f}`")
                 else:
                     row_values.append(f"`{value}`")
-            
+
             md_content.append("| " + " | ".join(row_values) + " |")
-        
+
         md_content.append("")
 
     # Appendix

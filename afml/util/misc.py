@@ -259,12 +259,11 @@ def flatten_column_names(df: pd.DataFrame) -> pd.DataFrame:
     >>> df_flat.columns
     Index(['value_mean', 'value_sum'], dtype='object')
     """
-    df_copy = df.copy()
-    df_copy.columns = [
+    columns = [
         "_".join(map(str, col)).strip() if isinstance(col, tuple) else str(col)
         for col in df.columns
     ]
-    return df_copy
+    return columns
 
 
 def value_counts_data(

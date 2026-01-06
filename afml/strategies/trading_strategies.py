@@ -19,7 +19,12 @@ class BaseStrategy(ABC):
 
     @abstractmethod
     def get_objective(self) -> str:
-        """Return strategy objective from {'mean_reversion', 'trend-following', 'momentum', 'pairs'}"""
+        """Return strategy objective from {'mean_reversion', 'trend', 'momentum', 'pairs'}"""
+        pass
+
+    @abstractmethod
+    def on_crossover(self) -> bool:
+        """Whether strategy signals are from crossovers"""
         pass
 
 
@@ -69,6 +74,9 @@ class BollingerStrategy(BaseStrategy):
     def get_objective(self) -> str:
         return self.objective
 
+    def on_crossover(self) -> bool:
+        return True
+
 
 class MACrossoverStrategy(BaseStrategy):
     """
@@ -76,7 +84,7 @@ class MACrossoverStrategy(BaseStrategy):
     Attributes:
         fast_window (int): Window size for the fast moving average.
         slow_window (int): Window size for the slow moving average.
-        objective (str): The objective of the strategy (default: "trend_following").
+        objective (str): The objective of the strategy (default: "trend").
     Methods:
         generate_signals(data: pd.DataFrame) -> pd.Series:
             Generates trading signals based on the crossover of fast and slow moving averages.
@@ -91,7 +99,7 @@ class MACrossoverStrategy(BaseStrategy):
         self,
         fast_window: int = 10,
         slow_window: int = 30,
-        objective: str = "trend_following",
+        objective: str = "trend",
     ):
         self.fast_window = fast_window
         self.slow_window = slow_window
@@ -120,3 +128,6 @@ class MACrossoverStrategy(BaseStrategy):
 
     def get_objective(self) -> str:
         return self.objective
+
+    def on_crossover(self) -> bool:
+        return True
