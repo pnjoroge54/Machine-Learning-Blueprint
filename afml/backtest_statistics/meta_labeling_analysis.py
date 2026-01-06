@@ -8,7 +8,7 @@ import base64
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -17,16 +17,26 @@ import pandas as pd
 from distinctipy import distinctipy
 from loguru import logger
 from scipy import stats
+from sklearn.base import BaseEstimator, ClassifierMixin, clone
+from sklearn.metrics import classification_report
+from tqdm import tqdm
 
-from ..bet_sizing.bet_sizing import bet_size_budget, bet_size_probability, bet_size_reserve
+from afml.cache.unified_cache_system import cacheable
+from afml.cross_validation.combinatorial import CombinatorialPurgedKFold
+from afml.ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from afml.labeling.triple_barrier import (add_vertical_barrier, get_bins,
+                                          get_events, triple_barrier_labels)
+from afml.sample_weights.optimized_attribution import \
+    get_weights_by_time_decay_optimized
+from afml.strategies.trading_strategies import BaseStrategy
+from afml.util.volatility import get_daily_vol
+
+from ..bet_sizing.bet_sizing import (bet_size_budget, bet_size_probability,
+                                     bet_size_reserve)
 from ..cross_validation.cross_validation import PurgedSplit
 from ..production.model_development import (
-    ModelDevelopmentPipeline,
-    calculate_rolling_metrics,
-    create_feature_engineering_pipeline,
-    generate_events_triple_barrier,
-    load_and_prepare_training_data,
-)
+    calculate_rolling_metrics, create_feature_engineering_pipeline,
+    generate_events_triple_barrier, load_and_prepare_training_data)
 from .performance_analysis import calculate_performance_metrics
 
 
@@ -61,7 +71,7 @@ def evaluate_meta_labeling_performance(
         trading_days_per_year: The number of trading days in a year.
         trading_hours_per_day: The number of trading hours per day.
         strategy_name: The name of the strategy for reporting.
-        Bet-sizing: One of None, "budget", "probability", "reserve"
+        bet_sizing: One of None, "budget", "probability", "reserve", "dynamic"
         kwargs: Bet-sizing arguments for "reserve" method that do not relate to events data.
             Expected keys:
             - fit_runs : int
@@ -108,7 +118,7 @@ def evaluate_meta_labeling_performance(
     # --- Bet Sizing Logic ---
     if bet_sizing is None:
         bets = meta_side.copy()
-        bet_sizing = "none"
+        bet_sizing = "fixed"
     elif bet_sizing == "probability":
         bets = bet_size_probability(
             meta_events, meta_prob, num_classes=2, pred=meta_side, **kwargs
@@ -151,18 +161,9 @@ def evaluate_meta_labeling_performance(
 
     # --- Add Event-Specific Metrics Manually ---
     # Calculate trade duration directly from events
-    primary_durations = (events["t1"] - events.index).dt.total_seconds() / 86400  # days
-    meta_durations = (meta_events["t1"] - meta_events.index).dt.total_seconds() / 86400
-
-    primary_metrics["avg_trade_duration"] = (
-        pd.Timedelta(days=primary_durations.mean()).round("1s")
-        if not primary_durations.empty
-        else 0
-    )
+    primary_metrics["avg_trade_duration"] = (events["t1"] - events.index).mean().round("1s")
     meta_metrics["avg_trade_duration"] = (
-        pd.Timedelta(days=meta_durations.mean()).round("1s")
-        if not meta_durations.empty
-        else 0
+        (meta_events["t1"] - meta_events.index).mean().round("1s") if not meta_returns.empty else 0
     )
 
     # Calculate bet frequency
@@ -210,6 +211,7 @@ def evaluate_meta_labeling_performance(
         "meta_returns": meta_returns,
         "total_primary_signals": total_signals,
         "filtered_signals": filtered_signals,
+        "bet_sizing": bet_sizing,
     }
 
 
@@ -273,6 +275,8 @@ def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
             )
 
     if verbose:
+        bet_sizing_str = "fixed" if results["bet_sizing"] is None else results["bet_sizing"]
+
         print(f"\n{'=' * 100}")
         print(f"STRATEGY COMPARISON: {results['strategy_name']}")
         print(f"{'=' * 100}\n")
@@ -281,6 +285,7 @@ def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
         print(f"  Total Signals:     {results['total_primary_signals']:,}")
         print(f"  Filtered Signals:  {results['filtered_signals']:,}")
         print(f"  Filter Rate:       {meta['signal_filter_rate']:.1%}")
+        print(f"  Bet Sizing:        {bet_sizing_str.title()}")
         print(f"  Confidence Thresh: {meta['confidence_threshold']:.2f}\n")
 
         print(comparison.to_string())
@@ -289,7 +294,7 @@ def compare_strategies(results: dict, verbose: bool = True) -> pd.DataFrame:
     return comparison
 
 
-def calculate_risk_adjusted_metrics(results: dict) -> pd.DataFrame:
+def calculate_risk_adjusted_metrics(results: dict, threshold: float) -> pd.DataFrame:
     """
     Calculate advanced risk-adjusted performance metrics.
 
@@ -306,9 +311,19 @@ def calculate_risk_adjusted_metrics(results: dict) -> pd.DataFrame:
         """Calculate Omega ratio (probability weighted ratio of gains vs losses)"""
         if returns.empty:
             return 0
-        gains = returns[returns > threshold] - threshold
-        losses = threshold - returns[returns < threshold]
-        return gains.sum() / losses.sum() if losses.sum() > 0 else np.inf
+
+        # Calculate excess returns over threshold
+        excess_returns = returns - threshold
+
+        # Split into gains and losses
+        gains = excess_returns[excess_returns > 0]
+        losses = excess_returns[excess_returns < 0]
+
+        # Omega ratio = (Probability-weighted gains) / (Probability-weighted losses)
+        expected_gains = gains.sum() / len(returns)  # Average gain per period
+        expected_losses = abs(losses.sum()) / len(returns)  # Average loss per period (absolute)
+
+        return expected_gains / expected_losses if expected_losses != 0 else np.inf
 
     def tail_ratio(returns: pd.Series) -> float:
         """Ratio of 95th percentile to 5th percentile"""
@@ -324,7 +339,7 @@ def calculate_risk_adjusted_metrics(results: dict) -> pd.DataFrame:
     metrics = pd.DataFrame(
         {
             "Primary": [
-                omega_ratio(primary_returns),
+                omega_ratio(primary_returns, threshold),
                 tail_ratio(primary_returns),
                 (
                     primary["sharpe_ratio"] / primary["max_drawdown"]
@@ -336,30 +351,18 @@ def calculate_risk_adjusted_metrics(results: dict) -> pd.DataFrame:
                     if primary["avg_loss"] != 0
                     else 0
                 ),
-                (
-                    primary["expectancy"] / primary["volatility"]
-                    if primary["volatility"] > 0
-                    else 0
-                ),
+                (primary["expectancy"] / primary["volatility"] if primary["volatility"] > 0 else 0),
             ],
             "Meta": [
-                omega_ratio(meta_returns),
+                omega_ratio(meta_returns, threshold),
                 tail_ratio(meta_returns),
-                (
-                    meta["sharpe_ratio"] / meta["max_drawdown"]
-                    if meta["max_drawdown"] > 0
-                    else 0
-                ),
+                (meta["sharpe_ratio"] / meta["max_drawdown"] if meta["max_drawdown"] > 0 else 0),
                 (
                     meta["win_rate"] * meta["avg_win"] / abs(meta["avg_loss"])
                     if meta["avg_loss"] != 0
                     else 0
                 ),
-                (
-                    meta["expectancy"] / meta["volatility"]
-                    if meta["volatility"] > 0
-                    else 0
-                ),
+                (meta["expectancy"] / meta["volatility"] if meta["volatility"] > 0 else 0),
             ],
         },
         index=[
@@ -524,6 +527,7 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
     # 2. Return Distributions
     ax = axes[0, 1]
@@ -583,6 +587,7 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
     # 5. Rolling Sharpe Ratio (if enough data)
     ax = axes[1, 1]
@@ -594,9 +599,7 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
             * np.sqrt(252)
         )
         meta_rolling_sharpe = (
-            meta_returns.rolling(window).mean()
-            / meta_returns.rolling(window).std()
-            * np.sqrt(252)
+            meta_returns.rolling(window).mean() / meta_returns.rolling(window).std() * np.sqrt(252)
         )
 
         ax.plot(
@@ -619,6 +622,8 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
         ax.grid(True, alpha=0.3)
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+
     else:
         ax.text(
             0.5,
@@ -661,6 +666,7 @@ def plot_strategy_comparison(results: dict, figsize: Tuple[int, int] = (16, 10))
         )
     plt.style.use("dark_background")
     plt.tight_layout()
+
     return fig
 
 
@@ -691,6 +697,7 @@ def generate_summary_report(results: dict) -> str:
     report.append(f"Accepted by Meta Model:   {results['filtered_signals']:,}")
     report.append(f"Rejected by Meta Model:   {signal_analysis['rejected_signals']:,}")
     report.append(f"Filter Rate:              {signal_analysis['filter_rate']:.1%}")
+    report.append(f"Bet Sizing:               {results['bet_sizing']}")
     report.append(f"Confidence Threshold:     {meta['confidence_threshold']:.2f}")
     report.append("")
 
@@ -735,19 +742,13 @@ def generate_summary_report(results: dict) -> str:
     # Signal Quality
     report.append("SIGNAL QUALITY ANALYSIS")
     report.append("-" * 40)
-    report.append(
-        f"Accepted Signal Win Rate: {signal_analysis['accepted_win_rate']:.1%}"
-    )
-    report.append(
-        f"Rejected Signal Win Rate: {signal_analysis['rejected_win_rate']:.1%}"
-    )
+    report.append(f"Accepted Signal Win Rate: {signal_analysis['accepted_win_rate']:.1%}")
+    report.append(f"Rejected Signal Win Rate: {signal_analysis['rejected_win_rate']:.1%}")
     report.append(f"Filter Precision:         {signal_analysis['precision']:.1%}")
     report.append(f"Avoided Losses:           {signal_analysis['avoided_losses']:.1%}")
 
     if not np.isnan(signal_analysis["ttest_pvalue"]):
-        report.append(
-            f"T-Test P-Value:           {signal_analysis['ttest_pvalue']:.4f}"
-        )
+        report.append(f"T-Test P-Value:           {signal_analysis['ttest_pvalue']:.4f}")
         report.append(
             f"Statistically Better:     {'Yes' if signal_analysis['significantly_better'] else 'No'}"
         )
@@ -798,12 +799,8 @@ def generate_summary_report(results: dict) -> str:
         )
         insights.append(f"✅ Meta-labeling improved Sharpe ratio by {improvement:,.1%}")
     else:
-        decline = (meta["sharpe_ratio"] - primary["sharpe_ratio"]) / abs(
-            primary["sharpe_ratio"]
-        )
-        insights.append(
-            f"❌ Meta-labeling decreased Sharpe ratio by {abs(decline):,.1%}"
-        )
+        decline = (meta["sharpe_ratio"] - primary["sharpe_ratio"]) / abs(primary["sharpe_ratio"])
+        insights.append(f"❌ Meta-labeling decreased Sharpe ratio by {abs(decline):,.1%}")
 
     # Check drawdown reduction
     if meta["max_drawdown"] < primary["max_drawdown"]:
@@ -824,13 +821,9 @@ def generate_summary_report(results: dict) -> str:
     # Check information ratio
     if "information_ratio" in meta:
         if meta["information_ratio"] > 0:
-            insights.append(
-                f"✅ Positive information ratio ({meta['information_ratio']:.2f})"
-            )
+            insights.append(f"✅ Positive information ratio ({meta['information_ratio']:.2f})")
         else:
-            insights.append(
-                f"⚠️ Negative information ratio ({meta['information_ratio']:.2f})"
-            )
+            insights.append(f"⚠️ Negative information ratio ({meta['information_ratio']:.2f})")
 
     for insight in insights:
         report.append(insight)
@@ -855,7 +848,7 @@ def export_results_to_excel(results: dict, filepath: str):
         comparison.to_excel(writer, sheet_name="Comparison")
 
         # Risk-adjusted metrics
-        risk_metrics = calculate_risk_adjusted_metrics(results)
+        risk_metrics = calculate_risk_adjusted_metrics(results, threshold=results["min_ret"])
         risk_metrics.to_excel(writer, sheet_name="Risk_Adjusted")
 
         # Signal quality
@@ -864,14 +857,10 @@ def export_results_to_excel(results: dict, filepath: str):
         signal_quality.to_excel(writer, sheet_name="Signal_Quality")
 
         # Primary metrics
-        pd.DataFrame([results["primary_metrics"]]).T.to_excel(
-            writer, sheet_name="Primary_Metrics"
-        )
+        pd.DataFrame([results["primary_metrics"]]).T.to_excel(writer, sheet_name="Primary_Metrics")
 
         # Meta metrics
-        pd.DataFrame([results["meta_metrics"]]).T.to_excel(
-            writer, sheet_name="Meta_Metrics"
-        )
+        pd.DataFrame([results["meta_metrics"]]).T.to_excel(writer, sheet_name="Meta_Metrics")
 
         # Returns time series
         returns_df = pd.DataFrame(
@@ -883,9 +872,7 @@ def export_results_to_excel(results: dict, filepath: str):
 
 
 def generate_meta_labeling_markdown_report(
-    results_dict: Dict[
-        str, Dict
-    ],  # Key: bar_type, Value: results from evaluate_meta_labeling_performance
+    results_dict: Dict[str, Dict],
     strategy_config: Optional[Dict] = None,
     filename: Path = Path("meta_labeling_analysis_report.md"),
     include_plots: bool = True,
@@ -930,40 +917,51 @@ def generate_meta_labeling_markdown_report(
     md_content.append(f"*Generated on: {timestamp}*  ")
     md_content.append("")
 
+    config_descriptions = {
+        "strategy": "Trading strategy name",
+        "account_name": "Trading account identifier",
+        "symbol": "Trading instrument",
+        "bar_type": "Bar type (time/tick/volume/...)",
+        "bar_size": "Bar timeframe",
+        "price": "Price type (bid/ask/mid)",
+        "target_lookback": "Target calculation lookback periods",
+        "profit_target": "Profit target in risk multiples",
+        "stop_loss": "Stop loss in risk multiples",
+        "max_holding_period": "Maximum holding period",
+        "min_ret": "Minimum return threshold",
+        "feature_func": "Feature engineering function",
+        "feature_params": "Feature engineering parameters",
+        "target_func": "Target volatility function",
+        "target_params": "Target volatility parameters",
+        "bet_sizing": "Bet sizing method",
+        "confidence_threshold": "Confidence threshold",
+    }
+
     # Strategy Configuration Table
     if strategy_config:
-        md_content.append("## ⚙️ Strategy Configuration")
-        md_content.append("")
-        md_content.append("| Parameter | Value | Description |")
-        md_content.append("|-----------|-------|-------------|")
+        if len(strategy_config) == 1:
+            md_content.append("## ⚙️ Strategy Configuration")
+            md_content.append("")
+            md_content.append("| Parameter | Value | Description |")
+            md_content.append("|-----------|-------|-------------|")
 
-        config_descriptions = {
-            "strategy": "Trading strategy name",
-            "symbol": "Trading instrument",
-            "account_name": "Trading account identifier",
-            "bar_type": "Bar type (tick/volume/time)",
-            "bar_size": "Bar timeframe",
-            "price": "Price type (bid/ask/mid)",
-            "target_lookback": "Target calculation lookback periods",
-            "profit_target": "Profit target in risk multiples",
-            "stop_loss": "Stop loss in risk multiples",
-            "max_holding_period": "Maximum holding period",
-            "min_ret": "Minimum return threshold",
-            "vertical_barrier_zero": "Vertical barrier at zero crossing",
-            "filter_as_series": "Filter as time series",
-        }
+            for key, value in strategy_config.items():
+                description = config_descriptions.get(key, "No description")
+                if isinstance(value, dict):
+                    value_str = str(value)
+                else:
+                    value_str = str(value)
+                md_content.append(f"| `{key}` | `{value_str}` | {description} |")
 
-        for key, value in strategy_config.items():
-            description = config_descriptions.get(key, "No description")
-            if isinstance(value, dict):
-                value_str = str(value)
-            else:
-                value_str = str(value)
-            md_content.append(f"| `{key}` | `{value_str}` | {description} |")
-
-        md_content.append("")
-        md_content.append("---")
-        md_content.append("")
+            md_content.append("")
+            md_content.append("---")
+            md_content.append("")
+        else:
+            strategy_df = pd.DataFrame(strategy_config).join(
+                pd.Series(config_descriptions, name="description")
+            )
+            md_content.append(strategy_df.to_markdown())
+            md_content.append("")
 
     # Bar Type Comparison Summary
     md_content.append("## 📊 Bar Type Comparison Summary")
@@ -1009,21 +1007,13 @@ def generate_meta_labeling_markdown_report(
         worst_bar_type = comparison_df.iloc[-1]["Bar Type"]
 
         md_content.append(f"**Best Performing Bar Type**: `{best_bar_type}`  ")
-        md_content.append(
-            f"  • Sharpe Ratio: `{comparison_df.iloc[0]['Meta Sharpe']:.2f}`  "
-        )
-        md_content.append(
-            f"  • Annual Return: `{comparison_df.iloc[0]['Meta Return %']:.1f}%`  "
-        )
+        md_content.append(f"  • Sharpe Ratio: `{comparison_df.iloc[0]['Meta Sharpe']:.2f}`  ")
+        md_content.append(f"  • Annual Return: `{comparison_df.iloc[0]['Meta Return %']:.1f}%`  ")
         md_content.append("")
 
         md_content.append(f"**Worst Performing Bar Type**: `{worst_bar_type}`  ")
-        md_content.append(
-            f"  • Sharpe Ratio: `{comparison_df.iloc[-1]['Meta Sharpe']:.2f}`  "
-        )
-        md_content.append(
-            f"  • Annual Return: `{comparison_df.iloc[-1]['Meta Return %']:.1f}%`  "
-        )
+        md_content.append(f"  • Sharpe Ratio: `{comparison_df.iloc[-1]['Meta Sharpe']:.2f}`  ")
+        md_content.append(f"  • Annual Return: `{comparison_df.iloc[-1]['Meta Return %']:.1f}%`  ")
         md_content.append("")
 
         # Add improvement statistics if primary metrics available
@@ -1038,12 +1028,10 @@ def generate_meta_labeling_markdown_report(
 
                 if primary and meta:
                     sharpe_improvement = (
-                        (meta.get("sharpe_ratio", 0) / primary.get("sharpe_ratio", 1))
-                        - 1
+                        (meta.get("sharpe_ratio", 0) / primary.get("sharpe_ratio", 1)) - 1
                     ) * 100
                     dd_improvement = (
-                        (meta.get("max_drawdown", 0) / primary.get("max_drawdown", 1))
-                        - 1
+                        (meta.get("max_drawdown", 0) / primary.get("max_drawdown", 1)) - 1
                     ) * 100
                     winrate_improvement = (
                         (meta.get("win_rate", 0) / primary.get("win_rate", 1)) - 1
@@ -1056,11 +1044,7 @@ def generate_meta_labeling_markdown_report(
                             "Max DD Δ%": dd_improvement,
                             "Win Rate Δ%": winrate_improvement,
                             "Trades Δ%": (
-                                (
-                                    meta.get("num_trades", 0)
-                                    / primary.get("num_trades", 1)
-                                )
-                                - 1
+                                (meta.get("num_trades", 0) / primary.get("num_trades", 1)) - 1
                             )
                             * 100,
                         }
@@ -1114,7 +1098,7 @@ def generate_meta_labeling_markdown_report(
                     primary_metrics.get("win_rate", 0) * 100,
                     primary_metrics.get("profit_factor", 0),
                     primary_metrics.get("num_trades", 0),
-                    str(primary_metrics.get("avg_trade_duration", "N/A")),
+                    primary_metrics.get("avg_trade_duration", "N/A"),
                 ],
                 "Meta": [
                     meta_metrics.get("total_return", 0) * 100,
@@ -1127,7 +1111,7 @@ def generate_meta_labeling_markdown_report(
                     meta_metrics.get("win_rate", 0) * 100,
                     meta_metrics.get("profit_factor", 0),
                     meta_metrics.get("num_trades", 0),
-                    str(meta_metrics.get("avg_trade_duration", "N/A")),
+                    meta_metrics.get("avg_trade_duration", "N/A"),
                 ],
                 "Improvement": [
                     (
@@ -1175,18 +1159,42 @@ def generate_meta_labeling_markdown_report(
 
         # Format the table
         for i, row in metrics_table.iterrows():
+            primary = row["Primary"]
+            meta = row["Meta"]
             improvement = row["Improvement"]
             if isinstance(improvement, (int, float)):
                 if i in [
                     5,
                     6,
+                    9,
+                    10,
                 ]:  # For drawdown and volatility, negative improvement is good
                     color = "🟢" if improvement < 0 else "🔴"
                 else:  # For other metrics, positive improvement is good
                     color = "🟢" if improvement > 0 else "🔴"
 
                 if isinstance(improvement, float):
-                    metrics_table.at[i, "Improvement"] = f"{color} {improvement:+,.2f}"
+                    if i < 7:
+                        metrics_table.at[i, "Improvement"] = f"{color} {improvement:+,.2f}%"
+                    else:
+                        metrics_table.at[i, "Improvement"] = f"{color} {improvement:+,.2f}"
+
+            if i < 9:
+                metrics_table.at[i, "Primary"] = f"{primary:,.4f}"
+                metrics_table.at[i, "Meta"] = f"{meta:,.4f}"
+            if i == 9:
+                metrics_table.at[i, "Primary"] = f"{primary:,}"
+                metrics_table.at[i, "Meta"] = f"{meta:,}"
+                metrics_table.at[i, "Improvement"] = f"{color} {improvement:,}"
+            if i == 10:
+                metrics_table.at[i, "Primary"] = f"{primary}".replace("0 days ", "")
+                metrics_table.at[i, "Meta"] = f"{meta}".replace("0 days ", "")
+                try:
+                    metrics_table.at[i, "Improvement"] = (
+                        f"{color} {meta.total_seconds() / primary.total_seconds() - 1:.2%}"
+                    )
+                except Exception:
+                    pass
 
         md_content.append(metrics_table.to_markdown(index=False))
         md_content.append("")
@@ -1210,16 +1218,16 @@ def generate_meta_labeling_markdown_report(
                     "F1 Score",
                 ],
                 "Value": [
-                    signal_analysis.get("total_signals", 0),
-                    signal_analysis.get("accepted_signals", 0),
-                    signal_analysis.get("rejected_signals", 0),
-                    signal_analysis.get("filter_rate", 0) * 100,
-                    signal_analysis.get("accepted_win_rate", 0) * 100,
-                    signal_analysis.get("rejected_win_rate", 0) * 100,
-                    signal_analysis.get("avoided_losses", 0) * 100,
-                    signal_analysis.get("precision", 0) * 100,
-                    signal_analysis.get("recall", 0) * 100,
-                    signal_analysis.get("f1_score", 0),
+                    f"{signal_analysis.get('total_signals', 0):,}",
+                    f"{signal_analysis.get('accepted_signals', 0):,}",
+                    f"{signal_analysis.get('rejected_signals', 0):,}",
+                    f"{signal_analysis.get('filter_rate', 0) * 100:.2f}",
+                    f"{signal_analysis.get('accepted_win_rate', 0) * 100:.2f}",
+                    f"{signal_analysis.get('rejected_win_rate', 0) * 100:.2f}",
+                    f"{signal_analysis.get('avoided_losses', 0) * 100:.2f}",
+                    f"{signal_analysis.get('precision', 0) * 100:.2f}",
+                    f"{signal_analysis.get('recall', 0) * 100:.2f}",
+                    f"{signal_analysis.get('f1_score', 0) * 100:.2f}",
                 ],
             }
         )
@@ -1231,13 +1239,9 @@ def generate_meta_labeling_markdown_report(
         if "ttest_pvalue" in signal_analysis:
             md_content.append("#### Statistical Significance")
             md_content.append("")
-            md_content.append(
-                f"T-Test P-Value: `{signal_analysis['ttest_pvalue']:.4f}`  "
-            )
+            md_content.append(f"T-Test P-Value: `{signal_analysis['ttest_pvalue']:.4f}`  ")
             if signal_analysis["ttest_pvalue"] < 0.05:
-                md_content.append(
-                    "✅ **Statistically Significant Improvement** (p < 0.05)  "
-                )
+                md_content.append("✅ **Statistically Significant Improvement** (p < 0.05)  ")
             else:
                 md_content.append("⚠️ **Not Statistically Significant** (p ≥ 0.05)  ")
             md_content.append("")
@@ -1290,14 +1294,14 @@ def generate_meta_labeling_markdown_report(
             signal_plot = _generate_signal_quality_plot(results)
             signal_b64 = _plot_to_base64(signal_plot)
 
-            md_content.append(
-                f"### {bar_type.upper()} Bars - Signal Quality Distribution"
-            )
+            md_content.append(f"### {bar_type.upper()} Bars - Signal Quality Distribution")
             md_content.append("")
             md_content.append(
                 f'<img src="data:image/png;base64,{signal_b64}" style="width: 100%; max-width: 1400px;">'
             )
             md_content.append("")
+            plt.close("all")
+            # plt.ioff()
 
     # Risk-Adjusted Metrics Comparison
     md_content.append("## 🛡️ Risk-Adjusted Metrics Comparison")
@@ -1305,7 +1309,7 @@ def generate_meta_labeling_markdown_report(
 
     risk_metrics_data = []
     for bar_type, results in results_dict.items():
-        risk_metrics = calculate_risk_adjusted_metrics(results)
+        risk_metrics = calculate_risk_adjusted_metrics(results, threshold=results["min_ret"])
 
         risk_metrics_data.append(
             {
@@ -1324,12 +1328,8 @@ def generate_meta_labeling_markdown_report(
         md_content.append("")
 
         # Identify best risk-adjusted bar type
-        best_omega = risk_metrics_df.loc[
-            risk_metrics_df["Omega Ratio"].idxmax(), "Bar Type"
-        ]
-        best_sharpe_dd = risk_metrics_df.loc[
-            risk_metrics_df["Sharpe/MaxDD"].idxmax(), "Bar Type"
-        ]
+        best_omega = risk_metrics_df.loc[risk_metrics_df["Omega Ratio"].idxmax(), "Bar Type"]
+        best_sharpe_dd = risk_metrics_df.loc[risk_metrics_df["Sharpe/MaxDD"].idxmax(), "Bar Type"]
 
         md_content.append("#### Best Risk-Adjusted Performers")
         md_content.append("")
@@ -1354,9 +1354,7 @@ def generate_meta_labeling_markdown_report(
 
         md_content.append(f"### 🏆 Recommended Bar Type: `{best_performer}`")
         md_content.append("")
-        md_content.append(
-            f"**Rationale**: Highest Sharpe Ratio (`{best_sharpe:.2f}`)  "
-        )
+        md_content.append(f"**Rationale**: Highest Sharpe Ratio (`{best_sharpe:.2f}`)  ")
         md_content.append("")
 
         # Key recommendations
@@ -1429,25 +1427,15 @@ def generate_meta_labeling_markdown_report(
     md_content.append("### A. Glossary of Metrics")
     md_content.append("")
     md_content.append("- **Sharpe Ratio**: Risk-adjusted return (higher is better)  ")
-    md_content.append(
-        "- **Sortino Ratio**: Risk-adjusted return focusing on downside risk  "
-    )
+    md_content.append("- **Sortino Ratio**: Risk-adjusted return focusing on downside risk  ")
     md_content.append("- **Calmar Ratio**: Return relative to maximum drawdown  ")
-    md_content.append(
-        "- **Omega Ratio**: Probability-weighted ratio of gains vs losses  "
-    )
+    md_content.append("- **Omega Ratio**: Probability-weighted ratio of gains vs losses  ")
     md_content.append("- **Profit Factor**: Gross profit divided by gross loss  ")
     md_content.append("- **Win Rate**: Percentage of profitable trades  ")
     md_content.append("- **Max Drawdown**: Maximum peak-to-trough decline  ")
-    md_content.append(
-        "- **Filter Rate**: Percentage of signals rejected by meta-model  "
-    )
-    md_content.append(
-        "- **Precision**: Percentage of accepted signals that were profitable  "
-    )
-    md_content.append(
-        "- **Recall**: Percentage of profitable signals that were accepted  "
-    )
+    md_content.append("- **Filter Rate**: Percentage of signals rejected by meta-model  ")
+    md_content.append("- **Precision**: Percentage of accepted signals that were profitable  ")
+    md_content.append("- **Recall**: Percentage of profitable signals that were accepted  ")
     md_content.append("")
 
     md_content.append("### B. Bar Type Characteristics")
@@ -1578,15 +1566,17 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
     ax1.legend()
     ax1.grid(alpha=0.3)
 
+    ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    plt.setp(ax1.get_xticklabels(), rotation=45, ha="right")
+
     # Plot 2: Rolling Sharpe (63-day window)
     ax2 = axes[0, 1]
     for (bar_type, results), color in zip(results_dict.items(), colors):
         meta_returns = results.get("meta_returns", pd.Series())
         if len(meta_returns) > 63:
             rolling_sharpe = (
-                meta_returns.rolling(63).mean()
-                / meta_returns.rolling(63).std()
-                * np.sqrt(252)
+                meta_returns.rolling(63).mean() / meta_returns.rolling(63).std() * np.sqrt(252)
             )
             ax2.plot(
                 rolling_sharpe.index,
@@ -1600,6 +1590,10 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
     ax2.set_title("63-Day Rolling Sharpe Ratio", fontsize=12, fontweight="bold")
     ax2.set_ylabel("Sharpe Ratio")
     ax2.grid(alpha=0.3)
+
+    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
 
     # Plot 3: Drawdown Comparison
     ax3 = axes[1, 0]
@@ -1620,6 +1614,10 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
     ax3.set_title("Drawdown Comparison", fontsize=12, fontweight="bold")
     ax3.set_ylabel("Drawdown")
     ax3.grid(alpha=0.3)
+
+    ax3.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax3.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    plt.setp(ax3.get_xticklabels(), rotation=45, ha="right")
 
     # Plot 4: Monthly Returns Heatmap (Fixed Version)
     ax4 = axes[1, 1]
@@ -1656,9 +1654,7 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
             monthly_matrix = np.array(aligned_data)
 
             # Plot heatmap
-            im = ax4.imshow(
-                monthly_matrix, aspect="auto", cmap="RdYlGn", vmin=-0.1, vmax=0.1
-            )
+            im = ax4.imshow(monthly_matrix, aspect="auto", cmap="RdYlGn", vmin=-0.1, vmax=0.1)
             ax4.set_title("Monthly Returns Heatmap", fontsize=12, fontweight="bold")
             ax4.set_yticks(range(len(bar_type_labels)))
             ax4.set_yticklabels(bar_type_labels)
@@ -1696,6 +1692,7 @@ def _generate_sharpe_evolution_plot(results_dict: Dict[str, Dict]) -> plt.Figure
             transform=ax4.transAxes,
         )
     plt.tight_layout()
+
     return fig
 
 
@@ -1753,9 +1750,7 @@ def _save_all_plots(results_dict: Dict[str, Dict], plot_dir: Path):
     """Save all generated plots to directory."""
     # Bar type comparison plot
     comparison_plot = _generate_bar_type_comparison_plot(results_dict)
-    comparison_plot.savefig(
-        plot_dir / "bar_type_comparison.png", dpi=150, bbox_inches="tight"
-    )
+    comparison_plot.savefig(plot_dir / "bar_type_comparison.png", dpi=150, bbox_inches="tight")
     plt.close(comparison_plot)
 
     # Sharpe evolution plot
@@ -1849,10 +1844,408 @@ def generate_complete_meta_labeling_report(
     return report_file
 
 
+def generate_test_events_triple_barrier(
+    data: pd.DataFrame,
+    strategy: BaseStrategy,
+    target_lookback: int,
+    profit_target: float = 1,
+    stop_loss: float = 1,
+    max_holding_period: Dict[str, int] = dict(num_bars=100),
+    min_ret: float = 0.0,
+    vertical_barrier_zero: bool = True,
+) -> pd.DataFrame:
+    """
+    Generate trading events using the triple-barrier method.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Price bars with 'close' column.
+    strategy : BaseStrategy
+        Strategy instance implementing `generate_signals()`.
+    target_lookback : int
+        Lookback window for volatility estimation.
+    profit_target : float, default=1
+        Profit-taking threshold multiplier.
+    stop_loss : float, default=1
+        Stop-loss threshold multiplier.
+    max_holding_period : dict, default={'num_bars': 100}
+        Maximum holding period for vertical barrier.
+    min_ret : float, default=0.0
+        Minimum return threshold.
+    vertical_barrier_zero : bool, default=True
+        Set label to zero if vertical barrier is reached.
+    filter_as_series : bool, default=True
+        Pass volatility threshold as series instead of scalar.
+
+    Returns
+    -------
+    pd.DataFrame
+        Event labels with columns:
+        - 'bin' : {-1, 0, 1} classification
+        - 't1'  : vertical barrier timestamps
+        - 'w'   : sample weights
+        - 'tW'  : uniqueness weights
+
+    Notes
+    -----
+    - Prevents data leakage via time-aware caching.
+    """
+    # Compute barriers
+    close = data["close"]
+    target = get_daily_vol(close, target_lookback)
+    side = strategy.generate_signals(data)
+    t_events = side[side != 0].index
+    vb = add_vertical_barrier(t_events, close, **max_holding_period)
+    events = triple_barrier_labels(
+        close,
+        target,
+        t_events,
+        vertical_barrier_times=vb,
+        side_prediction=side,
+        pt_sl=[profit_target, stop_loss],
+        min_ret=min_ret,
+        min_pct=0.05,
+        vertical_barrier_zero=vertical_barrier_zero,
+        drop=True,
+        verbose=False,
+    )
+    return events
+
+
+@cacheable()
+def get_validation_metrics(
+    test_start: Union[str, pd.Timestamp, datetime],
+    test_end: Union[str, pd.Timestamp, datetime],
+    strategy: BaseStrategy,
+    model: BaseEstimator,
+    config: dict,
+    target_config: dict,
+    feature_config: dict,
+    feature_names: list,
+    bet_sizing: str = None,
+    confidence_threshold: float = 0.5,
+    **kwargs,
+) -> dict:
+    if config["bar_type"] == "tick":
+        bar_size = int(config["tick_bar_size"])
+    else:
+        bar_size = config["bar_size"]
+
+    df = load_and_prepare_training_data(
+        symbol=config["symbol"],
+        start_date=test_start,
+        end_date=test_end,
+        account_name=config["account_name"],
+        bar_type=config["bar_type"],
+        bar_size=bar_size,
+        price=config["price"],
+    )
+
+    on_crossover = strategy.on_crossover()
+
+    # EValuate all signal generation points when bets are based on probabilities
+    if on_crossover and bet_sizing in ("probability", "dynamic"):
+        on_crossover = False
+
+    events = generate_events_triple_barrier(
+        df,
+        strategy=strategy,
+        target_config=target_config,
+        profit_target=config["profit_target"],
+        stop_loss=config["stop_loss"],
+        min_ret=config["min_ret"],
+        max_holding_period=config["max_holding_period"],
+        vertical_barrier_zero=False,
+        filter_as_series=None,
+        on_crossover=on_crossover,
+    )
+
+    data_config = {
+        "account_name": config["account_name"],
+        "bar_type": config["bar_type"],
+        "bar_size": config["bar_size"],
+        "price": config["price"],
+    }
+    features = create_feature_engineering_pipeline(df, feature_config, data_config)
+    sample_weight = pd.Series(np.ones(len(events)), index=events.index)
+    meta_features = calculate_rolling_metrics(events, sample_weight)
+    features = features.join(meta_features).dropna()
+
+    events = events.loc[features.index]
+
+    X = features[feature_names]
+    y = events["bin"]
+
+    validate, test = PurgedSplit(events["t1"], test_size_pct=0.5).split(X)
+    X_val, X_test = X.iloc[validate], X.iloc[test]
+    y_val, y_test = y.iloc[validate], y.iloc[test]
+    events_val = events.iloc[validate]
+    df_val = df.loc[: events_val.t1[-1]]
+
+    prob = pd.Series(model.predict_proba(X_val)[:, 1], index=X_val.index, name="prob")
+    pred = (prob > confidence_threshold).astype(int)
+
+    validation_metrics = evaluate_meta_labeling_performance(
+        events=events_val,
+        meta_probabilities=prob,
+        close=df_val["close"],
+        confidence_threshold=confidence_threshold,
+        strategy_name=config["strategy"],
+        bet_sizing=bet_sizing,
+        **kwargs,
+    )
+
+    validation_metrics.update(
+        dict(
+            symbol=config["symbol"],
+            bar_type=config["bar_type"],
+            bar_size=bar_size,
+            confidence_threshold=confidence_threshold,
+            bet_sizing=bet_sizing,
+            min_ret=config["min_ret"],
+            strategy_config=dict(
+                strategy=config["strategy"],
+                account_name=config["account_name"],
+                symbol=config["symbol"],
+                bar_type=config["bar_type"],
+                bar_size=bar_size,
+                price=config["price"],
+                profit_target=config["profit_target"],
+                stop_loss=config["stop_loss"],
+                max_holding_period=config["max_holding_period"],
+                min_ret=config["min_ret"],
+                feature_func=feature_config["func"].__name__,
+                feature_params=feature_config["params"],
+                target_func=target_config["func"].__name__,
+                target_params=target_config["params"],
+                bet_sizing=f"{bet_sizing.title() if bet_sizing is not None else 'Fixed'}",
+                confidence_threshold=confidence_threshold,
+            ),
+            classification_report=classification_report(y_val, pred),
+            data=df,
+            X_test=X_test,
+            y_test=y_test,
+            events_test=events.iloc[test],
+        )
+    )
+
+    logger.info(f"{X_test.index[0]} - {X_test.index[-1]} held out for final testing")
+    return validation_metrics
+
+
+# noinspection PyPep8Naming
+@cacheable()
+def meta_labeling_cpcv_analysis(
+    test_start: Union[str, pd.Timestamp, datetime],
+    test_end: Union[str, pd.Timestamp, datetime],
+    strategy: BaseStrategy,
+    classifier: ClassifierMixin,
+    n_splits: int,
+    config: dict,
+    target_config: dict,
+    feature_config: dict,
+    feature_names: list,
+    weighting_scheme: str,
+    bet_sizing: str = None,
+    confidence_threshold: float = 0.5,
+    **kwargs,
+):
+    # pylint: disable=invalid-name
+    # pylint: disable=comparison-with-callable
+    """
+    Run purged/embargoed cross-validation for a classifier and return per-fold scores.
+
+    This implements the evaluation pattern from López de Prado (Advances in Financial Machine Learning,
+    snippet 7.4) but requires the caller to provide a CV generator (e.g., PurgedKFold).
+
+    Behavior summary
+    - Trains the provided classifier on each train split and scores on the corresponding test split.
+    - Supports passing separate sample weights for training and scoring.
+    - Special-cases `SequentiallyBootstrappedBaggingClassifier`: clones the classifier per fold and
+      aligns its samples_info_sets with the train indices; disables internal OOB scoring during CV.
+    - Accepts `scoring` as either a string key (mapped to a function) or a callable metric. For
+      probability-based scorers (log_loss, probability_weighted_accuracy) the function expects
+      probability inputs from `predict_proba`. For label-based scorers the function expects discrete
+      predictions from `predict`.
+
+    Parameters
+    ----------
+    classifier : ClassifierMixin
+        A scikit-learn compatible classifier instance (must implement fit/predict and optionally
+        predict_proba).
+    X : pd.DataFrame
+        Feature matrix indexed consistently with y and (for SequentiallyBootstrappedBaggingClassifier)
+        with classifier.samples_info_sets.
+    y : pd.Series
+        Target labels aligned with X (index used to align samples_info_sets when required).
+    events : pd.DataFrame
+        Triple-barrier events
+    cv_gen : BaseCrossValidator
+        Cross-validation generator instance with a split(X, y) method (e.g., PurgedKFold).
+    sample_weight : Array-like, optional (default=None)
+        Per-sample weights used when calling classifier.fit on the train split. If None, all ones
+        are used (no weighting).
+    sample_weight_score : Array-like, optional (default=None)
+        Per-sample weights used when calling the scoring function on the test split. If None, all ones
+        are used.
+    scoring : str or callable, optional (default=log_loss)
+        - If a string, one of the supported keys: "neg_log_loss", "accuracy", "f1", "pwa".
+          "neg_log_loss" maps to sklearn.metrics.log_loss and is returned as positive (the function
+          multiplies log_loss by -1 to make larger-is-better consistent with other scorers).
+        - If a callable, signature should be compatible with either:
+            scorer(y_true, y_pred, sample_weight=None, labels=...)   # label-based or prob-based
+          The code attempts to pass `labels=classifier.classes_` where relevant, and falls back if
+          the scorer does not accept that argument.
+        - For probability scorers (log_loss, probability_weighted_accuracy) the function is called
+          with `predict_proba` output; for label-based scorers the function is called with `predict`.
+        The default is `log_loss`.
+
+    Returns
+    -------
+    np.ndarray
+        1-D array of per-fold scores (float). Order corresponds to the order of splits returned by
+        cv_gen.split(X, y).
+
+    Raises
+    ------
+    KeyError
+        If SequentiallyBootstrappedBaggingClassifier is used and its samples_info_sets are not aligned
+        with y (index mismatch).
+    TypeError / RuntimeError
+        If the provided `scoring` callable raises on the provided inputs; the function attempts a
+        robust call pattern but will propagate unexpected exceptions.
+
+    Notes
+    -----
+    - For classifiers that require average/probability inputs (e.g., AUC), pass an appropriate
+      scoring callable that accepts probability-like inputs and set scoring to that callable or the
+      corresponding string key.
+    - For Seq-Bagging classifiers the function disables the estimator's internal OOB scoring during
+      cross-validation to avoid interference with the CV scoring flow.
+    """
+    if config["bar_type"] == "tick":
+        bar_size = int(config["tick_bar_size"])
+    else:
+        bar_size = config["bar_size"]
+
+    df = load_and_prepare_training_data(
+        symbol=config["symbol"],
+        start_date=test_start,
+        end_date=test_end,
+        account_name=config["account_name"],
+        bar_type=config["bar_type"],
+        bar_size=bar_size,
+        price=config["price"],
+    )
+    events = generate_events_triple_barrier(
+        df,
+        strategy,
+        target_config=target_config,
+        profit_target=config["profit_target"],
+        stop_loss=config["stop_loss"],
+        max_holding_period=config["max_holding_period"],
+        min_ret=config["min_ret"],
+        vertical_barrier_zero=False,
+        filter_as_series=None,
+    )
+    sample_weight = pd.Series(np.ones(len(events)), index=events.index)
+    meta_features = calculate_rolling_metrics(events, sample_weight)
+
+    data_config = {
+        "account_name": config["account_name"],
+        "bar_type": config["bar_type"],
+        "bar_size": config["bar_size"],
+        "price": config["price"],
+    }
+    features = create_feature_engineering_pipeline(df, feature_config, data_config)
+    features = features.join(meta_features).dropna()
+
+    cont = events.loc[features.index]
+    X = features[feature_names]
+    y = cont["bin"]
+
+    if weighting_scheme.startswith("uniqueness"):
+        sample_weight = cont["tW"]
+    elif weighting_scheme.startswith("return"):
+        sample_weight = cont["w"]
+    else:
+        sample_weight = np.ones((X.shape[0],))
+
+    try:
+        _, linear, decay = weighting_scheme.split("_")
+        decay_vec = get_weights_by_time_decay_optimized(
+            triple_barrier_events=cont,
+            close_index=df.index,
+            last_weight=decay,
+            linear=(1 if linear == "linear" else 0),
+            av_uniqueness=cont["tW"],
+        )
+        sample_weight *= decay_vec
+    except Exception:
+        pass
+
+    classifier = clone(classifier)
+
+    # Check for sequential bootstrap
+    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
+    if seq_bootstrap:
+        t1 = classifier.samples_info_sets.copy()
+
+    metrics = []
+
+    # Score model on KFolds
+    cv_gen = CombinatorialPurgedKFold(n_splits, n_test_splits=2, samples_info_sets=cont["t1"])
+    for train, test in tqdm(
+        cv_gen.split(X=X, y=y), desc="CPCV splits", total=cv_gen.n_combinations
+    ):  # noqa: F821
+        if seq_bootstrap:
+            classifier = classifier.set_params(
+                samples_info_sets=t1.iloc[train], oob_score=False
+            )  # Create new instance
+        fit = classifier.fit(
+            X=X.iloc[train, :],
+            y=y.iloc[train],
+            sample_weight=sample_weight.iloc[train],
+        )
+
+        X_test, y_test = X.iloc[test], y.iloc[test]
+        prob = pd.Series(fit.predict_proba(X_test)[:, 1], index=X_test.index, name="prob")
+        pred = (prob > confidence_threshold).astype(int)
+
+        validation_metrics = evaluate_meta_labeling_performance(
+            events=cont.iloc[test],
+            meta_probabilities=prob,
+            close=df["close"],
+            confidence_threshold=confidence_threshold,
+            strategy_name=config["strategy"],
+            bet_sizing=bet_sizing,
+            **kwargs,
+        )
+
+        validation_metrics.update(
+            dict(
+                symbol=config["symbol"],
+                bar_size=bar_size,
+                bar_type=config["bar_type"],
+                bet_sizing=bet_sizing,
+                classification_report=classification_report(y.iloc[train], pred),
+                data=df,
+                X_test=X_test,
+                y_test=y_test,
+                events_test=cont.iloc[test],
+            )
+        )
+
+        metrics.append(validation_metrics)
+
+    return metrics
+
+
 # Example usage
 if __name__ == "__main__":
     # Example with simulated data
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     # Create sample results for different bar types
     np.random.seed(42)
@@ -1866,9 +2259,7 @@ if __name__ == "__main__":
         trade_dates = np.random.choice(dates, n_trades, replace=False)
         trade_dates.sort()
 
-        primary_returns = pd.Series(
-            np.random.normal(0.001, 0.02, n_trades), index=trade_dates
-        )
+        primary_returns = pd.Series(np.random.normal(0.001, 0.02, n_trades), index=trade_dates)
 
         meta_returns = pd.Series(
             np.random.normal(0.0015, 0.015, n_trades - 20),
@@ -1928,67 +2319,3 @@ if __name__ == "__main__":
             "total_primary_signals": n_trades,
             "filtered_signals": n_trades - 20,
         }
-
-
-def get_validation_metrics(
-    test_start,
-    test_end,
-    pipeline: ModelDevelopmentPipeline,
-    bet_sizing: str = None,
-    confidence_threshold: float = 0.5,
-) -> dict:
-    from sklearn.metrics import classification_report
-
-    df_test = load_and_prepare_training_data(
-        symbol=pipeline.symbol,
-        start_date=test_start,
-        end_date=test_end,
-        **pipeline.data_config,
-    )
-    events = generate_events_triple_barrier(
-        df_test, pipeline.strategy, **pipeline.label_config
-    )
-    sample_weight = pd.Series(np.ones(events.shape[0]), index=events.index)
-    meta_features = calculate_rolling_metrics(events, sample_weight)
-
-    features = create_feature_engineering_pipeline(
-        df_test, pipeline.feature_config, pipeline.data_config
-    )
-    features = features.join(meta_features, how="inner").dropna()
-    events = events.reindex(features.index)
-    X = features[pipeline.preprocessed_features.columns]
-    y = events["bin"]
-
-    validate, test = PurgedSplit(events["t1"], test_size_pct=0.5).split(X)
-    X_val, X_test = X.iloc[validate], X.iloc[test]
-    y_val, y_test = y.iloc[validate], y.iloc[test]
-    prob = pd.Series(
-        pipeline.best_model.predict_proba(X_val)[:, 1], index=X_val.index, name="prob"
-    )
-    pred = (prob > confidence_threshold).astype(int)
-    events_val = events.iloc[validate]
-    df_val = df_test.loc[: events_val.t1[-1]]
-
-    validation_metrics = evaluate_meta_labeling_performance(
-        events_val,
-        prob,
-        df_val.close,
-        confidence_threshold=confidence_threshold,
-        strategy_name=pipeline.strategy.get_strategy_name(),
-        bet_sizing=bet_sizing,
-    )
-
-    validation_metrics.update(
-        dict(
-            symbol=pipeline.symbol,
-            bar_size=pipeline.data_config["bar_size"],
-            bar_type=pipeline.data_config["bar_type"],
-            classification_report=classification_report(y_val, pred),
-            data=df_test,
-            X_test=X_test,
-            y_test=y_test,
-            events_test=events.iloc[test],
-        )
-    )
-
-    return validation_metrics
