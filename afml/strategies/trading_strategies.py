@@ -22,11 +22,6 @@ class BaseStrategy(ABC):
         """Return strategy objective from {'mean_reversion', 'trend', 'momentum', 'pairs'}"""
         pass
 
-    @abstractmethod
-    def on_crossover(self) -> bool:
-        """Whether strategy signals are from crossovers"""
-        pass
-
 
 class BollingerStrategy(BaseStrategy):
     """
