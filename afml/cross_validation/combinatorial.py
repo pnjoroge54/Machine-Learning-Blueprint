@@ -1,8 +1,9 @@
 from typing import Generator, List, Optional, Tuple
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseCrossValidator
+from sklearn.model_selection import BaseCrossValidator
 from itertools import combinations
+
 
 class CombinatorialPurgedCV(BaseCrossValidator):
     """
@@ -14,7 +15,7 @@ class CombinatorialPurgedCV(BaseCrossValidator):
     
     Parameters
     ----------
-    n_folds : int, default=10
+    n_folds : int, default=6
         Total number of folds to split the data into.
         
     n_test_folds : int, default=2
@@ -35,7 +36,7 @@ class CombinatorialPurgedCV(BaseCrossValidator):
     
     def __init__(
         self,
-        n_folds: int = 10,
+        n_folds: int = 6,
         n_test_folds: int = 2,
         t1: Optional[pd.Series] = None,
         pct_embargo: float = 0.01,
@@ -101,7 +102,7 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         fold_indices = np.array_split(indices, self.n_folds)
         
         # 2. Generate all possible test fold combinations
-        fold_numbers = list(range(self.n_folds))
+        fold_numbers = range(self.n_folds)
         test_combinations = list(combinations(fold_numbers, self.n_test_folds))
         
         # Limit number of paths if specified
@@ -114,6 +115,9 @@ class CombinatorialPurgedCV(BaseCrossValidator):
                 replace=False
             )
             test_combinations = [test_combinations[i] for i in selected_idx]
+
+        # List of test indices to be used in filling backtest paths
+        self.all_test_indices = []
         
         # 3. Generate each combinatorial split
         for test_fold_nums in test_combinations:
@@ -166,6 +170,7 @@ class CombinatorialPurgedCV(BaseCrossValidator):
             
             # Yield only if we have valid training data
             if len(train_indices) > 0:
+                self.all_test_indices.append(test_indices)
                 yield train_indices, test_indices
     
     def get_n_splits(
@@ -209,9 +214,7 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         index_to_preds = {}
         for indices, preds in zip(all_test_indices, all_predictions):
             for idx, pred in zip(indices, preds):
-                if idx not in index_to_preds:
-                    index_to_preds[idx] = []
-                index_to_preds[idx].append(pred)
+                index_to_preds.setdefault(idx, []).append(pred)
         
         # For each index, we now have predictions from different splits
         # We need to form coherent paths. This is complex and depends on
