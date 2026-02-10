@@ -751,7 +751,7 @@ def get_optimal_sample_weight(
     cv_results = pd.DataFrame()
     
     def best_weight_by_cv(schemes, best_score=0, best_weight=None, best_scheme=None):
-        for scheme, weight in tqdm(schemes, desc="Analyzing weighting schemes", total=len(schemes)):
+        for scheme, weight in tqdm(schemes.items(), desc="Analyzing weighting schemes", total=len(schemes)):
             scores = ml_cross_val_score(
                 classifier,
                 X,
@@ -770,9 +770,9 @@ def get_optimal_sample_weight(
                 best_scheme = scheme
 
         logger.info(f"Best sample weight scheme: {best_scheme}")                
-        return best_score,  best_weight, best_scheme  
+        return best_score, best_weight, best_scheme  
 
-    best_score,  best_weight, best_scheme = best_weight_by_cv(weighting_schemes)
+    best_score, best_weight, best_scheme = best_weight_by_cv(weighting_schemes)
 
     decay_schemes = {
     f"{best_scheme}_exp_{decay}": 
@@ -786,7 +786,7 @@ def get_optimal_sample_weight(
     for decay in [.01, .25, .5, .75, .9]
     }
     
-    best_score,  best_weight, best_scheme = best_weight_by_cv(decay_schemes, best_score,  best_weight, best_scheme)
+    best_score, best_weight, best_scheme = best_weight_by_cv(decay_schemes, best_score,  best_weight, best_scheme)
   
     cv_results = {
         "best_score": best_score,
