@@ -761,7 +761,7 @@ def get_optimal_sample_weight(
                 sample_weight_score=weight,
                 scoring=scoring,
             )
-            cv_results.loc[scheme] = scores
+            cv_results[scheme] = scores
             score = scores.mean()
 
             if not np.isinf(score) and score > best_score:
