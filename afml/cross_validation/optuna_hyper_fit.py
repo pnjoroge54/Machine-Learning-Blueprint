@@ -31,14 +31,13 @@ def optimize_trading_model_with_pruning(
 
     # Define hyperparameter search space
     params = {
-        "n_estimators": trial.suggest_int("n_estimators", 50, 500),
-        "max_depth": trial.suggest_int("max_depth", 3, 20),
-        "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
-        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
-        "max_features": trial.suggest_float("max_features", 0.1, 1.0),
+        "n_estimators": trial.suggest_int("n_estimators", 50, 300),
+        "max_depth": trial.suggest_int("max_depth", 3, 10),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 5, 50),
+        "max_features": trial.suggest_float("max_features", 0.3, 0.8),
         "max_samples": trial.suggest_float("max_samples", 0.1, 1.0),
         "min_weight_fraction_leaf": trial.suggest_float(
-            "min_weight_fraction_leaf", 0.01, 0.5
+            "min_weight_fraction_leaf", 0.05, 0.1
         ),
     }
 
