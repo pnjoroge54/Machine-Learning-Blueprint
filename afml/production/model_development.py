@@ -23,8 +23,7 @@ from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparamet
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..features.trading_session import get_time_features
-from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
-from ..mt5.load_data import load_tick_data, save_data_to_parquet
+from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, get_events, triple_barrier_labels
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
 from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
@@ -240,6 +239,8 @@ class TickDataLoader:
         """
         Load data from parquet file or MT5.
         """
+        from ..mt5.load_data import load_tick_data, save_data_to_parquet
+
         tick_params = dict(
             symbol=symbol,
             start_date=start_date,
@@ -519,6 +520,7 @@ def generate_events_triple_barrier(
     vertical_barrier_zero: bool = True,
     filter_as_series: bool = True,
     on_crossover: bool = True,
+    labels: bool = True,
 ) -> pd.DataFrame:
     """
     Generate trading events using the triple-barrier method.
@@ -545,6 +547,8 @@ def generate_events_triple_barrier(
         Pass volatility threshold as series instead of scalar.
     on_crossover : bool, default=True
         Whether strategy expects crossover for signal
+    labels : bool, default=True
+        If True generate, labels, else generate t1, i.e., times of barrier touches.
     Returns
     -------
     pd.DataFrame
@@ -572,21 +576,31 @@ def generate_events_triple_barrier(
     side, t_events = get_entries(strategy, data, filter_threshold, on_crossover)
     vb = add_vertical_barrier(t_events, close, **max_holding_period)
 
-    events = triple_barrier_labels(
-        close,
-        target,
-        t_events,
-        vertical_barrier_times=vb,
-        side_prediction=side,
-        pt_sl=[profit_target, stop_loss],
-        min_ret=min_ret,
-        min_pct=0.05,
-        vertical_barrier_zero=vertical_barrier_zero,
-        drop=True,
-        verbose=False,
-    )
-
-    events = get_event_weights(events, close)
+    if labels:
+        events = triple_barrier_labels(
+            close=close,
+            target=target,
+            t_events=t_events,
+            vertical_barrier_times=vb,
+            side_prediction=side,
+            pt_sl=[profit_target, stop_loss],
+            min_ret=min_ret,
+            min_pct=0.05,
+            vertical_barrier_zero=vertical_barrier_zero,
+            drop=True,
+            verbose=False,
+        )
+        events = get_event_weights(events, close)
+    else:
+        events = get_events(
+            close=close,
+            target=target,
+            t_events=t_events,
+            vertical_barrier_times=vb,
+            side_prediction=side,
+            pt_sl=[profit_target, stop_loss],
+            min_ret=min_ret,
+            )
 
     return events
 
@@ -972,6 +986,7 @@ class ModelDevelopmentPipeline:
         target_config: dict,
         label_config: dict,
         model_params: dict,
+        bar_data: pd.DataFrame = None,
         base_dir: str = "Models",
     ):
         """
@@ -1044,6 +1059,8 @@ class ModelDevelopmentPipeline:
                     Random state for reproducibility.
                 - verbose : int, default=0
                     Controls verbosity of output.
+        bar_data: pd.DataFrame
+            Data to use in pipeline. Must contain OHLC columns
         base_dir: str
             Path to save pipeline data
         """
@@ -1077,7 +1094,7 @@ class ModelDevelopmentPipeline:
         self.file_paths = self.file_manager.setup_model_directory(self.config)
 
         # Storage for intermediate results
-        self.bar_data = None
+        self.bar_data = bar_data
         self.features = None
         self.events = None
         self.sample_weight = None
@@ -1188,11 +1205,13 @@ class ModelDevelopmentPipeline:
                 print("\n[Step 1/7] Loading training data...")
 
             self.load_training_data()
-
+            
             # Step 2: Feature engineering
             if verbose:
                 print("\n[Step 2/7] Computing features...")
+
             self.engineer_features()
+            
             if verbose:
                 print(f"✓ Generated {len(self.features.columns)} features")
 
@@ -1249,7 +1268,9 @@ class ModelDevelopmentPipeline:
             if save and self.best_model is not None:
                 if verbose:
                     print("\n[Saving] Writing artifacts to disk...")
+
                 self._save_all_artifacts()
+ 
                 if verbose:
                     print(f"✓ Saved to {self.file_paths['base_dir']}")
 
@@ -1621,10 +1642,21 @@ class ModelDevelopmentPipeline:
 
     def load_training_data(self):
         """Step 1: Load tick data and construct bars."""
-        self.bar_data = load_and_prepare_training_data(**self.data_config)
-        if self.data_config == "tick":
-            self.config["tick_bar_size"] = self.bar_data["tick_volume"].iloc[0]
-            self.file_manager.save_config(self.config)
+        if isinstance(self.bar_data, None):
+            self.bar_data = load_and_prepare_training_data(**self.data_config)
+            if self.data_config == "tick":
+                self.config["tick_bar_size"] = self.bar_data["tick_volume"].iloc[0]
+                self.file_manager.save_config(self.config)
+        elif isinstance(self.bar_data, pd.DataFrame):
+                # Force everything to lowercase before checking
+                self.bar_data.columns = self.bar_data.columns.str.lower()
+                ohlc_names = ["open", "high", "low", "close"]
+                is_valid = all(c in self.bar_data.columns for c in ohlc_names)
+                if not is_valid:
+                    error_msg = f"Columns should contain {ohlc_names}. \nCurrent: {self.bar_data.columns.to_list()}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
         self.completed_steps["data_loading"] = True
 
     def engineer_features(self):

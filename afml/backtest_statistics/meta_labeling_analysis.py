@@ -16,7 +16,7 @@ from sklearn.metrics import classification_report
 from tqdm import tqdm
 
 from afml.cache.unified_cache_system import cacheable
-from afml.cross_validation.combinatorial import CombinatorialPurgedKFold
+from afml.cross_validation.combinatorial import CombinatorialPurgedCV
 from afml.ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from afml.labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
 from afml.sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
@@ -742,7 +742,7 @@ def meta_labeling_cpcv_analysis(
     metrics = []
 
     # Score model on KFolds
-    cv_gen = CombinatorialPurgedKFold(n_splits, n_test_splits=2, samples_info_sets=cont["t1"])
+    cv_gen = CombinatorialPurgedCV(n_splits, n_test_splits=2, samples_info_sets=cont["t1"])
     for train, test in tqdm(
         cv_gen.split(X=X, y=y), desc="CPCV splits", total=cv_gen.n_combinations
     ):  # noqa: F821
