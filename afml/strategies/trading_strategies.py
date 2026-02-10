@@ -74,8 +74,6 @@ class BollingerStrategy(BaseStrategy):
     def get_objective(self) -> str:
         return self.objective
 
-    def on_crossover(self) -> bool:
-        return True
 
 
 class MACrossoverStrategy(BaseStrategy):
@@ -128,6 +126,3 @@ class MACrossoverStrategy(BaseStrategy):
 
     def get_objective(self) -> str:
         return self.objective
-
-    def on_crossover(self) -> bool:
-        return True
