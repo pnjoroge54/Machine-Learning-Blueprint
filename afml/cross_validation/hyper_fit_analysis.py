@@ -1207,7 +1207,7 @@ def generate_hyperparameter_markdown_report(
                 # Format based on type
                 if isinstance(value, (int, np.integer)):
                     row_values.append(f"`{value}`")
-                elif isinstance(value, (float, np.float_)):
+                elif isinstance(value, (float, np.float64)):
                     # For floats, show 4 decimal places if < 1, otherwise no decimals
                     if abs(value) < 1:
                         row_values.append(f"`{value:.4f}`")
