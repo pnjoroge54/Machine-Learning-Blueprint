@@ -5,7 +5,7 @@ Functions derived from Chapter 7: Cross Validation
 from sklearn.metrics import (accuracy_score, f1_score, log_loss,
                              precision_score, recall_score)
 
-from .combinatorial import CombinatorialPurgedKFold
+from .combinatorial import CombinatorialPurgedCV
 from .cross_validation import (PurgedKFold, PurgedSplit, PurgedWalkForwardCV,
                                analyze_cross_val_scores, ml_cross_val_score,
                                ml_get_train_times)
@@ -32,6 +32,6 @@ __all__ = [
     "probability_weighted_accuracy",
     "clf_hyper_fit",
     "clf_hyper_fit_cached",
-    "CombinatorialPurgedKFold",
+    "CombinatorialPurgedCV",
     "scoring_methods",
 ]
