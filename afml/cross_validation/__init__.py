@@ -25,7 +25,7 @@ __all__ = [
     "ml_get_train_times",
     "ml_cross_val_score",
     "analyze_cross_val_scores",
-    "analyze_cross_val_scores_calibrated",
+    # "analyze_cross_val_scores_calibrated",
     "PurgedKFold",
     "PurgedSplit",
     "PurgedWalkForwardCV",
