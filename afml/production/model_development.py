@@ -727,7 +727,7 @@ def get_optimal_sample_weight(
     cv_results : dict
         Cross-validation results.
     """
-    valid_index = features.dropna().index.intersection(events.index)
+    valid_index = features.index.intersection(events.index)
     cont = events.loc[valid_index]
     X = features.loc[valid_index]
     y = cont["bin"]
@@ -747,7 +747,6 @@ def get_optimal_sample_weight(
         ("uniqueness", cont["tW"]),
     ]
     best_score = 0
-    cv_results = pd.DataFrame()
 
     for scheme, weight in tqdm(weights, desc="Analyzing weighting schemes", total=len(weights)):
         scores = ml_cross_val_score(
@@ -760,7 +759,6 @@ def get_optimal_sample_weight(
             scoring=scoring,
         )
         score = scores.mean()
-        cv_results[scheme] = scores
 
         if not np.isinf(score) and score > best_score:
             best_score = score
