@@ -15,22 +15,20 @@ from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.metrics import classification_report
 from tqdm import tqdm
 
-from afml.cache.unified_cache_system import cacheable
-from afml.cross_validation.combinatorial import CombinatorialPurgedCV
-from afml.ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
-from afml.labeling.triple_barrier import add_vertical_barrier, triple_barrier_labels
-from afml.sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
-from afml.strategies.trading_strategies import BaseStrategy
-from afml.util.volatility import get_daily_vol
-
 from ..bet_sizing.bet_sizing import bet_size_budget, bet_size_probability, bet_size_reserve
+from ..cache.unified_cache_system import cacheable
+from ..cross_validation.combinatorial import CombinatorialPurgedCV
 from ..cross_validation.cross_validation import PurgedSplit
+from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..production.model_development import (
     calculate_rolling_metrics,
     create_feature_engineering_pipeline,
     generate_events_triple_barrier,
     load_and_prepare_training_data,
 )
+from ..strategies.trading_strategies import BaseStrategy
+from ..util.volatility import get_daily_vol
+
 from .performance_analysis import calculate_performance_metrics
 
 
@@ -394,75 +392,6 @@ def analyze_signal_quality(results: dict) -> Dict:
     return analysis
 
 
-def generate_test_events_triple_barrier(
-    data: pd.DataFrame,
-    strategy: BaseStrategy,
-    target_lookback: int,
-    profit_target: float = 1,
-    stop_loss: float = 1,
-    max_holding_period: Dict[str, int] = dict(num_bars=100),
-    min_ret: float = 0.0,
-    vertical_barrier_zero: bool = True,
-) -> pd.DataFrame:
-    """
-    Generate trading events using the triple-barrier method.
-
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Price bars with 'close' column.
-    strategy : BaseStrategy
-        Strategy instance implementing `generate_signals()`.
-    target_lookback : int
-        Lookback window for volatility estimation.
-    profit_target : float, default=1
-        Profit-taking threshold multiplier.
-    stop_loss : float, default=1
-        Stop-loss threshold multiplier.
-    max_holding_period : dict, default={'num_bars': 100}
-        Maximum holding period for vertical barrier.
-    min_ret : float, default=0.0
-        Minimum return threshold.
-    vertical_barrier_zero : bool, default=True
-        Set label to zero if vertical barrier is reached.
-    filter_as_series : bool, default=True
-        Pass volatility threshold as series instead of scalar.
-
-    Returns
-    -------
-    pd.DataFrame
-        Event labels with columns:
-        - 'bin' : {-1, 0, 1} classification
-        - 't1'  : vertical barrier timestamps
-        - 'w'   : sample weights
-        - 'tW'  : uniqueness weights
-
-    Notes
-    -----
-    - Prevents data leakage via time-aware caching.
-    """
-    # Compute barriers
-    close = data["close"]
-    target = get_daily_vol(close, target_lookback)
-    side = strategy.generate_signals(data)
-    t_events = side[side != 0].index
-    vb = add_vertical_barrier(t_events, close, **max_holding_period)
-    events = triple_barrier_labels(
-        close,
-        target,
-        t_events,
-        vertical_barrier_times=vb,
-        side_prediction=side,
-        pt_sl=[profit_target, stop_loss],
-        min_ret=min_ret,
-        min_pct=0.05,
-        vertical_barrier_zero=vertical_barrier_zero,
-        drop=True,
-        verbose=False,
-    )
-    return events
-
-
 @cacheable()
 def get_validation_metrics(
     test_start: Union[str, pd.Timestamp, datetime],
@@ -473,6 +402,7 @@ def get_validation_metrics(
     target_config: dict,
     feature_config: dict,
     feature_names: list,
+    on_crossover: bool,
     bet_sizing: str = None,
     confidence_threshold: float = 0.5,
     **kwargs,
@@ -492,11 +422,6 @@ def get_validation_metrics(
         price=config["price"],
     )
 
-    try:
-        on_crossover = strategy.on_crossover()
-    except Exception:
-        on_crossover = True
-
     events = generate_events_triple_barrier(
         df,
         strategy=strategy,
@@ -508,6 +433,7 @@ def get_validation_metrics(
         vertical_barrier_zero=False,
         filter_as_series=None,
         on_crossover=on_crossover,
+        labels=False,
     )
 
     data_config = {
@@ -671,6 +597,8 @@ def meta_labeling_cpcv_analysis(
     - For Seq-Bagging classifiers the function disables the estimator's internal OOB scoring during
       cross-validation to avoid interference with the CV scoring flow.
     """
+    from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
+
     if config["bar_type"] == "tick":
         bar_size = int(config["tick_bar_size"])
     else:
