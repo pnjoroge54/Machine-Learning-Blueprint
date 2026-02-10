@@ -381,12 +381,12 @@ def ml_cross_val_score(
         fit = classifier.fit(
             X=X.iloc[train, :],
             y=y.iloc[train],
-            sample_weight=sample_weight_train[train],
+            sample_weight=sample_weight_train.iloc[train],
         )
         params = dict(
             y_true=y.iloc[test],
             labels=classifier.classes_,
-            sample_weight=sample_weight_score[test],
+            sample_weight=sample_weight_score.iloc[test],
         )
         if scoring == (log_loss or probability_weighted_accuracy):
             params["y_pred"] = fit.predict_proba(X.iloc[test, :])
@@ -484,7 +484,7 @@ def analyze_cross_val_scores(
         fit = classifier.fit(
             X=X.iloc[train, :],
             y=y.iloc[train],
-            sample_weight=sample_weight_train[train],
+            sample_weight=sample_weight_train.iloc[train],
         )
         prob = fit.predict_proba(X.iloc[test, :])
         pred = (prob[:, 1] > 0.5).astype(int)
@@ -492,7 +492,7 @@ def analyze_cross_val_scores(
             y_true=y.iloc[test],
             y_pred=pred,
             labels=classifier.classes_,
-            sample_weight=sample_weight_score[test],
+            sample_weight=sample_weight_score.iloc[test],
         )
 
         for method, scoring in zip(ret_scores.keys(), scoring_methods):
