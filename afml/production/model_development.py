@@ -738,69 +738,59 @@ def get_optimal_sample_weight(
         max_samples=cont["tW"].mean(),
         max_depth=4,
         min_weight_fraction_leaf=0.05,
+        n_jobs=-1,
     )
     scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
-    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.02)
-    weights = [
+    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
+    
+    weighting_schemes = [
         ("return", cont["w"]),
         ("unweighted", pd.Series(1.0, index=cont.index)),
         ("uniqueness", cont["tW"]),
     ]
-    best_score = 0
+    cv_results = pd.DataFrame()
+    
+    def best_weight_by_cv(schemes, best_score=0, best_weight=None, best_scheme=None):
+        for scheme, weight in tqdm(schemes, desc="Analyzing weighting schemes", total=len(schemes)):
+            scores = ml_cross_val_score(
+                classifier,
+                X,
+                y,
+                cv_gen,
+                sample_weight_train=weight,
+                sample_weight_score=weight,
+                scoring=scoring,
+            )
+            cv_results.loc[scheme] = scores
+            score = scores.mean()
 
-    for scheme, weight in tqdm(weights, desc="Analyzing weighting schemes", total=len(weights)):
-        scores = ml_cross_val_score(
-            classifier,
-            X,
-            y,
-            cv_gen,
-            sample_weight_train=weight,
-            sample_weight_score=weight,
-            scoring=scoring,
-        )
-        score = scores.mean()
+            if not np.isinf(score) and score > best_score:
+                best_score = score
+                best_weight = weight
+                best_scheme = scheme
 
-        if not np.isinf(score) and score > best_score:
-            best_score = score
-            best_weight = weight
-            best_scheme = scheme
+        logger.info(f"Best sample weight scheme: {best_scheme}")                
+        return best_score,  best_weight, best_scheme  
 
-    est = weighted_estimator(classifier, cont, data_index)
-    param_distributions = {
-        "scheme": [best_scheme],
-        "decay": uniform(0, 1),  # decay factor between 0 and 1 inclusive
-        "linear": [True, False],
-    }
-    gs = RandomizedSearchCV(
-        estimator=est,
-        param_distributions=param_distributions,
-        n_iter=n_iter,
-        cv=cv_gen,
-        scoring=scoring,
-        n_jobs=-1,
-        random_state=42,
-        refit=False,
-    )
-    gs.fit(X, y)
+    best_score,  best_weight, best_scheme = best_weight_by_cv(weighting_schemes)
 
-    scheme, decay, linear = [gs.best_params_[k] for k in ["scheme", "decay", "linear"]]
-    best_scheme = f"{scheme}_{'linear' if linear else 'exp'}_{decay}"
-    logger.info(f"Best sample weight scheme: {best_scheme}")
-
-    decay_vec = get_weights_by_time_decay_optimized(
+    decay_schemes = {
+    f"{best_scheme}_exp_{decay}": 
+    get_weights_by_time_decay_optimized(
         triple_barrier_events=cont,
         close_index=data_index,
         last_weight=decay,
-        linear=linear,
+        linear=0,
         av_uniqueness=cont["tW"],
-    )
-
-    best_weight *= decay_vec
-
+    ) * best_weight
+    for decay in [.01, .25, .5, .75, .9]
+    }
+    
+    best_score,  best_weight, best_scheme = best_weight_by_cv(decay_schemes, best_score,  best_weight, best_scheme)
+  
     cv_results = {
         "best_score": best_score,
-        "cv_results_scheme": cv_results,
-        "cv_results": pd.DataFrame(gs.cv_results_),
+        "cv_results": cv_results,
         "scoring": scoring,
         "best_scheme": best_scheme,
     }
@@ -896,7 +886,7 @@ def train_model_with_cv(
     bagging_max_features: float = 1.0,
     rnd_search_iter: int = 0,
     n_jobs: int = -1,
-    pct_embargo: float = 0.02,
+    pct_embargo: float = 0.01,
     random_state: int = None,
     verbose: int = 0,
 ) -> Tuple[RandomForestClassifier, Dict]:
@@ -927,7 +917,7 @@ def train_model_with_cv(
         Randomized search iterations.
     n_jobs : int, default=-1
         Parallel jobs.
-    pct_embargo : float, default=0.02
+    pct_embargo : float, default=0.01
         Embargo percentage for purging CV splits.
     random_state : int, optional
         Random seed.
