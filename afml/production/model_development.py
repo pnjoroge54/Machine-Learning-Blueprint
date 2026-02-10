@@ -1642,7 +1642,7 @@ class ModelDevelopmentPipeline:
 
     def load_training_data(self):
         """Step 1: Load tick data and construct bars."""
-        if isinstance(self.bar_data, None):
+        if isinstance(self.bar_data, type(None)):
             self.bar_data = load_and_prepare_training_data(**self.data_config)
             if self.data_config == "tick":
                 self.config["tick_bar_size"] = self.bar_data["tick_volume"].iloc[0]
