@@ -352,10 +352,10 @@ def ml_cross_val_score(
     """
     # If no sample_weight then broadcast a value of 1 to all samples (full weight).
     if sample_weight_train is None:
-        sample_weight_train = np.ones((X.shape[0],))
+        sample_weight_train = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     if sample_weight_score is None:
-        sample_weight_score = np.ones((X.shape[0],))
+        sample_weight_score = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     # Check for sequential bootstrap
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
@@ -464,10 +464,10 @@ def analyze_cross_val_scores(
 
     # If no sample_weight then broadcast a value of 1 to all samples (full weight).
     if sample_weight_train is None:
-        sample_weight_train = np.ones((X.shape[0],))
+        sample_weight_train = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     if sample_weight_score is None:
-        sample_weight_score = np.ones((X.shape[0],))
+        sample_weight_score = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
     if seq_bootstrap:
@@ -495,6 +495,45 @@ def analyze_cross_val_scores(
             sample_weight=sample_weight_score.iloc[test],
         )
 
+        for method, scoring in zip(ret_scores.keys(), scoring_methods):
+            if scoring in (probability_weighted_accuracy, log_loss):
+                params["y_pred"] = prob
+                score = scoring(**params)
+                if method == "neg_log_loss":
+                    score *= -1
+            else:
+                params["y_pred"] = pred
+                try:
+                    score = scoring(**params)
+                except Exception:
+                    del params["labels"]
+                    score = scoring(**params)
+                    params["labels"] = classifier.classes_
+
+            ret_scores[method][i] = score
+
+        cms.append(confusion_matrix(**params).round(2))
+
+    # Mean and standard deviation of scores
+    scores_df = pd.DataFrame.from_dict(
+        {
+            scoring: {"mean": scores.mean(), "std": scores.std()}
+            for scoring, scores in ret_scores.items()
+        },
+        orient="index",
+    )
+
+    # Extract TN, TP, FP, FN for each fold
+    confusion_matrix_breakdown = []
+    for i, cm in enumerate(cms, 1):
+        if cm.shape == (2, 2):  # Binary classification
+            tn, fp, fn, tp = cm.ravel()
+            confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
+        else:
+            # For multi-class, you might want different handling
+            confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
+
+    return ret_scores, scores_df, confusion_matrix_breakdown
         for method, scoring in zip(ret_scores.keys(), scoring_methods):
             if scoring in (probability_weighted_accuracy, log_loss):
                 params["y_pred"] = prob
