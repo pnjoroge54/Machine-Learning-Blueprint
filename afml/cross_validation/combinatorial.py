@@ -1,176 +1,287 @@
-from typing import Generator, List, Optional, Tuple
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import BaseCrossValidator
 from itertools import combinations
+from sklearn.base import clone
+from sklearn.model_selection import BaseCrossValidator
+from joblib import Parallel, delayed
+from math import comb
+from numba import njit
 
 
-class CombinatorialPurgedCV(BaseCrossValidator):
+class CombinatorialPurgedKFold(BaseCrossValidator):
     """
-    Combinatorial Purged Cross-Validation for financial time series.
+    Combinatorial Purged Cross-Validation (CPCV).
     
-    This class extends the PurgedKFold concept to generate multiple 
-    backtest paths using combinatorial splits while preventing data 
-    leakage through event-based purging and embargo.
+    This splitter decomposes the dataset into N contiguous chunks.
+    For every split, it holds out 'k' of these chunks as the Test Set, 
+    and uses the remaining N-k chunks as the Training Set (with purging/embargo).
     
-    Parameters
-    ----------
-    n_folds : int, default=6
-        Total number of folds to split the data into.
-        
-    n_test_folds : int, default=2
-        Number of folds used for testing in each split.
-        
-    t1 : pd.Series
-        The information range on which each record is constructed.
-        - t1.index: Time when information extraction started
-        - t1.value: Time when information extraction ended
-        
-    pct_embargo : float, default=0.01
-        Percent that determines the embargo size.
-        
-    n_paths : Optional[int], default=None
-        Maximum number of combinatorial paths to generate.
-        If None, generates all possible combinations.
+    :param n_splits: (int) N, the number of total groups to split the data into.
+    :param n_test_splits: (int) k, the number of groups to be in the test set.
+    :param t1: (pd.Series) The information range (event end times).
+    :param pct_embargo: (float) Percent of data to embargo after a test split.
     """
-    
-    def __init__(
-        self,
-        n_folds: int = 6,
-        n_test_folds: int = 2,
-        t1: Optional[pd.Series] = None,
-        pct_embargo: float = 0.01,
-        n_paths: Optional[int] = None
-    ):
-        if not isinstance(t1, pd.Series):
-            raise ValueError("t1 must be a pd.Series")
-            
-        self.n_folds = n_folds
-        self.n_test_folds = n_test_folds
+    def __init__(self, n_splits=5, n_test_splits=2, t1=None, pct_embargo=0.01):
+        self.n_splits = n_splits
+        self.n_test_splits = n_test_splits
         self.t1 = t1
         self.pct_embargo = pct_embargo
-        self.n_paths = n_paths
         
-        # Store the original index for alignment
-        self.t1_index = t1.index
-        
-        # Calculate total number of possible combinations
-        self.total_combinations = self._calculate_total_combinations()
-        
-    def _calculate_total_combinations(self) -> int:
-        """Calculate total number of possible combinations."""
-        from math import comb
-        return comb(self.n_folds, self.n_test_folds)
-    
-    def split(
-        self, 
-        X: pd.DataFrame, 
-        y: Optional[pd.Series] = None, 
-        groups: Optional[np.ndarray] = None
-    ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
-        """
-        Generate combinatorial train/test splits with purging.
-        
-        Parameters
-        ----------
-        X : pd.DataFrame
-            Feature matrix aligned with t1 index.
-            
-        y : pd.Series, optional
-            Target labels (not used for splitting but kept for compatibility).
-            
-        groups : array-like, optional
-            Group labels (not used but kept for compatibility).
-            
-        Yields
-        ------
-        train_indices : np.ndarray
-            Indices for training set (purged of overlapping events).
-            
-        test_indices : np.ndarray
-            Indices for test set.
-        """
-        # Validate alignment
-        if (X.index != self.t1_index).sum() != len(self.t1):
-            raise ValueError("X and t1 must have the same index")
-            
-        indices = np.arange(X.shape[0])
-        n_samples = X.shape[0]
-        embargo_size = int(n_samples * self.pct_embargo)
-        
-        # 1. Create sequential folds
-        fold_indices = np.array_split(indices, self.n_folds)
-        
-        # 2. Generate all possible test fold combinations
-        fold_numbers = range(self.n_folds)
-        test_combinations = list(combinations(fold_numbers, self.n_test_folds))
-        
-        # Limit number of paths if specified
-        if self.n_paths is not None and self.n_paths < len(test_combinations):
-            # Randomly sample combinations (can be made deterministic with random_state)
-            rng = np.random.default_rng(42)
-            selected_idx = rng.choice(
-                len(test_combinations), 
-                size=self.n_paths, 
-                replace=False
-            )
-            test_combinations = [test_combinations[i] for i in selected_idx]
+        # Validation
+        if not isinstance(t1, pd.Series):
+            raise ValueError("t1 must be a pandas Series")
+        if n_test_splits >= n_splits:
+            raise ValueError("n_test_splits (k) must be less than n_splits (N)")
 
-        # List of test indices to be used in filling backtest paths
-        self.all_test_indices = []
+    def split(self, X, y=None, groups=None):
+        indices = np.arange(X.shape[0])
+        n_samples = len(indices)
         
-        # 3. Generate each combinatorial split
-        for test_fold_nums in test_combinations:
-            # Get test indices from selected folds
-            test_indices = np.concatenate([fold_indices[i] for i in test_fold_nums])
+        # 1. Define the N contiguous groups using array_split (matches AFML style)
+        # This creates a list of arrays, e.g., [arr([0,1,2]), arr([3,4,5]), ...]
+        group_arrays = np.array_split(indices, self.n_splits)
+        
+        # Store bounds for easy access: (start_index, end_index)
+        # end_index is exclusive for slice usage
+        group_bounds = [(arr[0], arr[-1] + 1) for arr in group_arrays]
+        
+        # 2. Iterate over all combinations of k groups
+        # combinations(range(5), 2) -> (0,1), (0,2), ... (3,4)
+        for test_group_ids in combinations(range(self.n_splits), self.n_test_splits):
             
-            # Get train indices from remaining folds
-            train_fold_nums = [i for i in fold_numbers if i not in test_fold_nums]
-            initial_train_indices = np.concatenate([fold_indices[i] for i in train_fold_nums])
+            # --- Construct Test Set ---
+            test_indices_list = []
+            test_time_ranges = [] # To store (start_time, end_time) of test events
             
-            # 4. Apply event-based purging
-            if len(initial_train_indices) > 0:
-                # Get test event times for purging
-                test_times = pd.Series(
-                    index=[self.t1.index[test_indices[0]]],
-                    data=[self.t1.iloc[test_indices[-1]]]
-                )
+            for gid in test_group_ids:
+                start_ix, end_ix = group_bounds[gid]
+                test_indices_list.append(indices[start_ix:end_ix])
                 
-                # Get train event times
-                initial_train_times = pd.Series(
-                    index=self.t1.index[initial_train_indices],
-                    data=self.t1.iloc[initial_train_indices].values
-                )
+                # Get time boundaries for purging
+                # t1.index is event start, t1.values is event end
+                s_time = self.t1.index[start_ix]
+                e_time = self.t1.iloc[start_ix:end_ix].max()
+                test_time_ranges.append((s_time, e_time))
+            
+            test_indices = np.concatenate(test_indices_list)
+            
+            # --- Construct Train Set ---
+            # Start with all indices that are NOT in the test set
+            mask = np.ones(n_samples, dtype=bool)
+            mask[test_indices] = False
+            train_indices = indices[mask]
+            
+            # --- Purging & Embargo ---
+            # We must purge training samples that overlap with ANY of the test groups
+            train_starts = self.t1.index[train_indices]
+            train_ends = self.t1.iloc[train_indices].values
+            
+            keep_mask = np.ones(len(train_indices), dtype=bool)
+            embargo_offset = int(n_samples * self.pct_embargo)
+            
+            for test_start, test_end in test_time_ranges:
+                # 1. Determine Embargo cutoff
+                # Find where test_end falls in the index, shift by embargo size
+                # usage of searchsorted ensures we handle non-contiguous time indices
+                idx_in_full = self.t1.index.searchsorted(test_end)
+                if idx_in_full + embargo_offset < n_samples:
+                    embargo_cutoff = self.t1.index[idx_in_full + embargo_offset]
+                else:
+                    embargo_cutoff = pd.Timestamp.max
                 
-                # Apply purging using ml_get_train_times
-                purged_train_times = ml_get_train_times(initial_train_times, test_times)
-                
-                # Convert purged times back to indices
-                train_indices = []
-                for train_time in purged_train_times.index:
-                    loc = self.t1.index.get_loc(train_time)
-                    if isinstance(loc, int):
-                        train_indices.append(loc)
-                    else:
-                        train_indices.extend(range(loc.start, loc.stop))
-                
-                train_indices = np.array(train_indices, dtype=int)
+                # 2. Identify Overlaps
+                # Drop if: Train_Start <= Embargo_End AND Train_End >= Test_Start
+                is_overlapping = (train_starts <= embargo_cutoff) & \
+                                 (train_ends >= test_start)
+                                 
+                keep_mask = keep_mask & ~is_overlapping
+            
+            yield train_indices[keep_mask], test_indices
+
+    def get_n_splits(self, X=None, y=None, groups=None):
+        from math import comb
+        return comb(self.n_splits, self.n_test_splits)
+
+
+class CPCVAnalyzer:
+    """
+    Manages Combinatorial Purged CV execution and result recombination.
+    Encapsulates the 'variable tracking' so the user doesn't have to.
+    """
+    def __init__(self, estimator, cv):
+        self.estimator = estimator
+        self.cv = cv
+        self._prediction_matrix = None
+        self._X = None
+        self._y = None
+
+    def fit_predict(self, X, y, sample_weight=None):
+        """Runs the CV and stores results internally."""
+        self._X = X
+        self._y = y
+        n_splits = self.cv.get_n_splits(X)
+        
+        # Initialize matrix: Rows = Samples, Cols = Split Index
+        self._prediction_matrix = pd.DataFrame(
+            np.nan, 
+            index=X.index, 
+            columns=[f"split_{i}" for i in range(n_splits)]
+        )
+
+        for i, (train_idx, test_idx) in enumerate(self.cv.split(X, y)):
+            model = clone(self.estimator)
+            
+            # Fit & Predict
+            if sample_weight is not None:
+                model.fit(X.iloc[train_idx], y.iloc[train_idx], 
+                          sample_weight=sample_weight.iloc[train_idx])
             else:
-                train_indices = np.array([], dtype=int)
+                model.fit(X.iloc[train_idx], y.iloc[train_idx])
             
-            # 5. Apply embargo
-            if len(train_indices) > 0 and embargo_size > 0:
-                # Find indices in train that come immediately after test
-                test_end = test_indices[-1] + 1
-                embargo_end = min(test_end + embargo_size, n_samples)
+            # Use predict_proba for financial ranking/scoring if available
+            if hasattr(model, "predict_proba"):
+                preds = model.predict_proba(X.iloc[test_idx])[:, 1]
+            else:
+                preds = model.predict(X.iloc[test_idx])
                 
-                # Remove training indices within embargo period
-                mask = ~((train_indices >= test_end) & (train_indices < embargo_end))
-                train_indices = train_indices[mask]
+            self._prediction_matrix.iloc[test_idx, i] = preds
             
-            # Yield only if we have valid training data
-            if len(train_indices) > 0:
-                self.all_test_indices.append(test_indices)
+        return self.recombined_predictions
+
+    @property
+    def prediction_matrix(self):
+        """The raw matrix of predictions from all combinatorial folds."""
+        if self._prediction_matrix is None:
+            raise ValueError("Run .fit_predict() first.")
+        return self._prediction_matrix
+
+    @property
+    def recombined_predictions(self):
+        """
+        The 'Bagged' prediction for each timestamp.
+        Calculates the mean across all folds where the sample was in the test set.
+        """
+        return self.prediction_matrix.mean(axis=1)
+
+    @property
+    def num_predictions_per_sample(self):
+        """Returns how many times each sample was 'tested'."""
+        return self.prediction_matrix.count(axis=1)
+
+    @property
+    def backtest_paths(self):
+        """
+        Returns the individual backtest paths as described in AFML.
+        Each path is a series covering the full history.
+        """
+        # Logic to partition the combinations into J = (N-1 choose k-1) paths
+        # This is a complex combinatorial task; for simplicity, many users 
+        # use the prediction_matrix directly for distribution analysis.
+        pass
+            
+    
+@njit(cache=True)
+def fill_sides_numba(num_close, t0_idx, t1_idx, side):
+    full_side = np.zeros(num_close, dtype=np.float64)
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            full_side[start : end + 1] += side[i]
+    return full_side
+    
+
+class CPCVAnalyzer:
+    def __init__(self, estimator, cv_gen, close_prices, n_jobs=-1):
+        self.estimator = estimator
+        self.cv_gen = cv_gen # Renamed as requested
+        self.close = close_prices
+        self.n_jobs = n_jobs
+        self._prediction_matrix = None
+        self._X = None
+        # Align log returns for MtM: r_t = log(P_{t+1}/P_t)
+        self.daily_returns = np.log(self.close).diff().shift(-1).fillna(0)
+
+    def fit_predict(self, X, y, sample_weight=None):
+        """Parallelized training using joblib."""
+        self._X = X
+        n_splits = self.cv_gen.get_n_splits(X)
+        
+        # Dispatching folds to parallel workers
+        results = Parallel(n_jobs=self.n_jobs)(
+            delayed(_fit_predict_fold)(
+                self.estimator, X, y, train, test, i, sample_weight
+            ) for i, (train, test) in enumerate(self.cv_gen.split(X, y))
+        )
+
+        self._prediction_matrix = pd.DataFrame(
+            np.nan, index=X.index, columns=range(n_splits)
+        )
+        
+        for fold_idx, test_idx, preds in results:
+            self._prediction_matrix.iloc[test_idx, fold_idx] = preds
+            
+        return self.recombined_predictions
+
+    @property
+    def backtest_paths(self):
+        """Assembles the J = (N-1 choose k-1) unique paths."""
+        N, k = self.cv_gen.n_splits, self.cv_gen.n_test_splits
+        J = comb(N - 1, k - 1)
+        group_indices = np.array_split(np.arange(len(self._X)), N)
+        
+        paths = []
+        for j in range(J):
+            path_series = pd.Series(index=self._X.index, dtype=float)
+            for g_idx in range(N):
+                valid_cols = self._prediction_matrix.columns[
+                    self._prediction_matrix.iloc[group_indices[g_idx][0]].notna()
+                ]
+                target_col = valid_cols[j]
+                idx = group_indices[g_idx]
+                path_series.iloc[idx] = self._prediction_matrix.iloc[idx, target_col]
+            paths.append(path_series)
+        return paths
+
+    def get_distribution_metrics(self):
+        """
+        Efficiently collects metrics into a list of dicts before
+        converting to a DataFrame.
+        """
+        paths = self.backtest_paths
+        results_list = [] # The efficient way
+        
+        for i, path_side in enumerate(paths):
+            # Vectorized indexing
+            t0_idx = self.close.index.get_indexer(path_side.index)
+            t1_idx = self.close.index.get_indexer(self.cv_gen.t1.loc[path_side.index])
+            
+            # Numba MtM
+            pos = fill_sides_numba(len(self.close), t0_idx, t1_idx, path_side.values)
+            rets = pd.Series(pos * self.daily_returns.values, index=self.close.index)
+            
+            # Append dict to list (O(1) per iteration)
+            results_list.append({
+                'path_id': i,
+                'sharpe': (rets.mean() / rets.std() * np.sqrt(252)) if rets.std() != 0 else 0,
+                'max_dd': ((rets.cumsum().apply(np.exp) / rets.cumsum().apply(np.exp).expanding().max()) - 1).min()
+            })
+            
+        return pd.DataFrame(results_list) # Single O(N) conversion
+
+    @property
+    def recombined_predictions(self):
+        return self._prediction_matrix.mean(axis=1)
+
+
+def _fit_predict_fold(estimator, X, y, train_idx, test_idx, fold_idx, sample_weight=None):
+    model = clone(estimator)
+    if sample_weight is not None:
+        model.fit(X.iloc[train_idx], y.iloc[train_idx], sample_weight=sample_weight.iloc[train_idx])
+    else:
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+    
+    preds = model.predict_proba(X.iloc[test_idx])[:, 1] if hasattr(model, "predict_proba") else model.predict(X.iloc[test_idx])
+    return fold_idx, test_idx, preds                self.all_test_indices.append(test_indices)
                 yield train_indices, test_indices
     
     def get_n_splits(
