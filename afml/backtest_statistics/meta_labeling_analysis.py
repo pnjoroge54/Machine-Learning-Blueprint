@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from ..bet_sizing.bet_sizing import bet_size_budget, bet_size_probability, bet_size_reserve
 from ..cache.unified_cache_system import cacheable
-from ..cross_validation.combinatorial import CombinatorialPurgedCV
+from ..cross_validation.combinatorial import CombinatorialPurgedKFold
 from ..cross_validation.cross_validation import PurgedSplit
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..production.model_development import (
@@ -670,7 +670,7 @@ def meta_labeling_cpcv_analysis(
     metrics = []
 
     # Score model on KFolds
-    cv_gen = CombinatorialPurgedCV(n_splits, n_test_splits=2, samples_info_sets=cont["t1"])
+    cv_gen = CombinatorialPurgedKFold(n_splits, n_test_splits=2, samples_info_sets=cont["t1"])
     for train, test in tqdm(
         cv_gen.split(X=X, y=y), desc="CPCV splits", total=cv_gen.n_combinations
     ):  # noqa: F821
