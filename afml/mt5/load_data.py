@@ -28,7 +28,6 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-import MetaTrader5 as mt5
 import numpy as np
 import pandas as pd
 from dask import dataframe as dd
@@ -504,6 +503,8 @@ def load_tick_data(
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
+    import MetaTrader5 as mt5
+    
     MAJORS = [
         "EURUSD",
         "USDJPY",
