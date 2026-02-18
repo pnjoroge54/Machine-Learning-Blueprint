@@ -995,15 +995,12 @@ def train_model_with_cv(
 
 
 def get_model_type(model):
-    from sklearn.tree import DecisionTreeClassifier
-    from sklearn.ensemble import RandomForestClassifier
-
-    model_type = dict(
-        RandomForestClassifier="rf",
-        SequentiallyBootstrappedBaggingClassifier="seq_rf",
-    )
+    model_type = {
+        "RandomForestClassifier": "rf",
+        "SequentiallyBootstrappedBaggingClassifier": "seq_rf",
+    }
     
-    return model_type[type(model)]
+    return model_type[type(model).__name__]
 
 
 class ModelDevelopmentPipeline:
