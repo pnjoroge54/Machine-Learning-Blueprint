@@ -999,8 +999,8 @@ def get_model_type(model):
     from sklearn.ensemble import RandomForestClassifier
 
     model_type = dict(
-        RandomForestClassifier="rf",
-        SequentiallyBootstrappedBaggingClassifier="seq_rf",
+        type(RandomForestClassifier)="rf",
+        type(SequentiallyBootstrappedBaggingClassifier)="seq_rf",
     )
     
     return model_type[type(model)]
@@ -1107,7 +1107,7 @@ class ModelDevelopmentPipeline:
         self.label_config = label_config
         self.target_config = target_config
         self.model_params = model_params
-        self.model_type = get_model_type(model_params["pipe_clf"].steps[-1][-1])
+        self.model_type = get_model_type(model_params["pipe_clf"].steps[-1])
         self.account_name = data_config.get("account_name", "default")
         self.pipeline_version = "3.0"
 
