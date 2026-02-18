@@ -1511,7 +1511,7 @@ class ModelDevelopmentPipeline:
     def train_model(self):
         """Step 6: Train model with cross-validation."""
         # Configure pipeline
-        if self.best_model is not None and self.cv_results is not None:: 
+        if self.best_model is not None and self.cv_results is not None: 
             self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
             pipe = clone(self.model_params["pipe_clf"])
 
