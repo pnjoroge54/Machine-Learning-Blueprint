@@ -1103,11 +1103,17 @@ class ModelDevelopmentPipeline:
         self.feature_config = feature_config
         self.label_config = label_config
         self.target_config = target_config
-        self.model_params = model_params
-        self.model_type = get_model_type(model_params["pipe_clf"].steps[-1])
         self.account_name = data_config.get("account_name", "default")
         self.pipeline_version = "3.0"
+        self.model_params = model_params
 
+        if isinstance(model_params["pipe_clf"], Pipeline):
+            model = self.best_model.steps[-1][1]
+        else:
+            model = model_params["pipe_clf"]
+            
+        self.model_type = get_model_type(model)
+        
         # Build complete config
         self.config = data_config.copy()
         self.config["training_start"] = self.config.pop("start_date")
@@ -1535,13 +1541,14 @@ class ModelDevelopmentPipeline:
 
             # Set n_jobs for production use
             self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
+            
         self.completed_steps["model_training"] = True
 
     def analyze_features(self):
         """Step 7: Analyze feature importance."""
         features_columns = (
             self.best_model[:-1].get_feature_names_out()
-            if len(self.best_model) > 1
+            if self.best_model is not None and len(self.best_model) > 1
             else self.preprocessed_features.columns.to_list()
         )
 
