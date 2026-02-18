@@ -1108,7 +1108,7 @@ class ModelDevelopmentPipeline:
         self.model_params = model_params
 
         if isinstance(model_params["pipe_clf"], Pipeline):
-            model = self.best_model.steps[-1][1]
+            model = model_params["pipe_clf"].steps[-1][1]
         else:
             model = model_params["pipe_clf"]
             
