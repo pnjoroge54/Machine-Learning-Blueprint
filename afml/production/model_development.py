@@ -1120,10 +1120,6 @@ class ModelDevelopmentPipeline:
 
         self.label_config["target_config"] = target_config
 
-        # Initialize file management and logging
-        self.file_manager = ModelFileManager(base_dir)
-        self.file_paths = self.file_manager.setup_model_directory(self.config, self.model_type)
-
         # Storage for intermediate results
         self.bar_data = None
         self.features = None
@@ -1146,6 +1142,11 @@ class ModelDevelopmentPipeline:
             model = model_params["pipe_clf"]
             
         self.model_type = get_model_type(model)
+        
+        # Initialize file management and logging
+        self.file_manager = ModelFileManager(base_dir)
+        self.file_paths = self.file_manager.setup_model_directory(self.config, self.model_type)
+
         
         # Sample weight settings that can be set after initialization
         self.linear = None
