@@ -1243,6 +1243,39 @@ class ModelDevelopmentPipeline:
             print("-" * 50)
             print(pd.Series(self.config).to_string(), "\n")
 
+        
+        if self.file_paths["model"].exists():
+            print("\nLoading trained model and artifacts...")
+
+            self.best_model = joblib.load(self.file_paths["model"])
+            self.metrics = pickle.load(self.file_paths["metrics"])
+            self.preprocessed_features = pd.read_parquet(self.file_paths["features"])
+            self.events = pd.read_parquet(self.file_paths["events"])
+            onnx_path = str(self.file_paths["model"]).replace("joblib", "onnx")
+            
+            if self.export_onxx and not Path(onnx_path).exists():
+                metadata = {
+                    "strategy": self.strategy,
+                    "feature_config": self.feature_config,
+                    "label_config": self.label_config,
+                    "feature_names": self._get_feature_names(),
+                    "feature_count": len(self._get_feature_names()),
+                    "training_samples": self.metrics["events_count"],
+                    "best_weighting_scheme": self.metrics["best_weighting_scheme"],
+                    "pipeline_version": self.pipeline_version,
+                    "created_by": "AFML Production Pipeline",
+                }
+                self.file_manager.save_model_as_onxx(
+                    self.best_model, self._get_feature_names(), metadata
+                )
+                
+            return (
+                self.best_model,
+                self._get_feature_names(),
+                self.metrics,
+                self.config,
+            )
+
         try:
             # Step 1: Load data
             if verbose:
@@ -1483,68 +1516,38 @@ class ModelDevelopmentPipeline:
 
     def train_model(self):
         """Step 6: Train model with cross-validation."""
-        # if self.file_paths["model"].exists():
-        #     print("\nLoading trained model and artifacts...")
-
-        #     self.best_model = joblib.load(self.file_paths["model"])
-        #     self.metrics = pickle.load(self.file_paths["metrics"])
-        #     self.preprocessed_features = pd.read_parquet(self.file_paths["features"])
-        #     self.events = pd.read_parquet(self.file_paths["events"])
-        #     onnx_path = str(self.file_paths["model"]).replace("joblib", "onnx")
-            
-        #     if self.export_onxx and not Path(onnx_path).exists():
-        #         metadata = {
-        #             "strategy": self.strategy,
-        #             "feature_config": self.feature_config,
-        #             "label_config": self.label_config,
-        #             "feature_names": self._get_feature_names(),
-        #             "feature_count": len(self._get_feature_names()),
-        #             "training_samples": self.metrics["events_count"],
-        #             "best_weighting_scheme": self.metrics["best_weighting_scheme"],
-        #             "pipeline_version": self.pipeline_version,
-        #             "created_by": "AFML Production Pipeline",
-        #         }
-        #         self.file_manager.save_model_as_onxx(
-        #             self.best_model, self._get_feature_names(), metadata
-        #         )
-                
-        #     return (
-        #         self.best_model,
-        #         self._get_feature_names(),
-        #         self.metrics,
-        #         self.config,
-        #     )
 
         # Configure pipeline
-        if self.best_model is None and self.cv_results is not None:
-            self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
-            pipe = clone(self.model_params["pipe_clf"])
+        self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
+        pipe = clone(self.model_params["pipe_clf"])
 
-            if is_tree(pipe.steps[-1][-1]):
-                av_uniqueness = self.events["tW"].mean()
-                pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
+        if is_tree(pipe.steps[-1][-1]):
+            av_uniqueness = self.events["tW"].mean()
+            pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
 
-            if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
-                pipe = set_pipeline_params(
-                    pipe,
-                    samples_info_sets=self.events["t1"],
-                    price_bars_index=self.bar_data.index,
-                )
-
-            self.model_params["pipe_clf"] = pipe
-
-            # Train model
-            self.best_model, self.cv_results = train_model_with_cv(
-                self.preprocessed_features,
-                self.events,
-                self.sample_weight,
-                **self.model_params,
+        if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
+            pipe = set_pipeline_params(
+                pipe,
+                samples_info_sets=self.events["t1"],
+                price_bars_index=self.bar_data.index,
             )
 
-            # Set n_jobs for production use
-            self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
-            
+        self.model_params["pipe_clf"] = pipe
+
+        # Train model
+        self.best_model, self.cv_results = train_model_with_cv(
+            self.preprocessed_features,
+            self.events,
+            self.sample_weight,
+            **self.model_params,
+        )
+
+        # Set n_jobs for production use
+        self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
+        
         self.completed_steps["model_training"] = True
+
+    
 
     def analyze_features(self):
         """Step 7: Analyze feature importance."""
