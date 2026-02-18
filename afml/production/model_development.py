@@ -1106,13 +1106,6 @@ class ModelDevelopmentPipeline:
         self.account_name = data_config.get("account_name", "default")
         self.pipeline_version = "3.0"
         self.model_params = model_params
-
-        if isinstance(model_params["pipe_clf"], Pipeline):
-            model = model_params["pipe_clf"].steps[-1][1]
-        else:
-            model = model_params["pipe_clf"]
-            
-        self.model_type = get_model_type(model)
         
         # Build complete config
         self.config = data_config.copy()
@@ -1147,6 +1140,13 @@ class ModelDevelopmentPipeline:
         self.metrics = None
         self.training_metadata = None
 
+        if isinstance(model_params["pipe_clf"], Pipeline):
+            model = model_params["pipe_clf"].steps[-1][1]
+        else:
+            model = model_params["pipe_clf"]
+            
+        self.model_type = get_model_type(model)
+        
         # Sample weight settings that can be set after initialization
         self.linear = None
         self.decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
