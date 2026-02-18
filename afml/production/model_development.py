@@ -1429,7 +1429,7 @@ class ModelDevelopmentPipeline:
                 "pipeline_version": self.pipeline_version,
                 "created_by": "AFML Production Pipeline",
             }
-            self.file_manager.save_model(self.best_model, metadata, self.model_type)
+            self.file_manager.save_model(self.best_model, metadata)
 
             if self.features is not None:
                 self.file_manager.save_dataframe(self.preprocessed_features, "features")
