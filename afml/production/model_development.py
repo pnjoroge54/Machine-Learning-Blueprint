@@ -4,9 +4,12 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import joblib
+import pickle
 from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
 from loguru import logger
 from numba import njit, prange
+from pathlib import Path
 from scipy.stats import uniform
 from sklearn import clone
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -23,7 +26,8 @@ from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparamet
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..features.trading_session import get_time_features
-from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, get_events, triple_barrier_labels
+from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
+from ..mt5.load_data import load_tick_data, save_data_to_parquet
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
 from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
@@ -48,7 +52,7 @@ class TickDataLoader:
     - Memory usage: ~100MB per 1M ticks
     """
 
-    def __init__(self, max_cache_size_mb: int = 3000, max_cached_symbols: int = 20):
+    def __init__(self, max_cache_size_mb: int = 5000, max_cached_symbols: int = 20, path: Union[str, Path] = None):
         """
         Initialize the tick data loader.
 
@@ -58,6 +62,8 @@ class TickDataLoader:
             Maximum cache size in MB (default: 5000MB)
         max_cached_symbols : int, optional
             Maximum number of symbols to keep in cache (default: 20)
+        path : Union[str, Path]
+            Path to folder that contains tick data
         """
         self._cache: Dict[Tuple[str, str], pd.DataFrame] = {}  # (symbol, account_name) -> DataFrame
         self._cache_metadata: Dict[Tuple[str, str], Dict] = {}  # (symbol, account_name) -> metadata
@@ -69,6 +75,7 @@ class TickDataLoader:
             "partial_hits": 0,
             "total_loaded": 0,
         }
+        self.path = path
 
     def get_tick_data(
         self, symbol: str, start_date: str, end_date: str, account_name: str
@@ -239,13 +246,12 @@ class TickDataLoader:
         """
         Load data from parquet file or MT5.
         """
-        from ..mt5.load_data import load_tick_data, save_data_to_parquet
-
         tick_params = dict(
             symbol=symbol,
             start_date=start_date,
             end_date=end_date,
             account_name=account_name,
+            path=self.path,
             columns=["bid", "ask"],
             verbose=False,
         )
@@ -414,7 +420,7 @@ def get_bar_size(tick_df, bar_size):
 
 @cacheable(time_aware=True)
 def load_and_prepare_training_data(
-    symbol, start_date, end_date, account_name, bar_type, bar_size, price
+    symbol, start_date, end_date, account_name, bar_type, bar_size, price, path=None
 ):
     """
     Load tick data and construct bars for training.
@@ -447,6 +453,8 @@ def load_and_prepare_training_data(
     - Cached for reproducibility.
     - Prevents data leakage via time-aware caching.
     """
+    if path is not None:
+        loader.path = path
 
     tick_df = loader.get_tick_data(symbol, start_date, end_date, account_name)
 
@@ -505,7 +513,7 @@ def create_feature_engineering_pipeline(
     time_feat = get_time_features(
         data, timeframe=data_config["bar_size"], bar_type=data_config["bar_type"]
     )
-    return features.join(time_feat).dropna()
+    return features.join(time_feat, how="left").dropna()
 
 
 @cacheable()
@@ -520,7 +528,6 @@ def generate_events_triple_barrier(
     vertical_barrier_zero: bool = True,
     filter_as_series: bool = True,
     on_crossover: bool = True,
-    labels: bool = True,
 ) -> pd.DataFrame:
     """
     Generate trading events using the triple-barrier method.
@@ -547,8 +554,6 @@ def generate_events_triple_barrier(
         Pass volatility threshold as series instead of scalar.
     on_crossover : bool, default=True
         Whether strategy expects crossover for signal
-    labels : bool, default=True
-        If True generate, labels, else generate t1, i.e., times of barrier touches.
     Returns
     -------
     pd.DataFrame
@@ -576,31 +581,21 @@ def generate_events_triple_barrier(
     side, t_events = get_entries(strategy, data, filter_threshold, on_crossover)
     vb = add_vertical_barrier(t_events, close, **max_holding_period)
 
-    if labels:
-        events = triple_barrier_labels(
-            close=close,
-            target=target,
-            t_events=t_events,
-            vertical_barrier_times=vb,
-            side_prediction=side,
-            pt_sl=[profit_target, stop_loss],
-            min_ret=min_ret,
-            min_pct=0.05,
-            vertical_barrier_zero=vertical_barrier_zero,
-            drop=True,
-            verbose=False,
-        )
-        events = get_event_weights(events, close)
-    else:
-        events = get_events(
-            close=close,
-            target=target,
-            t_events=t_events,
-            vertical_barrier_times=vb,
-            side_prediction=side,
-            pt_sl=[profit_target, stop_loss],
-            min_ret=min_ret,
-            )
+    events = triple_barrier_labels(
+        close,
+        target,
+        t_events,
+        vertical_barrier_times=vb,
+        side_prediction=side,
+        pt_sl=[profit_target, stop_loss],
+        min_ret=min_ret,
+        min_pct=0.05,
+        vertical_barrier_zero=vertical_barrier_zero,
+        drop=True,
+        verbose=False,
+    )
+
+    events = get_event_weights(events, close)
 
     return events
 
@@ -696,13 +691,44 @@ def weighted_estimator(base_estimator, events, data_index):
     return _WeightedEstimator(base_estimator=base_estimator, events=events, data_index=data_index)
 
 
-@cacheable()
+def best_weighting_scheme(
+    classifier,
+    X,
+    y,
+    cv_gen,
+    scoring,
+    sample_weight,
+    scheme=None,
+    best_score=0, 
+    best_scheme=None,
+    cv_results=pd.DataFrame(),
+):
+    scores = ml_cross_val_score(
+            classifier,
+            X,
+            y,
+            cv_gen,
+            sample_weight_train=sample_weight,
+            sample_weight_score=sample_weight,
+            scoring=scoring,
+        )
+    score = scores.mean()
+    cv_results[scheme] = scores
+
+    if not np.isinf(score) and score > best_score:
+        best_score = score
+        best_scheme = scheme
+
+    return best_score, best_scheme, cv_results
+
+
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
     features: pd.DataFrame,
     cv_splits: int = 5,
-    n_iter: int = 10,
+    linear: bool = None,
+    decay_factors: Union[list, np.ndarray] = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9],
 ) -> pd.Series:
     """
     Compute best sample weight with time decay.
@@ -717,8 +743,11 @@ def get_optimal_sample_weight(
         Training features
     cv_splits : int, optional
         Number of cross-validation splits (default: 5).
-    n_iter : int, optional
-        Number of random search iterations (default: 10).
+    linear : bool, optional
+        Default is None, which seraches both linear and exponential time-decay. 
+        If True, use linear time-decay, if False, exponential.
+    decay_factors: Union[list, np.ndarray]
+        Time-decay factors to apply to best sample weight.
 
     Returns
     -------
@@ -738,56 +767,61 @@ def get_optimal_sample_weight(
         max_samples=cont["tW"].mean(),
         max_depth=4,
         min_weight_fraction_leaf=0.05,
-        n_jobs=-1,
     )
-    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+
     cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
+
+    # Find best weighting scheme
+    weights = {
+        "return": cont["w"],
+        "unweighted": pd.Series(1.0, index=cont.index),
+        "uniqueness": cont["tW"],
+    }
     
-    weighting_schemes = [
-        ("return", cont["w"]),
-        ("unweighted", pd.Series(1.0, index=cont.index)),
-        ("uniqueness", cont["tW"]),
-    ]
+    best_score = 0
+    best_scheme = None
+
     cv_results = pd.DataFrame()
+    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+
+    for scheme, weight in tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights)):
+        best_score, best_scheme, cv_results = best_weighting_scheme(
+            classifier, X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
+        )
     
-    def best_weight_by_cv(schemes, best_score=0, best_weight=None, best_scheme=None):
-        for scheme, weight in tqdm(schemes, desc="Analyzing weighting schemes", total=len(schemes)):
-            scores = ml_cross_val_score(
-                classifier,
-                X,
-                y,
-                cv_gen,
-                sample_weight_train=weight,
-                sample_weight_score=weight,
-                scoring=scoring,
+    best_weight = weights[best_scheme]
+    
+    # Apply time-decay to best weighting scheme
+    if linear is None:
+        linear_search = [1, 0]
+    elif linear:
+        linear_search = [1]
+    else:
+        linear_search = [0]
+    
+    time_decay_weights = {}
+
+    for decay in decay_factors:
+        for linear in linear_search:
+            decay_vec = get_weights_by_time_decay_optimized(
+                triple_barrier_events=cont,
+                close_index=data_index,
+                last_weight=decay,
+                linear=linear,
+                av_uniqueness=cont["tW"],
             )
-            cv_results[scheme] = scores
-            score = scores.mean()
-
-            if not np.isinf(score) and score > best_score:
-                best_score = score
-                best_weight = weight
-                best_scheme = scheme
-
-        logger.info(f"Best sample weight scheme: {best_scheme}")                
-        return best_score, best_weight, best_scheme  
-
-    best_score, best_weight, best_scheme = best_weight_by_cv(weighting_schemes)
-
-    decay_schemes = [
-    (f"{best_scheme}_exp_{decay}", 
-    get_weights_by_time_decay_optimized(
-        triple_barrier_events=cont,
-        close_index=data_index,
-        last_weight=decay,
-        linear=0,
-        av_uniqueness=cont["tW"],
-    ) * best_weight)
-    for decay in [.01, .25, .5, .75, .9]
-        ]
+            scheme = f"{best_scheme}_{'linear' if linear else 'exp'}_{decay}"
+            time_decay_weights[scheme] = best_weight * decay_vec
     
-    best_score, best_weight, best_scheme = best_weight_by_cv(decay_schemes, best_score,  best_weight, best_scheme)
-  
+    decay_loop = tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay weighting for {best_scheme}", total=len(time_decay_weights))
+    for scheme, weight in decay_loop:
+        best_score, best_scheme, cv_results = best_weighting_scheme(
+            classifier, X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
+        )
+
+    weights.update(time_decay_weights)
+    best_weight = weights[best_scheme]
+
     cv_results = {
         "best_score": best_score,
         "cv_results": cv_results,
@@ -886,7 +920,7 @@ def train_model_with_cv(
     bagging_max_features: float = 1.0,
     rnd_search_iter: int = 0,
     n_jobs: int = -1,
-    pct_embargo: float = 0.01,
+    pct_embargo: float = 0.02,
     random_state: int = None,
     verbose: int = 0,
 ) -> Tuple[RandomForestClassifier, Dict]:
@@ -917,7 +951,7 @@ def train_model_with_cv(
         Randomized search iterations.
     n_jobs : int, default=-1
         Parallel jobs.
-    pct_embargo : float, default=0.01
+    pct_embargo : float, default=0.02
         Embargo percentage for purging CV splits.
     random_state : int, optional
         Random seed.
@@ -960,6 +994,18 @@ def train_model_with_cv(
     return best_model, cv_results
 
 
+def get_model_type(model):
+    from sklearn.tree import DecisionTreeClassifier
+    from sklearn.ensemble import RandomForestClassifier
+
+    model_type = dict(
+        RandomForestClassifier="rf",
+        SequentiallyBootstrappedBaggingClassifier="seq_rf",
+    )
+    
+    return model_type[type(model)]
+
+
 class ModelDevelopmentPipeline:
     """
     Encapsulates the entire production model development pipeline,
@@ -974,7 +1020,6 @@ class ModelDevelopmentPipeline:
         target_config: dict,
         label_config: dict,
         model_params: dict,
-        bar_data: pd.DataFrame = None,
         base_dir: str = "Models",
     ):
         """
@@ -998,6 +1043,8 @@ class ModelDevelopmentPipeline:
                 Bar size specification (e.g., 'M1', 'M5').
             - price : str
                 Price type ('bid', 'ask', 'mid_price', 'bid_ask').
+            - path : Union[str, Path] = None
+                Path to data folder. If None uses default, Path.home() / "tick_data_parquet"
         strategy : BaseStrategy
             Signal generating strategy.
         feature_config : dict
@@ -1047,8 +1094,6 @@ class ModelDevelopmentPipeline:
                     Random state for reproducibility.
                 - verbose : int, default=0
                     Controls verbosity of output.
-        bar_data: pd.DataFrame
-            Data to use in pipeline. Must contain OHLC columns
         base_dir: str
             Path to save pipeline data
         """
@@ -1062,7 +1107,9 @@ class ModelDevelopmentPipeline:
         self.label_config = label_config
         self.target_config = target_config
         self.model_params = model_params
+        self.model_type = get_model_type(model_params["pipe_clf"].steps[-1][-1])
         self.account_name = data_config.get("account_name", "default")
+        self.pipeline_version = "3.0"
 
         # Build complete config
         self.config = data_config.copy()
@@ -1079,10 +1126,10 @@ class ModelDevelopmentPipeline:
 
         # Initialize file management and logging
         self.file_manager = ModelFileManager(base_dir)
-        self.file_paths = self.file_manager.setup_model_directory(self.config)
+        self.file_paths = self.file_manager.setup_model_directory(self.config, self.model_type)
 
         # Storage for intermediate results
-        self.bar_data = bar_data
+        self.bar_data = None
         self.features = None
         self.events = None
         self.sample_weight = None
@@ -1096,6 +1143,10 @@ class ModelDevelopmentPipeline:
         self.feature_importance = None
         self.metrics = None
         self.training_metadata = None
+
+        # Sample weight settings that can be set after initialization
+        self.linear = None
+        self.decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
 
         # Status tracking
         self.completed_steps = {
@@ -1187,19 +1238,49 @@ class ModelDevelopmentPipeline:
             print("-" * 50)
             print(pd.Series(self.config).to_string(), "\n")
 
+        if self.file_paths["model"].exists():
+            print("\nLoading trained model and artifacts...")
+
+            self.best_model = joblib.load(self.file_paths["model"])
+            self.metrics = pickle.load(self.file_paths["metrics"])
+            self.preprocessed_features = pd.read_parquet(self.file_paths["features"])
+            self.events = pd.read_parquet(self.file_paths["events"])
+            onnx_path = str(self.file_paths["model"]).replace("joblib", "onnx")
+            
+            if self.export_onxx and not Path(onnx_path).exists():
+                metadata = {
+                    "strategy": self.strategy,
+                    "feature_config": self.feature_config,
+                    "label_config": self.label_config,
+                    "feature_names": self._get_feature_names(),
+                    "feature_count": len(self._get_feature_names()),
+                    "training_samples": self.metrics["events_count"],
+                    "best_weighting_scheme": self.metrics["best_weighting_scheme"],
+                    "pipeline_version": self.pipeline_version,
+                    "created_by": "AFML Production Pipeline",
+                }
+                self.file_manager.save_model_as_onxx(
+                    self.best_model, self._get_feature_names(), metadata
+                )
+                
+            return (
+                self.best_model,
+                self._get_feature_names(),
+                self.metrics,
+                self.config,
+            )
+
         try:
             # Step 1: Load data
             if verbose:
                 print("\n[Step 1/7] Loading training data...")
 
             self.load_training_data()
-            
+
             # Step 2: Feature engineering
             if verbose:
                 print("\n[Step 2/7] Computing features...")
-
             self.engineer_features()
-            
             if verbose:
                 print(f"✓ Generated {len(self.features.columns)} features")
 
@@ -1256,9 +1337,7 @@ class ModelDevelopmentPipeline:
             if save and self.best_model is not None:
                 if verbose:
                     print("\n[Saving] Writing artifacts to disk...")
-
                 self._save_all_artifacts()
- 
                 if verbose:
                     print(f"✓ Saved to {self.file_paths['base_dir']}")
 
@@ -1328,6 +1407,274 @@ class ModelDevelopmentPipeline:
 
         except Exception as e:
             logger.warning(f"Report generation failed: {e}")
+
+    def _save_all_artifacts(self):
+        """Save all pipeline artifacts using ModelFileManager."""
+        try:
+            # Save model with metadata
+            metadata = metadata = {
+                "strategy": self.strategy,
+                "feature_config": self.feature_config,
+                "label_config": self.label_config,
+                "feature_names": self._get_feature_names(),
+                "feature_count": len(self._get_feature_names()),
+                "training_samples": len(self.events),
+                "best_weighting_scheme": self.best_weighting_scheme,
+                "pipeline_version": self.pipeline_version,
+                "created_by": "AFML Production Pipeline",
+            }
+            self.file_manager.save_model(self.best_model, metadata, self.model_type)
+
+            if self.features is not None:
+                self.file_manager.save_dataframe(self.preprocessed_features, "features")
+
+            if self.events is not None:
+                self.file_manager.save_dataframe(self.events, "events")
+
+            if self.sample_weight is not None:
+                self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
+
+            # Save metrics
+            if self.metrics:
+                self.file_manager.save_object(self.metrics, "metrics")
+
+            if self.export_onxx and self.best_model is not None:
+                self.file_manager.save_model_as_onxx(
+                    self.best_model, self._get_feature_names(), metadata
+                )
+
+            logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
+
+        except Exception as e:
+            logger.error(f"Failed to save artifacts: {e}")
+            raise
+
+    def load_training_data(self):
+        """Step 1: Load tick data and construct bars."""
+        self.bar_data = load_and_prepare_training_data(**self.data_config)
+        if self.data_config == "tick":
+            self.config["tick_bar_size"] = self.bar_data["tick_volume"].iloc[0]
+            self.file_manager.save_config(self.config)
+        self.completed_steps["data_loading"] = True
+
+    def engineer_features(self):
+        """Step 2: Feature engineering."""
+        self.features = create_feature_engineering_pipeline(
+            self.bar_data, self.feature_config, self.data_config
+        )
+        self.completed_steps["feature_engineering"] = True
+
+    def generate_labels(self):
+        """Step 3: Generate triple-barrier labels."""
+        self.events = generate_events_triple_barrier(
+            self.bar_data, self.strategy, **self.label_config
+        )
+        self.completed_steps["label_generation"] = True
+
+    def compute_sample_weights(self):
+        """Step 4: Compute optimal sample weights."""
+        if self.file_paths["weights"].exists():
+            self.sample_weight = pd.read_parquet(self.file_paths["weights"])   
+        else:
+            self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
+                self.bar_data.index, self.events, self.features, self.linear, self.decay_factors
+            )
+            self.best_weighting_scheme = self.weight_cv_results["best_scheme"]     
+            if self.sample_weight is not None: 
+                # Save rather than cache as computation is expensive and cache misses are not infrequent
+                self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
+
+        self.completed_steps["weight_computation"] = True
+
+    def add_meta_features(self):
+        """Step 5: Add rolling performance metrics as features."""
+        self.meta_features = calculate_rolling_metrics(self.events, self.sample_weight)
+        self.completed_steps["meta_features"] = True
+
+    def preprocess_features(self):
+        """Step 5b: Preprocess features (drop constant/duplicate)."""
+        # Join meta-features
+        enhanced_features = self.features.join(self.meta_features, how="inner").dropna()
+
+        # Apply preprocessing
+        preprocessor = Pipeline(
+            [
+                ("dcf", DropConstantFeatures()),
+                ("ddf", DropDuplicateFeatures()),
+            ]
+        )
+        self.preprocessed_features = preprocessor.fit_transform(enhanced_features)
+
+        # Align events with preprocessed features
+        self.events = self.events.loc[self.preprocessed_features.index]
+
+    def train_model(self):
+        """Step 6: Train model with cross-validation."""
+        # Configure pipeline
+        if self.best_model is not None and self.cv_results is not None:: 
+            self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
+            pipe = clone(self.model_params["pipe_clf"])
+
+            if is_tree(pipe.steps[-1][-1]):
+                av_uniqueness = self.events["tW"].mean()
+                pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
+
+            if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
+                pipe = set_pipeline_params(
+                    pipe,
+                    samples_info_sets=self.events["t1"],
+                    price_bars_index=self.bar_data.index,
+                )
+
+            self.model_params["pipe_clf"] = pipe
+
+            # Train model
+            self.best_model, self.cv_results = train_model_with_cv(
+                self.preprocessed_features,
+                self.events,
+                self.sample_weight,
+                **self.model_params,
+            )
+
+            # Set n_jobs for production use
+            self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
+        self.completed_steps["model_training"] = True
+
+    def analyze_features(self):
+        """Step 7: Analyze feature importance."""
+        features_columns = (
+            self.best_model[:-1].get_feature_names_out()
+            if len(self.best_model) > 1
+            else self.preprocessed_features.columns.to_list()
+        )
+
+        self.feature_importance = pd.DataFrame(
+            {
+                "feature": features_columns,
+                "importance": self.best_model.steps[-1][1].feature_importances_,
+            }
+        ).sort_values("importance", ascending=False)
+
+        self.completed_steps["analysis"] = True
+
+    def _compile_metrics(self):
+        """Compile all metrics into a single dictionary."""
+        self.metrics = {
+            "cv_results": self.cv_results,
+            "feature_importance": self.feature_importance,
+            "training_samples": len(self.bar_data),
+            "feature_count": len(self._get_feature_names()),
+            "best_weighting_scheme": self.best_weighting_scheme,
+            "label_distribution": value_counts_data(self.events["bin"]),
+            "average_uniqueness": self.events["tW"].mean(),
+            "sample_weight_stats": (
+                self.sample_weight.describe().to_dict() if self.sample_weight is not None else None
+            ),
+            "events_count": len(self.events),
+            "features_shape": self.preprocessed_features.shape,
+            "completed_steps": self.completed_steps,
+        }
+
+    def _get_feature_names(self):
+        """Get feature names from the trained model."""
+        if self.best_model is None:
+            return []
+
+        if len(self.best_model) > 1:
+            return self.best_model[:-1].get_feature_names_out().tolist()
+        else:
+            return self.preprocessed_features.columns.tolist()
+
+    def _display_cache_reports(self):
+        """Display cache performance and contamination reports."""
+        print("\n" + "=" * 70)
+        print("CACHE PERFORMANCE REPORT")
+        print("=" * 70)
+        monitor = get_cache_monitor()
+        monitor.print_health_report()
+
+        print("\n" + "=" * 70)
+        print("DATA CONTAMINATION CHECK")
+        print("=" * 70)
+        print_contamination_report()
+
+    def get_data_summary(self) -> pd.DataFrame:
+        """Get a summary of all stored data."""
+        summary_data = []
+
+        components = [
+            ("bar_data", self.bar_data),
+            ("features", self.features),
+            ("preprocessed_features", self.preprocessed_features),
+            ("events", self.events),
+            ("meta_features", self.meta_features),
+            ("sample_weight", self.sample_weight),
+        ]
+
+        for name, data in components:
+            if data is not None:
+                if isinstance(data, pd.DataFrame):
+                    shape = data.shape
+                    dtype = "DataFrame"
+                    columns = f"{len(data.columns)} cols"
+                elif isinstance(data, pd.Series):
+                    shape = (len(data),)
+                    dtype = "Series"
+                    columns = "N/A"
+                else:
+                    shape = "N/A"
+                    dtype = type(data).__name__
+                    columns = "N/A"
+
+                summary_data.append(
+                    {
+                        "Component": name,
+                        "Type": dtype,
+                        "Rows": shape[0] if isinstance(shape, tuple) else shape,
+                        "Columns": (
+                            shape[1] if isinstance(shape, tuple) and len(shape) > 1 else columns
+                        ),
+                        "Memory (MB)": (
+                            data.memory_usage(deep=True).sum() / (1024**2)
+                            if hasattr(data, "memory_usage")
+                            else "N/A"
+                        ),
+                    }
+                )
+
+        return pd.DataFrame(summary_data)
+
+    def get_performance_metrics(self) -> Dict:
+        """Get comprehensive performance metrics."""
+        return {
+            "model_performance": self.cv_results,
+            "feature_analysis": self.feature_importance.to_dict(orient="records"),
+            "data_statistics": {
+                "training_samples": len(self.bar_data),
+                "feature_count": len(self._get_feature_names()),
+                "event_distribution": dict(value_counts_data(self.events["bin"])),
+                "average_uniqueness": float(self.events["tW"].mean()),
+            },
+            "weighting_scheme": self.best_weighting_scheme,
+        }
+
+    def plot_feature_importance(self, top_n: int = 20):
+        """Plot feature importance."""
+        if self.feature_importance is None:
+            raise ValueError("Feature importance not computed. Run the pipeline first.")
+
+        import matplotlib.pyplot as plt
+
+        top_features = self.feature_importance.head(top_n)
+
+        plt.style.use("dark_background")
+        plt.figure(figsize=(12, 8))
+        plt.barh(range(len(top_features)), top_features["importance"][::-1])
+        plt.yticks(range(len(top_features)), top_features["feature"][::-1])
+        plt.xlabel("Importance")
+        plt.title(f"Top {top_n} Feature Importance - {self.symbol}")
+        plt.tight_layout()
+        plt.show()
 
     def _generate_training_summary_html(self):
         """Generate comprehensive HTML training summary."""
@@ -1586,274 +1933,3 @@ class ModelDevelopmentPipeline:
             import traceback
 
             logger.debug(f"Traceback: {traceback.format_exc()}")
-
-    def _save_all_artifacts(self):
-        """Save all pipeline artifacts using ModelFileManager."""
-        try:
-            # Save model with metadata
-            metadata = {
-                "strategy": self.strategy,
-                "feature_config": self.feature_config,
-                "label_config": self.label_config,
-                "feature_names": self._get_feature_names(),
-                "feature_count": len(self._get_feature_names()),
-                "training_samples": len(self.events),
-                "best_weighting_scheme": self.best_weighting_scheme,
-                "pipeline_version": "3.0",
-                "created_by": "AFML Production Pipeline",
-            }
-            self.file_manager.save_model(self.best_model, metadata)
-
-            if self.features is not None:
-                self.file_manager.save_dataframe(self.preprocessed_features, "features")
-
-            if self.events is not None:
-                self.file_manager.save_dataframe(self.events, "events")
-
-            if self.sample_weight is not None:
-                self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
-
-            # Save metrics
-            if self.metrics:
-                self.file_manager.save_object(self.metrics, "metrics")
-
-            if self.export_onxx and self.best_model is not None:
-                self.file_manager.save_model_as_onxx(
-                    self.best_model, self._get_feature_names(), metadata
-                )
-
-            logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
-
-        except Exception as e:
-            logger.error(f"Failed to save artifacts: {e}")
-            raise
-
-    def load_training_data(self):
-        """Step 1: Load tick data and construct bars."""
-        if isinstance(self.bar_data, type(None)):
-            self.bar_data = load_and_prepare_training_data(**self.data_config)
-            if self.data_config == "tick":
-                self.config["tick_bar_size"] = self.bar_data["tick_volume"].iloc[0]
-                self.file_manager.save_config(self.config)
-        elif isinstance(self.bar_data, pd.DataFrame):
-                # Force everything to lowercase before checking
-                self.bar_data.columns = self.bar_data.columns.str.lower()
-                ohlc_names = ["open", "high", "low", "close"]
-                is_valid = all(c in self.bar_data.columns for c in ohlc_names)
-                if not is_valid:
-                    error_msg = f"Columns should contain {ohlc_names}. \nCurrent: {self.bar_data.columns.to_list()}"
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-
-        self.completed_steps["data_loading"] = True
-
-    def engineer_features(self):
-        """Step 2: Feature engineering."""
-        self.features = create_feature_engineering_pipeline(
-            self.bar_data, self.feature_config, self.data_config
-        )
-        self.completed_steps["feature_engineering"] = True
-
-    def generate_labels(self):
-        """Step 3: Generate triple-barrier labels."""
-        self.events = generate_events_triple_barrier(
-            self.bar_data, self.strategy, **self.label_config
-        )
-        self.completed_steps["label_generation"] = True
-
-    def compute_sample_weights(self):
-        """Step 4: Compute optimal sample weights."""
-        self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
-            self.bar_data.index, self.events, self.features
-        )
-        self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
-        self.completed_steps["weight_computation"] = True
-
-    def add_meta_features(self):
-        """Step 5: Add rolling performance metrics as features."""
-        self.meta_features = calculate_rolling_metrics(self.events, self.sample_weight)
-        self.completed_steps["meta_features"] = True
-
-    def preprocess_features(self):
-        """Step 5b: Preprocess features (drop constant/duplicate)."""
-        # Join meta-features
-        enhanced_features = self.features.join(self.meta_features, how="inner").dropna()
-
-        # Apply preprocessing
-        preprocessor = Pipeline(
-            [
-                ("dcf", DropConstantFeatures()),
-                ("ddf", DropDuplicateFeatures()),
-            ]
-        )
-        self.preprocessed_features = preprocessor.fit_transform(enhanced_features)
-
-        # Align events with preprocessed features
-        self.events = self.events.loc[self.preprocessed_features.index]
-
-    def train_model(self):
-        """Step 6: Train model with cross-validation."""
-        # Configure pipeline
-        self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
-        pipe = clone(self.model_params["pipe_clf"])
-
-        if is_tree(pipe.steps[-1][-1]):
-            av_uniqueness = self.events["tW"].mean()
-            pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
-
-        if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
-            pipe = set_pipeline_params(
-                pipe,
-                samples_info_sets=self.events["t1"],
-                price_bars_index=self.bar_data.index,
-            )
-
-        self.model_params["pipe_clf"] = pipe
-
-        # Train model
-        self.best_model, self.cv_results = train_model_with_cv(
-            self.preprocessed_features,
-            self.events,
-            self.sample_weight,
-            **self.model_params,
-        )
-
-        # Set n_jobs for production use
-        self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
-        self.completed_steps["model_training"] = True
-
-    def analyze_features(self):
-        """Step 7: Analyze feature importance."""
-        features_columns = (
-            self.best_model[:-1].get_feature_names_out()
-            if len(self.best_model) > 1
-            else self.preprocessed_features.columns.to_list()
-        )
-
-        self.feature_importance = pd.DataFrame(
-            {
-                "feature": features_columns,
-                "importance": self.best_model.steps[-1][1].feature_importances_,
-            }
-        ).sort_values("importance", ascending=False)
-
-        self.completed_steps["analysis"] = True
-
-    def _compile_metrics(self):
-        """Compile all metrics into a single dictionary."""
-        self.metrics = {
-            "cv_results": self.cv_results,
-            "feature_importance": self.feature_importance,
-            "training_samples": len(self.bar_data),
-            "feature_count": len(self._get_feature_names()),
-            "best_weighting_scheme": self.best_weighting_scheme,
-            "label_distribution": value_counts_data(self.events["bin"]),
-            "average_uniqueness": self.events["tW"].mean(),
-            "sample_weight_stats": (
-                self.sample_weight.describe().to_dict() if self.sample_weight is not None else None
-            ),
-            "events_count": len(self.events),
-            "features_shape": self.preprocessed_features.shape,
-            "completed_steps": self.completed_steps,
-        }
-
-    def _get_feature_names(self):
-        """Get feature names from the trained model."""
-        if self.best_model is None:
-            return []
-
-        if len(self.best_model) > 1:
-            return self.best_model[:-1].get_feature_names_out().tolist()
-        else:
-            return self.preprocessed_features.columns.tolist()
-
-    def _display_cache_reports(self):
-        """Display cache performance and contamination reports."""
-        print("\n" + "=" * 70)
-        print("CACHE PERFORMANCE REPORT")
-        print("=" * 70)
-        monitor = get_cache_monitor()
-        monitor.print_health_report()
-
-        print("\n" + "=" * 70)
-        print("DATA CONTAMINATION CHECK")
-        print("=" * 70)
-        print_contamination_report()
-
-    def get_data_summary(self) -> pd.DataFrame:
-        """Get a summary of all stored data."""
-        summary_data = []
-
-        components = [
-            ("bar_data", self.bar_data),
-            ("features", self.features),
-            ("preprocessed_features", self.preprocessed_features),
-            ("events", self.events),
-            ("meta_features", self.meta_features),
-            ("sample_weight", self.sample_weight),
-        ]
-
-        for name, data in components:
-            if data is not None:
-                if isinstance(data, pd.DataFrame):
-                    shape = data.shape
-                    dtype = "DataFrame"
-                    columns = f"{len(data.columns)} cols"
-                elif isinstance(data, pd.Series):
-                    shape = (len(data),)
-                    dtype = "Series"
-                    columns = "N/A"
-                else:
-                    shape = "N/A"
-                    dtype = type(data).__name__
-                    columns = "N/A"
-
-                summary_data.append(
-                    {
-                        "Component": name,
-                        "Type": dtype,
-                        "Rows": shape[0] if isinstance(shape, tuple) else shape,
-                        "Columns": (
-                            shape[1] if isinstance(shape, tuple) and len(shape) > 1 else columns
-                        ),
-                        "Memory (MB)": (
-                            data.memory_usage(deep=True).sum() / (1024**2)
-                            if hasattr(data, "memory_usage")
-                            else "N/A"
-                        ),
-                    }
-                )
-
-        return pd.DataFrame(summary_data)
-
-    def get_performance_metrics(self) -> Dict:
-        """Get comprehensive performance metrics."""
-        return {
-            "model_performance": self.cv_results,
-            "feature_analysis": self.feature_importance.to_dict(orient="records"),
-            "data_statistics": {
-                "training_samples": len(self.bar_data),
-                "feature_count": len(self._get_feature_names()),
-                "event_distribution": dict(value_counts_data(self.events["bin"])),
-                "average_uniqueness": float(self.events["tW"].mean()),
-            },
-            "weighting_scheme": self.best_weighting_scheme,
-        }
-
-    def plot_feature_importance(self, top_n: int = 20):
-        """Plot feature importance."""
-        if self.feature_importance is None:
-            raise ValueError("Feature importance not computed. Run the pipeline first.")
-
-        import matplotlib.pyplot as plt
-
-        top_features = self.feature_importance.head(top_n)
-
-        plt.style.use("dark_background")
-        plt.figure(figsize=(12, 8))
-        plt.barh(range(len(top_features)), top_features["importance"][::-1])
-        plt.yticks(range(len(top_features)), top_features["feature"][::-1])
-        plt.xlabel("Importance")
-        plt.title(f"Top {top_n} Feature Importance - {self.symbol}")
-        plt.tight_layout()
-        plt.show()
