@@ -315,7 +315,7 @@ class ConfigPathGenerator:
 
         return f"{analysis_type}_{symbol}_{bar_type}_{bar_size}_{date_range}_{timestamp}.html"
 
-    def get_standard_file_paths(self, config: dict) -> dict:
+    def get_standard_file_paths(self, config: dict, model_type: str = "rf") -> dict:
         """
         Get standard file paths for all model artifacts.
 
@@ -333,7 +333,7 @@ class ConfigPathGenerator:
         base_dir = self.create_directory_structure(config)
 
         # Generate filenames
-        model_filename = self.create_model_filename(config)
+        model_filename = self.create_model_filename(config, model_type)
         model_filename_onxx = model_filename.replace(".joblib", ".onnx")
         config_filename = self.generate_filename(
             config, "config", include_timestamp=False
@@ -455,7 +455,7 @@ class ModelFileManager:
         self.path_generator = ConfigPathGenerator(base_dir)
         self.current_paths = None
 
-    def setup_model_directory(self, config: dict) -> dict:
+    def setup_model_directory(self, config: dict, model_type: str = "rf") -> dict:
         """
         Set up directory structure for a model.
 
@@ -469,7 +469,7 @@ class ModelFileManager:
         dict
             Dictionary of file paths.
         """
-        self.current_paths = self.path_generator.get_standard_file_paths(config)
+        self.current_paths = self.path_generator.get_standard_file_paths(config, model_type)
 
         # Create subdirectories
         for subdir in ["logs", "plots", "reports"]:
