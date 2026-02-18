@@ -1304,7 +1304,7 @@ class ModelDevelopmentPipeline:
 
             # Step 5: Rolling meta-label features
             if verbose:
-                print("\n[Step 5/7] Computing rolling meta-label features...")
+                print("\n\n[Step 5/7] Computing rolling meta-label features...")
 
             self.add_meta_features()
             self.preprocess_features()
