@@ -767,6 +767,7 @@ def get_optimal_sample_weight(
         max_samples=cont["tW"].mean(),
         max_depth=4,
         min_weight_fraction_leaf=0.05,
+        n_jobs=-1
     )
 
     cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
