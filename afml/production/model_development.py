@@ -998,12 +998,12 @@ def get_model_type(model):
     from sklearn.tree import DecisionTreeClassifier
     from sklearn.ensemble import RandomForestClassifier
 
-    model_type = {
-        "RandomForestClassifier": "rf",
-        "SequentiallyBootstrappedBaggingClassifier": "seq_rf",
-    }
+    model_type = dict(
+        RandomForestClassifier="rf",
+        SequentiallyBootstrappedBaggingClassifier="seq_rf",
+    )
     
-    return model_type[type(model).__name__]
+    return model_type[type(model)]
 
 
 class ModelDevelopmentPipeline:
@@ -1107,7 +1107,7 @@ class ModelDevelopmentPipeline:
         self.label_config = label_config
         self.target_config = target_config
         self.model_params = model_params
-        self.model_type = get_model_type(model_params["pipe_clf"].steps[-1])
+        self.model_type = get_model_type(model_params["pipe_clf"].steps[-1][-1])
         self.account_name = data_config.get("account_name", "default")
         self.pipeline_version = "3.0"
 
@@ -1477,7 +1477,7 @@ class ModelDevelopmentPipeline:
             self.sample_weight = pd.read_parquet(self.file_paths["weights"])   
         else:
             self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
-                self.bar_data.index, self.events, self.features, self.linear, self.decay_factors
+                self.bar_data.index, self.events, self.features, self.cv_splits, self.linear, self.decay_factors
             )
             self.best_weighting_scheme = self.weight_cv_results["best_scheme"]     
             if self.sample_weight is not None: 
@@ -1511,7 +1511,7 @@ class ModelDevelopmentPipeline:
     def train_model(self):
         """Step 6: Train model with cross-validation."""
         # Configure pipeline
-        if self.best_model is not None and self.cv_results is not None: 
+        if self.best_model is not None and self.cv_results is not None:
             self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
             pipe = clone(self.model_params["pipe_clf"])
 
