@@ -53,7 +53,7 @@ def create_bollinger_features(df: pd.DataFrame, window: int = 20, std: float = 2
 
     # --- 2. Technical Analysis Features ---
     # Bollinger Bands
-    bbands = df.ta.bbands(window, std).iloc[:, -2:]  # Use BBP and BBB only
+    bbands = df.ta.bbands(window, std, std).iloc[:, -2:]  # Use BBP and BBB only
 
     # Volatility
     tr = df.ta.true_range()
