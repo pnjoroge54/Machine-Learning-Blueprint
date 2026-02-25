@@ -611,7 +611,7 @@ def generate_events_triple_barrier(
     )
     close = data["close"]
     target_func = target_config["func"]
-    target_params = target_config["params"]
+    target_params = target_config["params"].copy()
     
     sig = inspect.signature(target_func)
     for key in sig.parameters.keys():
