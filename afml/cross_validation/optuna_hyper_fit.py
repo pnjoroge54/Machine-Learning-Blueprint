@@ -213,7 +213,7 @@ class TradingModelPruner(MedianPruner):
         return super().prune(study, trial)
 
 
-def optimize_trading_model_with_advanced_pruning(
+def optimize_trading_model(
     X: pd.DataFrame,
     y: pd.Series,
     events: pd.DataFrame,
