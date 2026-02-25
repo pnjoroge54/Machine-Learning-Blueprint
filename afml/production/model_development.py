@@ -1,3 +1,4 @@
+import inspect
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
@@ -473,6 +474,37 @@ def load_and_prepare_training_data(
     return data
 
 
+def load_ticks(symbol, start_date, end_date, account_name, path=None):   
+    """
+    Load tick data for feature engineering.
+
+    Parameters
+    ----------
+    symbol : str
+        Trading instrument symbol.
+    start_date : str
+        Training start date ('YYYY-MM-DD').
+    end_date : str
+        Training end date ('YYYY-MM-DD').
+    account_name : str
+        MT5 account identifier.
+
+    Returns
+    -------
+    pd.DataFrame
+        Constructed bars indexed by timestamp.
+
+    Notes
+    -----
+    Cached for reproducibility.
+    """
+    if path is not None:
+        loader.path = path
+
+    tick_df = loader.get_tick_data(symbol, start_date, end_date, account_name)
+    return tick_df
+
+
 @cacheable(time_aware=True)
 def create_feature_engineering_pipeline(
     data: pd.DataFrame, feature_config: Dict, data_config: Dict
@@ -568,10 +600,28 @@ def generate_events_triple_barrier(
     - Prevents data leakage via time-aware caching.
     """
     # Compute barriers
+    data_dict = dict(
+        open=data["open"],
+        high=data["high"],
+        low=data["low"],
+        close=data["close"],
+        df=data,
+        data=data,
+        prices=data,
+    )
     close = data["close"]
     target_func = target_config["func"]
     target_params = target_config["params"]
-    target = target_func(close=close, **target_params)
+    
+    sig = inspect.signature(target_func)
+    for key in sig.keys():
+        if key not in target_params:
+            target_params[key] = data_dict[key]
+
+    try:
+        target = target_func(**target_params)
+    except Exception as e:
+        print(e)
 
     if strategy.get_objective() == "mean_reversion":
         filter_threshold = target if filter_as_series else target.mean()
