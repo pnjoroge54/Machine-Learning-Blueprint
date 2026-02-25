@@ -14,6 +14,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 
 from ..cross_validation.cross_validation import PurgedKFold
+from ..production.model_development import _WeightedEstimator
 
 
 class FinancialModelSuggester:
@@ -23,7 +24,7 @@ class FinancialModelSuggester:
     """
     
     @staticmethod
-    def suggest_and_apply(trial: optuna.Trial, base_model, param_distributions: dict):
+    def suggest_and_apply(trial: optuna.Trial, base_model, param_distributions: dict, events: pd.DataFrame, data_index: pd.DatetimeIndex):
         """
         Samples hyperparameters from a dictionary and applies them to a cloned model instance.
 
@@ -31,6 +32,8 @@ class FinancialModelSuggester:
             trial: The Optuna trial object.
             base_model: A pre-instantiated sklearn-style model or pipeline.
             param_distributions: A dict of distributions (list, range, or scipy.stats).
+            events: Training events for the model.
+            data_index: Timestamps of each bar in the training period.
 
         Engineering Note:
             Continuous distributions from scipy.stats are mapped to trial.suggest_float. 
@@ -38,31 +41,40 @@ class FinancialModelSuggester:
             to enable log-scaling in Optuna, which is critical for parameters like 
             learning rates and regularization coefficients (C, gamma, lambda).
         """
+        # 1. Suggest Weighting Parameters
+        scheme = trial.suggest_categorical("weight_scheme", ["unweighted", "uniqueness", "return"])
+        decay = trial.suggest_float("weight_decay", 0.1, 1.0)
+        linear = trial.suggest_categorical("weight_linear", [True, False])
+
+        # 2. Suggest Base Model Parameters
         sampled_params = {}
         for name, dist in param_distributions.items():
             if isinstance(dist, list):
                 sampled_params[name] = trial.suggest_categorical(name, dist)
-            
-            elif isinstance(dist, (range, stats._distn_infrastructure.rv_frozen)) and \
-                 (isinstance(dist, range) or 'int' in str(dist.dist.__name__)):
-                low = dist.start if isinstance(dist, range) else int(dist.ppf(0))
-                high = (dist.stop - 1) if isinstance(dist, range) else int(dist.ppf(1))
-                sampled_params[name] = trial.suggest_int(name, low, high)
-            
-            elif hasattr(dist, 'dist'):
+            elif hasattr(dist, 'ppf'): # scipy.stats
                 low, high = dist.support()
-                # Detection of reciprocal/loguniform for proper search space scaling
                 is_log = dist.dist.name in ['reciprocal', 'loguniform']
                 sampled_params[name] = trial.suggest_float(name, low, high, log=is_log)
-            
+            elif isinstance(dist, range):
+                sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
             else:
                 sampled_params[name] = dist
 
-        # Cloning prevents mutation of the template instance across trials
-        new_model = clone(base_model)
-        new_model.set_params(**sampled_params)
-        return new_model
-
+        # 3. Create the Weighted Estimator
+        # We clone the base_model to keep the template pristine
+        new_base = clone(base_model)
+        new_base.set_params(**sampled_params)
+        
+        weighted_model = _WeightedEstimator(
+            base_estimator=new_base,
+            events=events,
+            data_index=data_index,
+            scheme=scheme,
+            decay=decay,
+            linear=linear
+        )
+        return weighted_model
+        
     @classmethod
     def get_search_space(cls, model_name: str):
         """
@@ -96,34 +108,45 @@ class FinancialModelSuggester:
         
 def optimize_trading_model_with_pruning(
     trial: optuna.Trial,
-    X, y, sample_weight, events,
+    X, y, events, data_index,
     base_model_instance,
     param_distributions: dict,
     n_splits: int = 5,
-    metric="neg_log_loss"
+    metric="neg_log_loss",
+    cpcv=False,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
     """
-    suggester = FinancialModelSuggester()
-    model = suggester.suggest_and_apply(trial, base_model_instance, param_distributions)
 
-    cv = PurgedKFold(n_splits=n_splits, t1=events.t1, pct_embargo=0.01)
+    suggester = FinancialModelSuggester()
+    # Apply both weighting params and base model params
+    model = suggester.suggest_and_apply(
+        trial, base_model_instance, param_distributions, events, data_index
+    )
+
+    # Setup Cross-Validation
+    if not cpcv:
+        cv = CombinatorialPurgedKFold(n_splits=n_splits+1, n_test_splits=2, t1=events.t1, pct_embargo=0.01)
+    else:
+        cv = PurgedKFold(n_splits=n_splits, t1=events.t1, pct_embargo=0.01)
+        
     fold_scores = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-        w_train, w_val = sample_weight.iloc[train_idx], sample_weight.iloc[val_idx]
 
-        model.fit(X_train, y_train, sample_weight=w_train)
+        model.fit(X_train, y_train)
 
         if metric == "neg_log_loss":
             y_prob = model.predict_proba(X_val)
+            # Use uniqueness weights for validation scoring to ensure statistical relevance
+            w_val = events.loc[X_val.index, "tW"]
             score = log_loss(y_val, y_prob, sample_weight=w_val) * -1
         else:
             y_pred = model.predict(X_val)
-            score = f1_score(y_val, y_pred, sample_weight=w_val)
+            score = f1_score(y_val, y_pred)
             
         fold_scores.append(score)
         trial.report(score, step=fold_idx)
@@ -184,8 +207,8 @@ class TradingModelPruner(MedianPruner):
 def optimize_trading_model_with_advanced_pruning(
     X: pd.DataFrame,
     y: pd.Series,
-    sample_weight: pd.Series,
     events: pd.DataFrame,
+    data_index: pd.DateTimeIndex,
     base_model_instance,
     param_distributions: dict,
     n_trials: int = 100,
@@ -204,8 +227,8 @@ def optimize_trading_model_with_advanced_pruning(
     Args:
         X (pd.DataFrame): Feature matrix with index aligned to 'events'.
         y (pd.Series): Binary or multi-class labels for training.
-        sample_weight (pd.Series): Observation weights (uniqueness, volatility, etc.).
         events (pd.DataFrame): Event metadata; must contain 't1' column (observation end times).
+        data_index (pd.DateTimeIndex): Timestamps of bars in training period
         base_model_instance (estimator): A Scikit-Learn compatible classifier template.
         param_distributions (dict): Search space template.
         n_trials (int): Maximum number of unique hyperparameter combinations to evaluate.
@@ -229,7 +252,7 @@ def optimize_trading_model_with_advanced_pruning(
 
     def objective(trial):
         return optimize_trading_model_with_pruning(
-            trial=trial, X=X, y=y, sample_weight=sample_weight, events=events,
+            trial=trial, X=X, y=y, events=events, data_index=data_index,
             base_model_instance=base_model_instance,
             param_distributions=param_distributions,
             n_splits=n_splits, metric=metric
