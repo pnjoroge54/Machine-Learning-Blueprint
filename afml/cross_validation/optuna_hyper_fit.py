@@ -8,7 +8,9 @@ import numpy as np
 import optuna
 import pandas as pd
 import scipy.stats as stats
+import sqlite3
 from optuna import TrialPruned, create_study
+from optuna.exceptions import StorageInternalError
 from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPruner
 from optuna.samplers import TPESampler
 from sklearn.base import clone
@@ -230,6 +232,7 @@ def optimize_trading_model(
     pruner_type: str = "median",
     metric: str = "neg_log_loss",
     study_name: str = None,
+    db_path: str = None,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -250,6 +253,8 @@ def optimize_trading_model(
         n_splits (int): Number of folds for PurgedKFold.
         pruner_type (str): Pruning strategy ('median', 'hyperband', or 'successive_halving').
         metric (str): Optimization objective ('neg_log_loss' or 'f1').
+        study_name (str): Name of Optuna study.
+        db_path (str): Path to store trials.
 
     Returns:
         optuna.study.Study: The completed study object with history and best params.
@@ -264,32 +269,40 @@ def optimize_trading_model(
     sampler = TPESampler(seed=42)
 
     # Add a 30-second timeout for parallel workers
-    storage_url = f"sqlite:///{study_name}.db?timeout=30"
-
-    study = optuna.create_study(
-        direction="maximize", 
-        sampler=sampler, 
-        pruner=pruner, 
-        study_name=study_name, 
-        storage=storage_url, 
-        load_if_exists=True,
-    )
-    
-    def objective(trial):
-        return optimize_trading_model_with_pruning(
-            trial=trial, X=X, y=y, events=events, data_index=data_index,
-            base_model_instance=base_model_instance,
-            param_distributions=param_distributions,
-            n_splits=n_splits, metric=metric
+    storage_url = f"sqlite:///{db_path}.db?timeout=30"
+    try:
+        study = optuna.create_study(
+            direction="maximize", 
+            sampler=sampler, 
+            pruner=pruner, 
+            study_name=study_name, 
+            storage=storage_url, 
+            load_if_exists=True,
         )
-
-    study.optimize(
-        objective, 
-        n_trials=n_trials, 
-        timeout=timeout, 
-        callbacks=[print_best_trial, save_intermediate_results, check_for_overfitting]
-    )
-    return study
+    
+        def objective(trial):
+            return optimize_trading_model_with_pruning(
+                trial=trial, X=X, y=y, events=events, data_index=data_index,
+                base_model_instance=base_model_instance,
+                param_distributions=param_distributions,
+                n_splits=n_splits, metric=metric
+            )
+    
+        study.optimize(
+            objective, 
+            n_trials=n_trials, 
+            timeout=timeout, 
+            callbacks=[print_best_trial, save_intermediate_results, check_for_overfitting]
+        )
+        return study
+        
+    except StorageInternalError as e:
+        print(f"❌ Storage Error: The database at {db_path} is locked or unreachable.")
+        print(f"Technical details: {e}")
+        # In a production environment, you might trigger a retry logic here
+    except Exception as e:
+        print(f"❌ Unexpected Error during study: {e}")
+        raise e
 
 
 def print_best_trial(study, trial):
