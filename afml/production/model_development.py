@@ -1244,39 +1244,6 @@ class ModelDevelopmentPipeline:
             print("-" * 50)
             print(pd.Series(self.config).to_string(), "\n")
 
-        
-        if self.file_paths["model"].exists():
-            print("\nLoading trained model and artifacts...")
-
-            self.best_model = joblib.load(self.file_paths["model"])
-            self.metrics = pickle.load(self.file_paths["metrics"])
-            self.preprocessed_features = pd.read_parquet(self.file_paths["features"])
-            self.events = pd.read_parquet(self.file_paths["events"])
-            onnx_path = str(self.file_paths["model"]).replace("joblib", "onnx")
-            
-            if self.export_onxx and not Path(onnx_path).exists():
-                metadata = {
-                    "strategy": self.strategy,
-                    "feature_config": self.feature_config,
-                    "label_config": self.label_config,
-                    "feature_names": self._get_feature_names(),
-                    "feature_count": len(self._get_feature_names()),
-                    "training_samples": self.metrics["events_count"],
-                    "best_weighting_scheme": self.metrics["best_weighting_scheme"],
-                    "pipeline_version": self.pipeline_version,
-                    "created_by": "AFML Production Pipeline",
-                }
-                self.file_manager.save_model_as_onxx(
-                    self.best_model, self._get_feature_names(), metadata
-                )
-                
-            return (
-                self.best_model,
-                self._get_feature_names(),
-                self.metrics,
-                self.config,
-            )
-
         try:
             # Step 1: Load data
             if verbose:
