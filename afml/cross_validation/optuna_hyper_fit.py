@@ -115,7 +115,6 @@ def optimize_trading_model_with_pruning(
     param_distributions: dict,
     n_splits: int = 5,
     metric="neg_log_loss",
-    cpcv=False,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
@@ -129,10 +128,7 @@ def optimize_trading_model_with_pruning(
 
     # Setup Cross-Validation
     t1 = events.loc[X.index, 't1']
-    if not cpcv:
-        cv = CombinatorialPurgedKFold(n_splits=n_splits+1, n_test_splits=2, t1=t1, pct_embargo=0.01)
-    else:
-        cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
+    cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
         
     fold_scores = []
 
@@ -336,3 +332,32 @@ def plot_model_vs_baseline(study, y, events):
     plt.legend()
     plt.grid(alpha=0.3)
     plt.show()
+
+
+def optuna_to_cv_results(study):
+    """Converts an Optuna study into a Scikit-Learn style cv_results DataFrame."""
+    rows = []
+    for trial in study.trials:
+        if trial.state != optuna.trial.TrialState.COMPLETE:
+            continue
+            
+        # Core metrics
+        res = {
+            "mean_test_score": trial.value,
+            "std_test_score": trial.user_attrs.get("score_std", 0),
+            "mean_fit_time": (trial.datetime_complete - trial.datetime_start).total_seconds(),
+            "params": trial.params,
+        }
+        
+        # Add individual parameters with 'param_' prefix
+        for k, v in trial.params.items():
+            res[f"param_{k}"] = v
+            
+        # Add fold-specific scores for '6. CROSS-VALIDATION CONSISTENCY'
+        fold_scores = trial.user_attrs.get("fold_scores", [])
+        for i, score in enumerate(fold_scores):
+            res[f"split{i}_test_score"] = score
+            
+        rows.append(res)
+    
+    return pd.DataFrame(rows)
