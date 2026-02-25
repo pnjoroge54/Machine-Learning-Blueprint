@@ -217,7 +217,7 @@ def optimize_trading_model(
     X: pd.DataFrame,
     y: pd.Series,
     events: pd.DataFrame,
-    data_index: pd.DateTimeIndex,
+    data_index: pd.DatetimeIndex,
     base_model_instance,
     param_distributions: dict,
     n_trials: int = 100,
@@ -237,7 +237,7 @@ def optimize_trading_model(
         X (pd.DataFrame): Feature matrix with index aligned to 'events'.
         y (pd.Series): Binary or multi-class labels for training.
         events (pd.DataFrame): Event metadata; must contain 't1' column (observation end times).
-        data_index (pd.DateTimeIndex): Timestamps of bars in training period
+        data_index (pd.DatetimeIndex): Timestamps of bars in training period
         base_model_instance (estimator): A Scikit-Learn compatible classifier template.
         param_distributions (dict): Search space template.
         n_trials (int): Maximum number of unique hyperparameter combinations to evaluate.
