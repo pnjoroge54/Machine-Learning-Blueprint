@@ -162,45 +162,55 @@ def optimize_trading_model_with_pruning(
     trial.set_user_attr("fold_scores", fold_scores)
     trial.set_user_attr("score_std", np.std(fold_scores))
     return final_score
+    
 
-
-class TradingModelPruner(MedianPruner):
+class TradingModelPruner(optuna.pruners.MedianPruner):
     """
-    Custom pruner that handles volatility and threshold constraints for financial models.
+    Financial-aware pruner that adjusts thresholds based on label entropy 
+    and return-weighted volatility.
     """
     def __init__(
         self,
+        y,
+        sample_weight,  # This should be your return-based weights |r|
         n_startup_trials: int = 10,
         n_warmup_steps: int = 2,
-        interval_steps: int = 1,
-        min_score_threshold: float = -0.69,
-        volatility_tolerance: float = 0.2
+        multiplier: float = 1.15, # How much worse than baseline is 'trash'?
     ):
-        super().__init__(
-            n_startup_trials=n_startup_trials,
-            n_warmup_steps=n_warmup_steps,
-            interval_steps=interval_steps,
-        )
-        self.min_score_threshold = min_score_threshold
-        self.volatility_tolerance = volatility_tolerance
+        super().__init__(n_startup_trials=n_startup_trials, n_warmup_steps=n_warmup_steps)
+        
+        # 1. Calculate Baseline Entropy (The "Naïve" score)
+        # We use weights to see the economic baseline
+        weighted_counts = pd.Series(sample_weight).groupby(y.values).sum()
+        probs = weighted_counts / weighted_counts.sum()
+        self.baseline_entropy = -np.sum(probs * np.log(probs))
+        
+        # Threshold: e.g., if baseline is -0.5, threshold is -0.5 * 1.15 = -0.575
+        self.min_score_threshold = -self.baseline_entropy * multiplier
+        
+        # 2. Dynamic Volatility Tolerance
+        # Higher return volatility = higher tolerance for score swings between folds
+        # We use the Coefficient of Variation of weights as a proxy for noise
+        weight_cv = np.std(sample_weight) / np.mean(sample_weight)
+        self.volatility_tolerance = 0.1 * (1 + weight_cv)
 
     def prune(self, study: "optuna.study.Study", trial: "optuna.trial.FrozenTrial") -> bool:
-        completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-        if len(completed_trials) < self._n_startup_trials:
-            return False
-
         step = trial.last_step
         if step is None: return False
 
         current_score = trial.intermediate_values.get(step)
+        
+        # Rule 1: Static baseline check (Is it worse than a coin flip/baseline?)
         if current_score < self.min_score_threshold:
             return True
 
+        # Rule 2: High-Variance check (Is the model unstable?)
         if len(trial.intermediate_values) >= 3:
-            recent_scores = [trial.intermediate_values[i] for i in range(max(0, step - 2), step + 1)]
+            recent_scores = list(trial.intermediate_values.values())[-3:]
             if np.std(recent_scores) > self.volatility_tolerance:
                 return True
 
+        # Rule 3: Median Pruning (Standard Optuna logic)
         return super().prune(study, trial)
 
 
@@ -241,7 +251,7 @@ def optimize_trading_model_with_advanced_pruning(
         optuna.study.Study: The completed study object with history and best params.
     """
     if pruner_type == "median":
-        pruner = TradingModelPruner(n_startup_trials=10, n_warmup_steps=2)
+        pruner = TradingModelPruner(y=events['bin'], sample_weight=events['w'], n_startup_trials=10, n_warmup_steps=2)
     elif pruner_type == "hyperband":
         pruner = HyperbandPruner(min_resource=1, max_resource=n_splits, reduction_factor=3)
     else:
