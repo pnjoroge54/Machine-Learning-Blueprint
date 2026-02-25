@@ -188,7 +188,7 @@ def analyze_hyperparameter_results(
 
     if param_columns:
         for param in param_columns[:5]:  # Limit to first 5 parameters
-            param_name = param.replace("param_", "")
+            param_name = param.replace("param_", "").split('__')[-1]
             param_stats = _safe_groupby_param(cv_results, param)
 
             if verbose and param_stats is not None and not param_stats.empty:
@@ -408,7 +408,7 @@ def analyze_hyperparameter_results(
     ax = axes[1, 0]
     if param_columns and len(param_columns) >= 1:
         param_col = param_columns[0]
-        param_name = param_col.replace("param_", "")
+        param_name = param_col.replace("param_", "").split('__')[-1]
         param_groups = cv_results.groupby(param_col)[target_metric].mean()
 
         # Try to sort if values are numeric
@@ -452,7 +452,7 @@ def analyze_hyperparameter_results(
     ax = axes[1, 1]
     if param_columns and len(param_columns) >= 2:
         param_col = param_columns[1]
-        param_name = param_col.replace("param_", "")
+        param_name = param_col.replace("param_", "").split('__')[-1]
         param_groups = cv_results.groupby(param_col)[target_metric].mean()
 
         # Try to sort if values are numeric
@@ -631,7 +631,7 @@ def analyze_your_results(cv_results: pd.DataFrame, verbose: bool = True) -> Dict
     param_columns = _get_param_columns(cv_results)
 
     for param_col in param_columns:
-        param_name = param_col.replace("param_", "").lower()
+        param_name = param_col.replace("param_", "").split('__')[-1].lower()
         for key, patterns in param_patterns.items():
             if any(pattern in param_name for pattern in patterns):
                 extracted_params[key] = best_model[param_col]
