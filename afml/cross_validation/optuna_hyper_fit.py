@@ -57,8 +57,12 @@ class FinancialModelSuggester:
                 low, high = dist.support()
                 is_log = dist.dist.name in ['reciprocal', 'loguniform']
                 sampled_params[name] = trial.suggest_float(name, low, high, log=is_log)
-            elif isinstance(dist, range):
-                sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
+            elif isinstance(dist, (range, stats.randint)):
+                try:
+                    sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
+                except:
+                    low, high = dist.support()
+                    sampled_params[name] = trial.suggest_int(name, int(low), int(high))
             else:
                 sampled_params[name] = dist
 
