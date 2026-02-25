@@ -614,7 +614,7 @@ def generate_events_triple_barrier(
     target_params = target_config["params"]
     
     sig = inspect.signature(target_func)
-    for key in sig.keys():
+    for key in sig.parameters.keys():
         if key not in target_params:
             target_params[key] = data_dict[key]
 
