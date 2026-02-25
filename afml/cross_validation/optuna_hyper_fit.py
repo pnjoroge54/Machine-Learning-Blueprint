@@ -94,11 +94,11 @@ class FinancialModelSuggester:
                 "max_depth": range(3, 12),
                 "min_weight_fraction_leaf": stats.uniform(0.01, 0.1),
                 "max_features": ["sqrt", "log2", 0.5],
-                "ccp_alpha": stats.reciprocal(1e-5, 1e-2)
+                "ccp_alpha": stats.loguniform(1e-5, 1e-2)
             },
             "xgboost": {
                 "n_estimators": range(100, 1000),
-                "learning_rate": stats.reciprocal(1e-3, 0.1),
+                "learning_rate": stats.loguniform(1e-3, 0.1),
                 "max_depth": range(2, 8),
                 "subsample": stats.uniform(0.6, 0.4),
                 "colsample_bytree": stats.uniform(0.6, 0.4),
@@ -163,7 +163,7 @@ def optimize_trading_model_with_pruning(
     return final_score
     
 
-class TradingModelPruner(optuna.pruners.MedianPruner):
+class TradingModelPruner(MedianPruner):
     """
     Financial-aware pruner that adjusts thresholds based on label entropy 
     and return-weighted volatility.
@@ -250,7 +250,7 @@ def optimize_trading_model_with_advanced_pruning(
         optuna.study.Study: The completed study object with history and best params.
     """
     if pruner_type == "median":
-        pruner = TradingModelPruner(y=events['bin'], sample_weight=events['w'], n_startup_trials=10, n_warmup_steps=2)
+        pruner = TradingModelPruner(y=events['bin'], sample_weight=events['w'])
     elif pruner_type == "hyperband":
         pruner = HyperbandPruner(min_resource=1, max_resource=n_splits, reduction_factor=3)
     else:
