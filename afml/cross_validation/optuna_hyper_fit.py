@@ -1,6 +1,8 @@
-from pathlib import Path
 import json
+import matplotlib.pyplot as plt
+import seaborn as sns
 from datetime import datetime
+from pathlib import Path 
 
 import numpy as np
 import optuna
@@ -126,10 +128,11 @@ def optimize_trading_model_with_pruning(
     )
 
     # Setup Cross-Validation
+    t1 = events.loc[X.index, 't1']
     if not cpcv:
-        cv = CombinatorialPurgedKFold(n_splits=n_splits+1, n_test_splits=2, t1=events.t1, pct_embargo=0.01)
+        cv = CombinatorialPurgedKFold(n_splits=n_splits+1, n_test_splits=2, t1=t1, pct_embargo=0.01)
     else:
-        cv = PurgedKFold(n_splits=n_splits, t1=events.t1, pct_embargo=0.01)
+        cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
         
     fold_scores = []
 
@@ -143,7 +146,7 @@ def optimize_trading_model_with_pruning(
             y_prob = model.predict_proba(X_val)
             # Use uniqueness weights for validation scoring to ensure statistical relevance
             w_val = events.loc[X_val.index, "tW"]
-            score = log_loss(y_val, y_prob, sample_weight=w_val) * -1
+            score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
             y_pred = model.predict(X_val)
             score = f1_score(y_val, y_pred)
@@ -297,3 +300,39 @@ def check_for_overfitting(study, trial):
     scores = trial.user_attrs.get("fold_scores", [])
     if len(scores) >= 3 and (max(scores) - min(scores)) > 0.3:
         print(f"⚠️ High variance detected in Trial {trial.number}")
+        
+
+def plot_model_vs_baseline(study, y, events):
+    """
+    Visualizes the best model's performance relative to the entropy baseline
+    and market volatility across CV folds.
+    """
+    # 1. Re-calculate baseline for the whole period
+    weighted_counts = events['w'].groupby(y.values).sum()
+    probs = weighted_counts / weighted_counts.sum()
+    baseline = -np.sum(probs * np.log(probs))
+    
+    # 2. Extract best trial data
+    best_trial = study.best_trial
+    fold_scores = best_trial.user_attrs.get("fold_scores", [])
+    
+    # 3. Create the plot
+    plt.figure(figsize=(12, 6))
+    
+    # Plot the scores
+    folds = range(len(fold_scores))
+    plt.plot(folds, fold_scores, marker='o', label='Best Model (Weighted Log-Loss)', color='#1f77b4', lw=2)
+    
+    # Plot the baseline
+    plt.axhline(y=-baseline, color='red', linestyle='--', label='Naive Baseline (Entropy)', alpha=0.7)
+    
+    # Fill the 'Alpha' area
+    plt.fill_between(folds, fold_scores, -baseline, where=(np.array(fold_scores) > -baseline), 
+                     color='green', alpha=0.1, label='Economic Edge')
+
+    plt.title(f"Best Trial #{best_trial.number}: Performance vs. Information Baseline", fontsize=14)
+    plt.xlabel("Cross-Validation Fold", fontsize=12)
+    plt.ylabel("Score (Higher is Better)", fontsize=12)
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.show()
