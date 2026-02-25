@@ -224,7 +224,8 @@ def optimize_trading_model(
     timeout: int = 3600,
     n_splits: int = 5,
     pruner_type: str = "median",
-    metric: str = "neg_log_loss"
+    metric: str = "neg_log_loss",
+    study_name: str = None,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -250,15 +251,26 @@ def optimize_trading_model(
         optuna.study.Study: The completed study object with history and best params.
     """
     if pruner_type == "median":
-        pruner = TradingModelPruner(y=events['bin'], sample_weight=events['w'])
+        pruner = TradingModelPruner(y, sample_weight=events.loc[X.index, 'w'])
     elif pruner_type == "hyperband":
         pruner = HyperbandPruner(min_resource=1, max_resource=n_splits, reduction_factor=3)
     else:
         pruner = SuccessiveHalvingPruner()
 
     sampler = TPESampler(seed=42)
-    study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
 
+    # Add a 30-second timeout for parallel workers
+    storage_url = f"sqlite:///{study_name}.db?timeout=30"
+
+    study = optuna.create_study(
+        direction="maximize", 
+        sampler=sampler, 
+        pruner=pruner, 
+        study_name=study_name, 
+        storage=storage_url, 
+        load_if_exists=True,
+    )
+    
     def objective(trial):
         return optimize_trading_model_with_pruning(
             trial=trial, X=X, y=y, events=events, data_index=data_index,
