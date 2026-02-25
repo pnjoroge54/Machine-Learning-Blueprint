@@ -1052,7 +1052,7 @@ def generate_hyperparameter_markdown_report(
             if recommended_params:
                 md_content.append("```python")
                 for key, value in recommended_params.items():
-                    md_content.append(f"{key} = {value}")
+                    md_content.append(f"{key.split('__')[-1]} = {value}")
                 md_content.append("```")
             else:
                 md_content.append("No parameter information available")
