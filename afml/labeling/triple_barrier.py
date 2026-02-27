@@ -15,6 +15,7 @@ from ..sampling.optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,
     get_num_conc_events_optimized,
 )
+from ..util.misc import optimize_dtypes
 
 # pylint: disable=invalid-name, too-many-arguments, too-many-locals, too-many-statements, too-many-branches
 
@@ -374,6 +375,8 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
     if "side" in events:
         out_df.loc[out_df["ret"].array <= 0, "bin"] = 0
         out_df["side"] = events["side"]
+
+    out_df = optimize_dtypes(out_df)
 
     return out_df
 
