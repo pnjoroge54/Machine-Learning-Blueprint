@@ -364,19 +364,19 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
         # Label 0 when vertical barrier reached
         pt_sl = events[["pt", "sl"]].iloc[0].values
         out_df["bin"] = barrier_touched(
-            out_df["ret"].values, out_df["trgt"].values, pt_sl
+            out_df["ret"].array, out_df["trgt"].array, pt_sl
         )
     else:
         # Label is the sign of the return
-        out_df["bin"] = np.where(out_df["ret"].values > 0, 1, -1).astype("int8")
+        out_df["bin"] = np.sign(out_df["ret"]).astype("int8")
 
     # Meta labeling: label incorrect events with a 0
     if "side" in events:
-        out_df.loc[out_df["ret"].values <= 0, "bin"] = 0
+        out_df.loc[out_df["ret"].array <= 0, "bin"] = 0
 
     # Add the side to the output. This is useful for when a meta label model must be fit
-    if "side" in triple_barrier_events:
-        out_df["side"] = events["side"].astype("int8")
+    if "side" in triple_barrier_events: # Use triple_barrier_events in case dropna modified events
+        out_df["side"] = events["side"]
 
     return out_df
 
