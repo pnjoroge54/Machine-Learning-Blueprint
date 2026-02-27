@@ -43,10 +43,10 @@ def apply_pt_sl_on_t1_optimized(close: pd.Series, events: pd.DataFrame, pt_sl: l
     t1_locs = close.index.get_indexer_for(events["t1"].values)
 
     # Convert pandas objects to NumPy arrays for Numba compatibility
-    close_val = close.values
+    close_val = close.to_numpy()
     t1_locs[t1_locs == -1] = len(close_val) - 1  # Handle NaT in t1
-    trgt_val = events["trgt"].values
-    side_val = events["side"].values
+    trgt_val = events["trgt"].to_numpy()
+    side_val = events["side"].to_numpy()
     pt_sl_arr = np.array(pt_sl)
 
     # 2. Call the Numba-jitted function
@@ -363,9 +363,9 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
 
     if vertical_barrier_zero:
         # Label 0 when vertical barrier reached
-        pt_sl = events[["pt", "sl"]].iloc[0].values
+        pt_sl = events[["pt", "sl"]].iloc[0].to_numpy()
         out_df["bin"] = barrier_touched(
-            out_df["ret"].array, out_df["trgt"].array, pt_sl
+            out_df["ret"].to_numpy(), out_df["trgt"].to_numpy(), pt_sl
         )
     else:
         # Label is the sign of the return
