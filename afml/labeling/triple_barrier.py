@@ -373,9 +373,6 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
     # Meta labeling: label incorrect events with a 0
     if "side" in events:
         out_df.loc[out_df["ret"].array <= 0, "bin"] = 0
-
-    # Add the side to the output. This is useful for when a meta label model must be fit
-    if "side" in triple_barrier_events: # Use triple_barrier_events in case dropna modified events
         out_df["side"] = events["side"]
 
     return out_df
