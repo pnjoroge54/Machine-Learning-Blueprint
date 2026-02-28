@@ -75,11 +75,11 @@ def avg_active_signals(signals):
 
     # Convert end times, handling NaT as maximum time
     MAX_TIME = np.iinfo(np.int64).max
-    end_times = np.where(signals["t1"].isna(), MAX_TIME, signals["t1"].view(np.int64))
+    end_times = np.where(signals["t1"].isna(), MAX_TIME, signals["t1"].to_numpy(np.int64))
 
     # Get all unique evaluation times
     eval_times = np.unique(
-        np.concatenate((signal_times, signals["t1"].dropna().view(np.int64)))
+        np.concatenate((signal_times, signals["t1"].dropna().to_numpy(np.int64)))
     )
 
     # Calculate results
