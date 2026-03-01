@@ -60,9 +60,41 @@ class BaseStrategy(ABC):
         self.features = {}
         self._warned = False
 
+    def _validate_feature(self, func):
+        """Tests the function on dummy data to ensure it is 'Strategy-Safe'."""
+        # Create a small 50-row dummy DataFrame
+        dummy_data = pd.DataFrame({
+            'close': np.random.uniform(100, 200, 50),
+            'high': np.random.uniform(200, 210, 50),
+            'low': np.random.uniform(90, 100, 50)
+        })
+
+        try:
+            result = func(dummy_data)
+            
+            # 1. Type Check
+            if not isinstance(result, pd.Series):
+                raise TypeError(f"Feature '{func.__name__}' must return a pd.Series, not {type(result)}.")
+
+            # 2. Length Check
+            if len(result) != len(dummy_data):
+                raise ValueError(
+                    f"Length Mismatch: Feature '{func.__name__}' returned {len(result)} rows "
+                    f"for a {len(dummy_data)} row input."
+                )
+
+            # 3. Quality Check (Optional: Warn if > 50% is NaN)
+            if result.isna().mean() > 0.5:
+                logger.warning(f"Feature '{func.__name__}' is more than 50% NaN values.")
+
+            return True
+        except Exception as e:
+            logger.error(f"Validation failed for '{func.__name__}': {e}")
+            return False
+
     def register_feature(self, func):
         """
-        Decorator to register a unique feature function in the strategy's dictionary.
+        Decorator to register a unique feature function in the strategy's dictionary AND data validation.
         
         Args:
             func (callable): A function that takes a DataFrame and returns a Series.
@@ -70,22 +102,22 @@ class BaseStrategy(ABC):
         Returns:
             callable: The original function, allowing it to be used normally.
         """
+        # Check logic first
         new_code = func.__code__.co_code
-        is_duplicate = any(
-            info["func"].__code__.co_code == new_code 
-            for info in self.features.values()
-        )
+        if any(f["func"].__code__.co_code == new_code for f in self.features.values()):
+            logger.debug(f"Skipped duplicate: {func.__name__}")
+            return func
 
-        if not is_duplicate:
+        # Validate data integrity
+        if self._validate_feature(func):
             version_key = str(len(self.features))
             self.features[version_key] = {
                 "func": func,
                 "name": func.__name__,
                 "added_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-            logger.info(f"Registered v{version_key}: {func.__name__}")
-        else:
-            logger.debug(f"Skipped duplicate: {func.__name__}")
+            logger.info(f"✅ Registered & Validated v{version_key}: {func.__name__}")
+        
         return func
 
     def apply_features(self, data: pd.DataFrame) -> pd.DataFrame:
