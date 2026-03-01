@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import joblib
-import pickle
 from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
 from loguru import logger
 from numba import njit, prange
