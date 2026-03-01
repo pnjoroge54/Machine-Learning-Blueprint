@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import cloudpickle
+import numpy as np
 import pandas as pd
 import talib
 import yaml
@@ -52,45 +53,53 @@ class BaseStrategy(ABC):
         self.features = {}
         self._warned = False
         # Automatically determine the path of the file where the class is defined
-        self.base_path = Path(__file__).parent.resolve()
+        self.base_path = Path.home() / "strategy_configs"
 
-    def export_strategy(self, sub_folder: str = "strategy_configs"):
-        """
-        Saves strategy metadata and logic using Pathlib.
-        Defaults to a folder relative to this script's location.
-        """
-        # Create a full path: [Script Location] / exports / [Strategy Name]
-        export_dir = self.base_path / sub_folder / self.get_strategy_name()
+    def export_strategy(self):
+        """Saves metadata and logic using the smart naming convention."""
+        # Use class name (minus 'Strategy') as a category folder
+        category = self.__class__.__name__.replace("Strategy", "")
+        export_dir = self.base_path / category / self.get_strategy_name()
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Metadata (YAML)
         metadata = {
             "strategy": self.get_strategy_name(),
             "params": {k: v for k, v in vars(self).items() if k not in {'features', '_warned', 'base_path'}},
             "audit": {v: info["name"] for v, info in self.features.items()}
         }
 
-        # Pathlib allows '/' operator to join paths
         with open(export_dir / "config.yaml", 'w') as f:
             yaml.dump(metadata, f)
 
-        # 2. Logic (Cloudpickle)
         with open(export_dir / "logic.pkl", 'wb') as f:
             cloudpickle.dump(self.features, f)
             
-        logger.info(f"💾 Strategy logic 'pickled' and saved to: {export_dir}")
+        logger.info(f"💾 Strategy exported to: {export_dir}")
 
-    def load_logic(self, strategy_folder_name: str):
-        """Reloads logic from the automated export path."""
-        logic_file = self.base_path / "exports" / strategy_folder_name / "logic.pkl"
+    def load_logic(self, tag: str = None):
+        """
+        Reloads logic from the automated export path.
+        
+        Args:
+            tag (str): The folder name (e.g., 'BollingerStrategy_window:20_f2').
+                      If None, defaults to the current strategy's auto-generated name.
+        """
+        # 1. Determine the category (e.g., 'Bollinger')
+        category = self.__class__.__name__.replace("Strategy", "")
+        
+        # 2. Determine the specific folder to look in
+        target_folder = tag if tag else self.get_strategy_name()
+        
+        # 3. Construct the path
+        logic_file = self.base_path / category / target_folder / "logic.pkl"
         
         if logic_file.exists():
             with open(logic_file, 'rb') as f:
                 self.features = cloudpickle.load(f)
-            logger.info(f"📂 Logic restored from {logic_file}")
+            logger.info(f"📂 Logic restored from: {target_folder}")
         else:
             logger.error(f"❌ No logic file found at {logic_file}")
-
+            
     def _get_test_data(self):
         """Generates dummy data that includes all currently registered features."""
         # Start with base OHLC
@@ -176,7 +185,7 @@ class BaseStrategy(ABC):
         class_name = self.__class__.__name__
         ignored = {'features', '_warned'}
         params = {k: v for k, v in vars(self).items() if k not in ignored}
-        param_str = "_".join([f"{k}:{v}" for k, v in params.items()])
+        param_str = "_".join([f"{k}_{v}" for k, v in params.items()])
         return f"{class_name}({param_str})_f{len(self.features)}"
 
     @abstractmethod
@@ -211,6 +220,7 @@ class BollingerStrategy(BaseStrategy):
     def __init__(
         self, window: int = 20, std: float = 2.0, objective: str = "mean_reversion"
     ):
+        super().__init__()
         self.window = window
         self.std = std
         self.objective = objective
@@ -257,6 +267,7 @@ class MACrossoverStrategy(BaseStrategy):
         slow_window: int = 30,
         objective: str = "trend",
     ):
+        super().__init__()
         self.fast_window = fast_window
         self.slow_window = slow_window
         self.objective = objective
