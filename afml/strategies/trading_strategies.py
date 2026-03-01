@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
 
+import cloudpickle
 import pandas as pd
 import talib
+import yaml
 from loguru import logger
 from datetime import datetime
+from pathlib import Path
 
 
 class BaseStrategy(ABC):
@@ -45,10 +48,48 @@ class BaseStrategy(ABC):
         ...     return talib.RSI(df['close'], timeperiod=21) 
         >>> # Output: DEBUG | Skipped duplicate: duplicate_rsi
     """
-
     def __init__(self):
         self.features = {}
         self._warned = False
+        # Automatically determine the path of the file where the class is defined
+        self.base_path = Path(__file__).parent.resolve()
+
+    def export_strategy(self, sub_folder: str = "strategy_configs"):
+        """
+        Saves strategy metadata and logic using Pathlib.
+        Defaults to a folder relative to this script's location.
+        """
+        # Create a full path: [Script Location] / exports / [Strategy Name]
+        export_dir = self.base_path / sub_folder / self.get_strategy_name()
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Metadata (YAML)
+        metadata = {
+            "strategy": self.get_strategy_name(),
+            "params": {k: v for k, v in vars(self).items() if k not in {'features', '_warned', 'base_path'}},
+            "audit": {v: info["name"] for v, info in self.features.items()}
+        }
+
+        # Pathlib allows '/' operator to join paths
+        with open(export_dir / "config.yaml", 'w') as f:
+            yaml.dump(metadata, f)
+
+        # 2. Logic (Cloudpickle)
+        with open(export_dir / "logic.pkl", 'wb') as f:
+            cloudpickle.dump(self.features, f)
+            
+        logger.info(f"💾 Strategy logic 'pickled' and saved to: {export_dir}")
+
+    def load_logic(self, strategy_folder_name: str):
+        """Reloads logic from the automated export path."""
+        logic_file = self.base_path / "exports" / strategy_folder_name / "logic.pkl"
+        
+        if logic_file.exists():
+            with open(logic_file, 'rb') as f:
+                self.features = cloudpickle.load(f)
+            logger.info(f"📂 Logic restored from {logic_file}")
+        else:
+            logger.error(f"❌ No logic file found at {logic_file}")
 
     def _get_test_data(self):
         """Generates dummy data that includes all currently registered features."""
