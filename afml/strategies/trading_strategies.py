@@ -2,16 +2,6 @@ from abc import ABC, abstractmethod
 
 import pandas as pd
 import talib
-
-
-from abc import ABC, abstractmethod
-import pandas as pd
-import talib
-from loguru import logger
-from datetime import datetime
-
-from abc import ABC, abstractmethod
-import pandas as pd
 from loguru import logger
 from datetime import datetime
 
@@ -60,38 +50,47 @@ class BaseStrategy(ABC):
         self.features = {}
         self._warned = False
 
-    def _validate_feature(self, func):
-        """Tests the function on dummy data to ensure it is 'Strategy-Safe'."""
-        # Create a small 50-row dummy DataFrame
-        dummy_data = pd.DataFrame({
-            'close': np.random.uniform(100, 200, 50),
-            'high': np.random.uniform(200, 210, 50),
-            'low': np.random.uniform(90, 100, 50)
+    def _get_test_data(self):
+        """Generates dummy data that includes all currently registered features."""
+        # Start with base OHLC
+        df = pd.DataFrame({
+            'open': np.random.uniform(100, 200, 100),
+            'high': np.random.uniform(200, 210, 100),
+            'low': np.random.uniform(90, 100, 100),
+            'close': np.random.uniform(100, 200, 100),
+            'volume': np.random.uniform(1000, 5000, 100)
         })
-
+        
+        # Apply existing features so the new one can "see" them
+        for info in self.features.values():
+            try:
+                df[info["name"]] = info["func"](df)
+            except Exception:
+                continue # Skip if test data causes an error in existing features
+        return df
+        
+    def _validate_feature(self, func):
+        """Validates that the function works with the current feature set."""
+        test_df = self._get_test_data()
+        
         try:
-            result = func(dummy_data)
+            result = func(test_df)
             
-            # 1. Type Check
+            # Check for column existence (KeyError prevention)
             if not isinstance(result, pd.Series):
-                raise TypeError(f"Feature '{func.__name__}' must return a pd.Series, not {type(result)}.")
-
-            # 2. Length Check
-            if len(result) != len(dummy_data):
-                raise ValueError(
-                    f"Length Mismatch: Feature '{func.__name__}' returned {len(result)} rows "
-                    f"for a {len(dummy_data)} row input."
-                )
-
-            # 3. Quality Check (Optional: Warn if > 50% is NaN)
-            if result.isna().mean() > 0.5:
-                logger.warning(f"Feature '{func.__name__}' is more than 50% NaN values.")
-
+                raise TypeError(f"Must return pd.Series")
+            
+            if len(result) != len(test_df):
+                raise ValueError(f"Length mismatch")
+                
             return True
+        except KeyError as e:
+            logger.error(f"Dependency Missing: Feature '{func.__name__}' requires column {e}")
+            return False
         except Exception as e:
             logger.error(f"Validation failed for '{func.__name__}': {e}")
             return False
-
+            
     def register_feature(self, func):
         """
         Decorator to register a unique feature function in the strategy's dictionary AND data validation.
