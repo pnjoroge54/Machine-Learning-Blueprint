@@ -1,6 +1,6 @@
 import hashlib
 import json
-import pickle
+import cloudpickle
 from datetime import datetime
 from pathlib import Path
 from typing import List, Union
@@ -513,7 +513,7 @@ class ModelFileManager:
         """Save objects to file."""
         if self.current_paths and name in self.current_paths:
             with open(self.current_paths[name], "wb") as f:
-                pickle.dump(object, f)
+                cloudpickle.dump(object, f)
 
     def save_metrics(self, metrics: dict):
         """Save metrics to file."""
@@ -636,10 +636,10 @@ class ModelFileManager:
                         except UnicodeDecodeError:
                             # f = Path(f).rename(f.replace(".json", ".pkl"))
                             with open(f, "rb") as g:
-                                model_data[key] = pickle.load(g)
+                                model_data[key] = cloudpickle.load(g)
                     elif f.endswith("pkl"):
                         with open(f, "rb") as g:
-                            model_data[key] = pickle.load(g)
+                            model_data[key] = cloudpickle.load(g)
 
             date_range, bar_size, bar_type = d["date_range"], d["bar_size"], d["bar_type"]
             barriers = f"{date_range}" + "_".join(fname.name.split(date_range)[1].split("_")[:-2])
