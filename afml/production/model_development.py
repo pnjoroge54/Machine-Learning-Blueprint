@@ -19,7 +19,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
+from ..cache import cacheable, cv_cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..cross_validation import PurgedKFold, clf_hyper_fit
 from ..cross_validation.cross_validation import ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
@@ -381,6 +381,7 @@ def weighted_estimator(base_estimator, events, data_index):
     return _WeightedEstimator(base_estimator=base_estimator, events=events, data_index=data_index)
 
 
+@cv_cacheable(track_data_access=True, dataset_name='my_data', purpose='train')
 def best_weighting_scheme(
     classifier,
     X,
