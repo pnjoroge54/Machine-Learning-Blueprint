@@ -373,8 +373,8 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
 
     # Meta labeling: label incorrect events with a 0
     if "side" in events:
-        out_df.loc[out_df["ret"].array <= 0, "bin"] = 0
-        out_df["side"] = events["side"]
+        out_df.loc[out_df["ret"].values <= 0, "bin"] = 0
+        out_df["side"] = events["side"].astype("int8")
 
     out_df = optimize_dtypes(out_df)
 
