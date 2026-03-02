@@ -185,7 +185,7 @@ def create_feature_engineering_pipeline(
     time_feat = get_time_features(
         data, timeframe=data_config["bar_size"], bar_type=data_config["bar_type"]
     )
-    return features.join(time_feat, how="left").dropna()
+    return features.join(time_feat, how="left")
 
 
 @cacheable()
@@ -575,9 +575,9 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
 
     Returns: DataFrame of rolling metrics
     """
-    y_true = events["bin"].to_numpy().astype(np.int8)
+    y_true = events["bin"].to_numpy(np.int8)
     y_pred = np.ones(len(y_true), dtype=np.int8)  # All predictions are 1
-    weights = sample_weight.to_numpy().astype(np.float32)
+    weights = sample_weight.to_numpy(np.float32)
 
     metrics = pd.DataFrame(index=events.index)
 
@@ -810,7 +810,7 @@ class ModelDevelopmentPipeline:
         self.config["target_params"] = target_config["params"]
         self.config.update(label_config)
 
-        self.label_config["target_config"] = target_config
+        # self.label_config["target_config"] = target_config
 
         # Storage for intermediate results
         self.bar_data = None
@@ -962,7 +962,7 @@ class ModelDevelopmentPipeline:
 
             # Step 5: Rolling meta-label features
             if verbose:
-                print("\n\n[Step 5/7] Computing rolling meta-label features...")
+                print("\n[Step 5/7] Computing rolling meta-label features...")
 
             self.add_meta_features()
             self.preprocess_features()
@@ -1080,6 +1080,7 @@ class ModelDevelopmentPipeline:
                 "strategy": self.strategy,
                 "feature_config": self.feature_config,
                 "label_config": self.label_config,
+                "target_config": self.target_config,
                 "feature_names": self._get_feature_names(),
                 "feature_count": len(self._get_feature_names()),
                 "training_samples": len(self.events),
@@ -1131,7 +1132,7 @@ class ModelDevelopmentPipeline:
     def generate_labels(self):
         """Step 3: Generate triple-barrier labels."""
         self.events = generate_events_triple_barrier(
-            self.bar_data, self.strategy, **self.label_config
+            self.bar_data, self.strategy, self.target_config, **self.label_config
         )
         self.completed_steps["label_generation"] = True
 
