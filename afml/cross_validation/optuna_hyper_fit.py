@@ -71,7 +71,7 @@ class FinancialModelSuggester:
         # 3. Create the Weighted Estimator
         # We clone the base_model to keep the template pristine
         new_base = clone(base_model)
-        new_base.set_params(random_state=42, **sampled_params)
+        new_base.set_params(**sampled_params)
         
         weighted_model = _WeightedEstimator(
             base_estimator=new_base,
