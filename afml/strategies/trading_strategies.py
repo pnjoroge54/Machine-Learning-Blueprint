@@ -19,15 +19,15 @@ class BaseStrategy(ABC):
         param_str = "_".join([f"{k}_{v}" for k, v in params.items()])
         return f"{class_name}_{param_str}"
     
+    def get_objective(self) -> str:
+        """Return strategy objective from {'mean_reversion', 'trend-following', 'momentum', 'pairs'}"""
+        return self.objective
+        
     @abstractmethod
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
         """Generate trading signals (1 for long, -1 for short, 0 for no position)"""
         pass
 
-    @abstractmethod
-    def get_objective(self) -> str:
-        """Return strategy objective from {'mean_reversion', 'trend-following', 'momentum', 'pairs'}"""
-        pass
         
 
 class BollingerStrategy(BaseStrategy):
@@ -70,9 +70,6 @@ class BollingerStrategy(BaseStrategy):
         signals[(close >= upper_band)] = -1  # Sell signal (mean reversion)
         signals[(close <= lower_band)] = 1  # Buy signal (mean reversion)
         return signals
-
-    def get_objective(self) -> str:
-        return self.objective
 
 
 class MACrossoverStrategy(BaseStrategy):
@@ -120,6 +117,3 @@ class MACrossoverStrategy(BaseStrategy):
             (fast_ma < slow_ma)
         ] = -1  # Short signal when fast MA crosses below slow MA
         return signals
-
-    def get_objective(self) -> str:
-        return self.objective
