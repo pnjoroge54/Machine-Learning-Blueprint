@@ -13,7 +13,7 @@ class BaseStrategy(ABC):
 
     def get_strategy_name(self) -> str:
         """Returns a string identifying the class, its parameters, and feature count."""
-        class_name = self.__class__.__name__
+        class_name = self.__class__.__name__.replace("Strategy", "")
         ignored = {'objective'}
         params = {k: v for k, v in vars(self).items() if k not in ignored}
         param_str = "_".join([f"{k}_{v}" for k, v in params.items()])
