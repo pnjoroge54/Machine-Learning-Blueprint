@@ -381,7 +381,6 @@ def weighted_estimator(base_estimator, events, data_index):
     return _WeightedEstimator(base_estimator=base_estimator, events=events, data_index=data_index)
 
 
-@cv_cacheable(track_data_access=True, dataset_name='my_data', purpose='train')
 def best_weighting_scheme(
     classifier,
     X,
@@ -413,7 +412,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable()
+@cv_cacheable
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
@@ -479,7 +478,7 @@ def get_optimal_sample_weight(
 
     for scheme, weight in tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights)):
         best_score, best_scheme, cv_results = best_weighting_scheme(
-            classifier, X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
+            clone(classifier), X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
         )
     
     best_weight = weights[best_scheme]
@@ -509,7 +508,7 @@ def get_optimal_sample_weight(
     decay_loop = tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay weighting for {best_scheme}", total=len(time_decay_weights))
     for scheme, weight in decay_loop:
         best_score, best_scheme, cv_results = best_weighting_scheme(
-            classifier, X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
+            clone(classifier), X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
         )
 
     weights.update(time_decay_weights)
