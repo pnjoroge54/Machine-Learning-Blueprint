@@ -9,6 +9,7 @@ import optuna
 import pandas as pd
 import scipy.stats as stats
 import sqlite3
+from loguru import logger
 from optuna import TrialPruned, create_study
 from optuna.exceptions import StorageInternalError
 from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPruner
@@ -70,7 +71,7 @@ class FinancialModelSuggester:
 
         # 3. Create the Weighted Estimator
         # We clone the base_model to keep the template pristine
-        new_base = clone(model)
+        new_base = clone(base_model)
             
         # Force single-threaded inside CV to prevent oversubscription
         if hasattr(new_base, 'n_jobs'):
@@ -79,6 +80,10 @@ class FinancialModelSuggester:
         # Ensure reproducibility
         if hasattr(new_base, 'random_state') and new_base.random_state is None:
             new_base.set_params(random_state=1)
+
+        if hasattr(new_base, 'max_samples'):
+            av_uniqueness = events['tW'].mean()
+            new_base.set_params(max_samples=av_uniqueness)
         
         # Validate before applying — fail fast on typos
         valid_params = {}
@@ -103,6 +108,70 @@ class FinancialModelSuggester:
             linear=linear
         )
         return weighted_model
+
+    @staticmethod
+    def apply_from_params(
+        params: dict,
+        base_model,
+        events: pd.DataFrame,
+        data_index: pd.DatetimeIndex,
+    ) -> "_WeightedEstimator":
+        """
+        Reconstruct a WeightedEstimator from a flat params dict.
+
+        This is the deterministic counterpart to suggest_and_apply():
+        it takes resolved values (e.g. from study.best_params) instead
+        of sampling from distributions via a Trial.
+
+        Parameters
+        ----------
+        params : dict
+            Flat dictionary of parameter values. Typically
+            study.best_params or trial.params. Must contain both
+            weighting keys and model hyperparameters.
+        base_model : estimator
+            Unfitted sklearn-compatible classifier template.
+            Will be cloned internally — the original is never modified.
+        events : pd.DataFrame
+            Event metadata with 't1', 'w', 'tW' columns.
+        data_index : pd.DatetimeIndex
+            Timestamps of bars in the training period.
+
+        Returns
+        -------
+        _WeightedEstimator
+            A new, unfitted estimator configured with the given params.
+        """
+        # --- Separate weighting params from model params ---
+        # Single registry for weight keys: if you add a new weight
+        # hyperparam to suggest_and_apply, add it here too.
+        WEIGHT_KEYS = {"weight_scheme", "weight_decay", "weight_linear"}
+
+        weight_params = {k: params[k] for k in WEIGHT_KEYS if k in params}
+        model_params = {k: v for k, v in params.items() if k not in WEIGHT_KEYS}
+
+        # --- Validate model params against estimator ---
+        valid_keys = set(base_model.get_params().keys())
+        invalid = set(model_params) - valid_keys
+        if invalid:
+            raise ValueError(
+                f"Parameters {invalid} are not valid for "
+                f"{type(base_model).__name__}. "
+                f"Valid: {sorted(valid_keys)}"
+            )
+
+        # --- Clone and configure ---
+        new_base = clone(base_model)
+        new_base.set_params(**model_params)
+
+        return _WeightedEstimator(
+            base_estimator=new_base,
+            events=events,
+            data_index=data_index,
+            scheme=weight_params.get("weight_scheme", "unweighted"),
+            decay=weight_params.get("weight_decay", 1.0),
+            linear=weight_params.get("weight_linear", False),
+        )
         
     @classmethod
     def get_search_space(cls, model_name: str):
@@ -138,7 +207,7 @@ class FinancialModelSuggester:
 def optimize_trading_model_with_pruning(
     trial: optuna.Trial,
     X, y, events, data_index,
-    base_model_instance,
+    classifier,
     param_distributions: dict,
     n_splits: int = 5,
     metric="neg_log_loss",
@@ -150,7 +219,7 @@ def optimize_trading_model_with_pruning(
     suggester = FinancialModelSuggester()
     # Apply both weighting params and base model params
     model = suggester.suggest_and_apply(
-        trial, base_model_instance, param_distributions, events, data_index
+        trial, classifier, param_distributions, events, data_index
     )
 
     # Setup Cross-Validation
@@ -163,15 +232,15 @@ def optimize_trading_model_with_pruning(
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator
+        fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator
 
         if metric == "neg_log_loss":
-            y_prob = model.predict_proba(X_val)
+            y_prob = fit.predict_proba(X_val)
             # Use uniqueness weights for validation scoring to ensure statistical relevance
             w_val = events.loc[X_val.index, "tW"]
             score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
-            y_pred = model.predict(X_val)
+            y_pred = fit.predict(X_val)
             score = f1_score(y_val, y_pred)
             
         fold_scores.append(score)
@@ -206,7 +275,7 @@ class TradingModelPruner(MedianPruner):
         super().__init__(n_startup_trials=n_startup_trials, n_warmup_steps=n_warmup_steps)
         
         # 1. Calculate Baseline Entropy (The "Naïve" score)
-        # We use weights to see the economic baseline
+        # We use weights to see the economic baseline - i.e., return-attribution (events['w'])
         weighted_counts = pd.Series(sample_weight).groupby(y.values).sum()
         probs = weighted_counts / weighted_counts.sum()
         self.baseline_entropy = -np.sum(probs * np.log(probs))
@@ -217,7 +286,9 @@ class TradingModelPruner(MedianPruner):
         else:
             # For F1, use a proper baseline (e.g., majority-class F1)
             majority_ratio = y.value_counts(normalize=True).max()
-            self.min_score_threshold = majority_ratio * 0.8  # must beat 80% of majority-class    
+            self.min_score_threshold = majority_ratio * 0.8  # must beat 80% of majority-class
+        
+        logger.info(f"Minimum Score Threshold: {self.min_score_threshold:.4f}")
         
         # 2. Dynamic Volatility Tolerance
         # Higher return volatility = higher tolerance for score swings between folds
@@ -289,7 +360,7 @@ def optimize_trading_model(
         optuna.study.Study: The completed study object with history and best params.
     """
     if pruner_type == "median":
-        pruner = TradingModelPruner(y, sample_weight=events.loc[X.index, 'w'])
+        pruner = TradingModelPruner(y, sample_weight=events.loc[X.index, 'w']) 
     elif pruner_type == "hyperband":
         pruner = HyperbandPruner(min_resource=1, max_resource=n_splits, reduction_factor=3)
     else:
@@ -328,9 +399,8 @@ def optimize_trading_model(
         if refit:
             # Reconstruct best model from best params
             best_trial = study.best_trial
-            best_model = suggester.suggest_and_apply_from_params(
-                classifier, best_trial.params,
-                events, data_index,
+            best_model = FinancialModelSuggester.apply_from_params(
+                best_trial.params, classifier, events, data_index
             )
             best_model.fit(X, y)
             study.best_estimator_ = best_model  # attach for convenience
