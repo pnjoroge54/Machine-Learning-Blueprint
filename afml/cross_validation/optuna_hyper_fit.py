@@ -70,8 +70,26 @@ class FinancialModelSuggester:
 
         # 3. Create the Weighted Estimator
         # We clone the base_model to keep the template pristine
-        new_base = clone(base_model)
-        new_base.set_params(**sampled_params)
+            
+        # Force single-threaded inside CV to prevent oversubscription
+        new_base = clone(model)
+        if hasattr(new_base, 'n_jobs'):
+            new_base.set_params(n_jobs=1)
+        
+        # Validate before applying — fail fast on typos
+        valid_params = {}
+        for name, value in sampled_params.items():
+            if hasattr(new_base, name):
+                valid_params[name] = value
+            else:
+                import warnings
+                warnings.warn(
+                    f"Parameter '{name}' not found on {type(new_base).__name__}. "
+                    f"Skipping. Did you mean one of: "
+                    f"{[p for p in new_base.get_params() if name[:4] in p]}?"
+                )
+        new_base.set_params(**valid_params)
+
         
         weighted_model = _WeightedEstimator(
             base_estimator=new_base,
@@ -121,6 +139,8 @@ def optimize_trading_model_with_pruning(
     param_distributions: dict,
     n_splits: int = 5,
     metric="neg_log_loss",
+    sample_weight_train,
+    sample_weight_score,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
@@ -141,13 +161,12 @@ def optimize_trading_model_with_pruning(
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
-        model.fit(X_train, y_train)
+        w_train, w_val = sample_weight_train.iloc[train_idx], sample_weight_score.iloc[val_idx]
+        
+        clone(model).fit(X_train, y_train, sample_weight=w_train)
 
         if metric == "neg_log_loss":
             y_prob = model.predict_proba(X_val)
-            # Use uniqueness weights for validation scoring to ensure statistical relevance
-            w_val = events.loc[X_val.index, "tW"]
             score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
             y_pred = model.predict(X_val)
@@ -189,9 +208,14 @@ class TradingModelPruner(MedianPruner):
         weighted_counts = pd.Series(sample_weight).groupby(y.values).sum()
         probs = weighted_counts / weighted_counts.sum()
         self.baseline_entropy = -np.sum(probs * np.log(probs))
-        
-        # Threshold: e.g., if baseline is -0.5, threshold is -0.5 * 1.15 = -0.575
-        self.min_score_threshold = -self.baseline_entropy * multiplier
+
+        if metric == "neg_log_loss":
+            # Threshold: e.g., if baseline is -0.5, threshold is -0.5 * 1.15 = -0.575
+            self.min_score_threshold = -self.baseline_entropy * multiplier
+        else:
+            # For F1, use a proper baseline (e.g., majority-class F1)
+            majority_ratio = y.value_counts(normalize=True).max()
+            self.min_score_threshold = majority_ratio * 0.8  # must beat 80% of majority-class    
         
         # 2. Dynamic Volatility Tolerance
         # Higher return volatility = higher tolerance for score swings between folds
@@ -233,6 +257,8 @@ def optimize_trading_model(
     metric: str = "neg_log_loss",
     study_name: str = None,
     db_path: str = None,
+    random_state: int = 42,
+    refit: bool = True,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -266,10 +292,11 @@ def optimize_trading_model(
     else:
         pruner = SuccessiveHalvingPruner()
 
-    sampler = TPESampler(seed=42)
+    sampler = TPESampler(seed=random_state)
 
     # Add a 30-second timeout for parallel workers
     storage_url = f"sqlite:///{db_path}.db?timeout=30"
+    
     try:
         study = optuna.create_study(
             direction="maximize", 
@@ -294,6 +321,17 @@ def optimize_trading_model(
             timeout=timeout, 
             callbacks=[print_best_trial, save_intermediate_results, check_for_overfitting]
         )
+    
+        if refit:
+            # Reconstruct best model from best params
+            best_trial = study.best_trial
+            best_model = suggester.suggest_and_apply_from_params(
+                base_model_instance, best_trial.params,
+                events, data_index,
+            )
+            best_model.fit(X, y)
+            study.best_estimator_ = best_model  # attach for convenience
+
         return study
         
     except StorageInternalError as e:
