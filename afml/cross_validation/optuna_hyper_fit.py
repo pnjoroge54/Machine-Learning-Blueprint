@@ -211,7 +211,7 @@ class TradingModelPruner(MedianPruner):
         probs = weighted_counts / weighted_counts.sum()
         self.baseline_entropy = -np.sum(probs * np.log(probs))
 
-        if metric == "neg_log_loss":
+        if set(y.unique()) != {0,1}:  # metric == "neg_log_loss"
             # Threshold: e.g., if baseline is -0.5, threshold is -0.5 * 1.15 = -0.575
             self.min_score_threshold = -self.baseline_entropy * multiplier
         else:
