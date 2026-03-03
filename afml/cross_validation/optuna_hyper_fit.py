@@ -235,7 +235,7 @@ def optimize_trading_model_with_pruning(
 class TradingModelPruner(MedianPruner):
     """
     Financial-aware pruner that adjusts thresholds based on label entropy 
-    and return-weighted volatility.
+    and return-attribution weighted volatility.
     """
     def __init__(
         self,
@@ -309,7 +309,6 @@ def optimize_trading_model(
     study_name: str = None,
     db_path: str = None,
     random_state: int = 42,
-    refit: bool = False,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -333,7 +332,6 @@ def optimize_trading_model(
         study_name (str): Name of Optuna study.
         db_path (str): Path to store trials.
         
-
     Returns:
         optuna.study.Study: The completed study object with history and best params.
     """
@@ -366,7 +364,7 @@ def optimize_trading_model(
             clf.set_params(n_jobs=1)
     
         # Ensure reproducibility
-        if hasattr(clf, 'random_state') and clf.random_state is None:
+        if hasattr(clf, 'random_state'):
             clf.set_params(random_state=random_state)
     
         def objective(trial):
@@ -383,20 +381,6 @@ def optimize_trading_model(
             timeout=timeout, 
             callbacks=[print_best_trial, save_intermediate_results, check_for_overfitting]
         )
-    
-        if refit:
-            # Reconstruct best model from best params
-            best_trial = study.best_trial
-            best_model = FinancialModelSuggester.apply_from_params(
-                best_trial.params, clf, events, data_index
-            )
-
-            # Return to parallelized mode
-            if hasattr(clf, 'n_jobs'):
-                best_model.set_params(n_jobs=-1)
-            
-            best_model.fit(X, y)
-            study.best_estimator_ = best_model  # attach for convenience
 
         return study
         
@@ -427,7 +411,8 @@ def save_intermediate_results(study, trial):
 
 def check_for_overfitting(study, trial):
     scores = trial.user_attrs.get("fold_scores", [])
-    if len(scores) >= 3 and (max(scores) - min(scores)) > 0.3:
+    score_std = trial.user_attrs.get("score_std", 0.0)
+    if len(scores) >= 3 and (score_std) > 0.3:
         print(f"⚠️ High variance detected in Trial {trial.number}")
         
 
@@ -494,3 +479,21 @@ def optuna_to_cv_results(study):
         rows.append(res)
     
     return pd.DataFrame(rows)
+
+
+# def clf_hyperfit_optuna(
+#     refit: bool = False,
+# ):
+        # if refit:
+        #     # Reconstruct best model from best params
+        #     best_trial = study.best_trial
+        #     best_model = FinancialModelSuggester.apply_from_params(
+        #         best_trial.params, clf, events, data_index
+        #     )
+
+        #     # Return to parallelized mode
+        #     if hasattr(clf, 'n_jobs'):
+        #         best_model.set_params(n_jobs=-1)
+            
+        #     best_model.fit(X, y)
+        #     study.best_estimator_ = best_model  # attach for convenience
