@@ -257,9 +257,14 @@ class TradingModelPruner(MedianPruner):
             # Threshold: e.g., if baseline is -0.5, threshold is -0.5 * 1.15 = -0.575
             self.min_score_threshold = -self.baseline_entropy * multiplier
         else:
-            # For F1, use a proper baseline (e.g., majority-class F1)
-            majority_ratio = y.value_counts(normalize=True).max()
-            self.min_score_threshold = majority_ratio * 0.8  # must beat 80% of majority-class
+            # - This original formulation seems to work fine
+            # # For F1, use a proper baseline (e.g., majority-class F1)
+            # majority_ratio = y.value_counts(normalize=True).max()
+            # self.min_score_threshold = majority_ratio * 0.8  # must beat 80% of majority-class
+            
+            # For F1, baseline = weighted class prior accuracy
+            majority_ratio = probs.max()
+            self.min_score_threshold = majority_ratio / multiplier # e.g., 0.52 / 1.15 = 0.45
         
         logger.info(f"Minimum Score Threshold: {self.min_score_threshold:.4f}")
         
