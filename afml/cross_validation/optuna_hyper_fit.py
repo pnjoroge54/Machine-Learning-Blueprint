@@ -138,12 +138,10 @@ class FinancialModelSuggester:
 def optimize_trading_model_with_pruning(
     trial: optuna.Trial,
     X, y, events, data_index,
-    classifier,
+    base_model_instance,
     param_distributions: dict,
     n_splits: int = 5,
     metric="neg_log_loss",
-    sample_weight_train: pd.Series = None,
-    sample_weight_score: pd.Series = None,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
@@ -152,31 +150,25 @@ def optimize_trading_model_with_pruning(
     suggester = FinancialModelSuggester()
     # Apply both weighting params and base model params
     model = suggester.suggest_and_apply(
-        trial, classifier, param_distributions, events, data_index
+        trial, base_model_instance, param_distributions, events, data_index
     )
 
     # Setup Cross-Validation
     t1 = events.loc[X.index, 't1']
     cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
-    
-    # If no sample_weight then broadcast a value of 1 to all samples (full weight).
-    if sample_weight_train is None:
-        sample_weight_train = pd.Series(np.ones((X.shape[0],)), index=y.index)
-
-    if sample_weight_score is None:
-        sample_weight_score = pd.Series(np.ones((X.shape[0],)), index=y.index)
         
     fold_scores = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-        w_train, w_val = sample_weight_train.iloc[train_idx], sample_weight_score.iloc[val_idx]
-        
-        clone(model).fit(X_train, y_train, sample_weight=w_train)
+
+        clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator
 
         if metric == "neg_log_loss":
             y_prob = model.predict_proba(X_val)
+            # Use uniqueness weights for validation scoring to ensure statistical relevance
+            w_val = events.loc[X_val.index, "tW"]
             score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
             y_pred = model.predict(X_val)
@@ -260,8 +252,6 @@ def optimize_trading_model(
     events: pd.DataFrame,
     data_index: pd.DatetimeIndex,
     param_distributions: dict,
-    sample_weight_train: pd.Series = None,
-    sample_weight_score: pd.Series = None,
     n_trials: int = 30,
     timeout: int = 3600,
     n_splits: int = 5,
@@ -285,12 +275,6 @@ def optimize_trading_model(
         y (pd.Series): Binary or multi-class labels for training.
         events (pd.DataFrame): Event metadata; must contain 't1' column (observation end times).
         data_index (pd.DatetimeIndex): Timestamps of bars in training period
-        sample_weight_train : Array-like, optional (default=None)
-            Per-sample weights used when calling classifier.fit on the train split. If None, all ones
-            are used (no weighting).
-        sample_weight_score : Array-like, optional (default=None)
-            Per-sample weights used when calling the scoring function on the test split. If None, all ones
-            are used.
         param_distributions (dict): Search space template.
         n_trials (int): Maximum number of unique hyperparameter combinations to evaluate.
         timeout (int): Total search time limit in seconds.
@@ -332,8 +316,6 @@ def optimize_trading_model(
                 classifier=classifier,
                 param_distributions=param_distributions,
                 n_splits=n_splits, metric=metric, 
-                sample_weight_train=sample_weight_train,
-                sample_weight_score=sample_weight_score,
             )
     
         study.optimize(
