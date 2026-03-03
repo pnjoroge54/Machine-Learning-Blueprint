@@ -24,27 +24,34 @@ from ..production.model_development import _WeightedEstimator
 
 class FinancialModelSuggester:
     """
-    Translates Scikit-Learn style distribution dictionaries into 
+    Translates Scikit-Learn style distribution dictionaries into
     Optuna trial suggestions for rigorous statistical HPT.
+
+    Two core methods form a dual pair:
+        suggest_and_apply  — Trial → params → model  (stochastic, used in objective)
+        apply_from_params  — params → model           (deterministic, used for refit)
     """
-    
-    @staticmethod
-    def suggest_and_apply(trial: optuna.Trial, base_model, param_distributions: dict, events: pd.DataFrame, data_index: pd.DatetimeIndex):
+
+    # ----- Central registry of weighting hyperparameters -----
+    # Both methods reference this to separate weight keys from model keys.
+    WEIGHT_KEYS = frozenset({"weight_scheme", "weight_decay", "weight_linear"})
+
+    # ==================== SEARCH-TIME ====================
+
+    @classmethod
+    def suggest_and_apply(
+        cls,
+        trial: optuna.Trial,
+        base_model,
+        param_distributions: dict,
+        events: pd.DataFrame,
+        data_index: pd.DatetimeIndex,
+    ):
         """
-        Samples hyperparameters from a dictionary and applies them to a cloned model instance.
+        Samples hyperparameters from distributions via an Optuna Trial
+        and returns a configured _WeightedEstimator.
 
-        Args:
-            trial: The Optuna trial object.
-            base_model: A pre-instantiated sklearn-style model or pipeline.
-            param_distributions: A dict of distributions (list, range, or scipy.stats).
-            events: Training events for the model.
-            data_index: Timestamps of each bar in the training period.
-
-        Engineering Note:
-            Continuous distributions from scipy.stats are mapped to trial.suggest_float. 
-            The method automatically detects 'reciprocal' or 'loguniform' distributions 
-            to enable log-scaling in Optuna, which is critical for parameters like 
-            learning rates and regularization coefficients (C, gamma, lambda).
+        Used inside the objective function during optimization.
         """
         # 1. Suggest Weighting Parameters
         scheme = trial.suggest_categorical("weight_scheme", ["unweighted", "uniqueness", "return"])
@@ -56,61 +63,37 @@ class FinancialModelSuggester:
         for name, dist in param_distributions.items():
             if isinstance(dist, list):
                 sampled_params[name] = trial.suggest_categorical(name, dist)
-            elif hasattr(dist, 'ppf'): # scipy.stats
+            elif hasattr(dist, 'ppf'):  # scipy.stats distribution
                 low, high = dist.support()
                 is_log = dist.dist.name in ['reciprocal', 'loguniform']
                 sampled_params[name] = trial.suggest_float(name, low, high, log=is_log)
             elif isinstance(dist, (range, stats.randint)):
                 try:
                     sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
-                except:
+                except AttributeError:
                     low, high = dist.support()
                     sampled_params[name] = trial.suggest_int(name, int(low), int(high))
             else:
                 sampled_params[name] = dist
 
-        # 3. Create the Weighted Estimator
-        # We clone the base_model to keep the template pristine
+        # 3. Clone and configure
         new_base = clone(base_model)
-            
-        # Force single-threaded inside CV to prevent oversubscription
-        if hasattr(new_base, 'n_jobs'):
-            new_base.set_params(n_jobs=1)
+        new_base.set_params(**sampled_params)
 
-        # Ensure reproducibility
-        if hasattr(new_base, 'random_state') and new_base.random_state is None:
-            new_base.set_params(random_state=1)
-
-        if hasattr(new_base, 'max_samples'):
-            av_uniqueness = events['tW'].mean()
-            new_base.set_params(max_samples=av_uniqueness)
-        
-        # Validate before applying — fail fast on typos
-        valid_params = {}
-        for name, value in sampled_params.items():
-            if hasattr(new_base, name):
-                valid_params[name] = value
-            else:
-                import warnings
-                warnings.warn(
-                    f"Parameter '{name}' not found on {type(new_base).__name__}. "
-                    f"Skipping. Did you mean one of: "
-                    f"{[p for p in new_base.get_params() if name[:4] in p]}?"
-                )
-        new_base.set_params(**valid_params)
-        
-        weighted_model = _WeightedEstimator(
+        return _WeightedEstimator(
             base_estimator=new_base,
             events=events,
             data_index=data_index,
             scheme=scheme,
             decay=decay,
-            linear=linear
+            linear=linear,
         )
-        return weighted_model
 
-    @staticmethod
+    # ==================== REFIT-TIME ====================
+
+    @classmethod
     def apply_from_params(
+        cls,
         params: dict,
         base_model,
         events: pd.DataFrame,
@@ -120,18 +103,15 @@ class FinancialModelSuggester:
         Reconstruct a WeightedEstimator from a flat params dict.
 
         This is the deterministic counterpart to suggest_and_apply():
-        it takes resolved values (e.g. from study.best_params) instead
-        of sampling from distributions via a Trial.
+        it takes resolved values (e.g. study.best_params) instead of
+        sampling from distributions via a Trial.
 
         Parameters
         ----------
         params : dict
-            Flat dictionary of parameter values. Typically
-            study.best_params or trial.params. Must contain both
-            weighting keys and model hyperparameters.
+            Flat dictionary — typically study.best_params.
         base_model : estimator
             Unfitted sklearn-compatible classifier template.
-            Will be cloned internally — the original is never modified.
         events : pd.DataFrame
             Event metadata with 't1', 'w', 'tW' columns.
         data_index : pd.DatetimeIndex
@@ -140,17 +120,17 @@ class FinancialModelSuggester:
         Returns
         -------
         _WeightedEstimator
-            A new, unfitted estimator configured with the given params.
+            Unfitted estimator configured with the given params.
+
+        Raises
+        ------
+        ValueError
+            If params contains keys invalid for the base model.
         """
-        # --- Separate weighting params from model params ---
-        # Single registry for weight keys: if you add a new weight
-        # hyperparam to suggest_and_apply, add it here too.
-        WEIGHT_KEYS = {"weight_scheme", "weight_decay", "weight_linear"}
+        weight_params = {k: params[k] for k in cls.WEIGHT_KEYS if k in params}
+        model_params = {k: v for k, v in params.items() if k not in cls.WEIGHT_KEYS}
 
-        weight_params = {k: params[k] for k in WEIGHT_KEYS if k in params}
-        model_params = {k: v for k, v in params.items() if k not in WEIGHT_KEYS}
-
-        # --- Validate model params against estimator ---
+        # Validate against base model's accepted parameters
         valid_keys = set(base_model.get_params().keys())
         invalid = set(model_params) - valid_keys
         if invalid:
@@ -160,7 +140,6 @@ class FinancialModelSuggester:
                 f"Valid: {sorted(valid_keys)}"
             )
 
-        # --- Clone and configure ---
         new_base = clone(base_model)
         new_base.set_params(**model_params)
 
@@ -172,25 +151,19 @@ class FinancialModelSuggester:
             decay=weight_params.get("weight_decay", 1.0),
             linear=weight_params.get("weight_linear", False),
         )
-        
+
+    # ==================== SEARCH SPACES ====================
+
     @classmethod
     def get_search_space(cls, model_name: str):
-        """
-        Returns a dictionary of parameter distributions curated for financial noise.
-
-        Engineering Note:
-            The 'random_forest' space prioritizes 'ccp_alpha' (Cost Complexity Pruning) 
-            over 'max_depth' to allow for organic tree simplification, and utilizes 
-            'min_weight_fraction_leaf' to ensure terminal nodes represent significant 
-            economic or statistical information.
-        """
+        """Returns curated parameter distributions for financial models."""
         spaces = {
             "random_forest": {
                 "n_estimators": range(100, 1000),
                 "max_depth": range(3, 12),
                 "min_weight_fraction_leaf": stats.uniform(0.01, 0.1),
                 "max_features": ["sqrt", "log2", 0.5],
-                "ccp_alpha": stats.loguniform(1e-5, 1e-2)
+                "ccp_alpha": stats.loguniform(1e-5, 1e-2),
             },
             "xgboost": {
                 "n_estimators": range(100, 1000),
@@ -198,8 +171,8 @@ class FinancialModelSuggester:
                 "max_depth": range(2, 8),
                 "subsample": stats.uniform(0.6, 0.4),
                 "colsample_bytree": stats.uniform(0.6, 0.4),
-                "gamma": stats.uniform(0, 5)
-            }
+                "gamma": stats.uniform(0, 5),
+            },
         }
         return spaces.get(model_name.lower(), {})
 
@@ -221,7 +194,7 @@ def optimize_trading_model_with_pruning(
     model = suggester.suggest_and_apply(
         trial, classifier, param_distributions, events, data_index
     )
-
+        
     # Setup Cross-Validation
     t1 = events.loc[X.index, 't1']
     cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
@@ -331,7 +304,7 @@ def optimize_trading_model(
     study_name: str = None,
     db_path: str = None,
     random_state: int = 42,
-    refit: bool = True,
+    refit: bool = False,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -380,11 +353,21 @@ def optimize_trading_model(
             storage=storage_url, 
             load_if_exists=True,
         )
+
+        clf = clone(classifier)
+        
+        # Force single-threaded inside CV to prevent oversubscription
+        if hasattr(clf, 'n_jobs'):
+            clf.set_params(n_jobs=1)
+    
+        # Ensure reproducibility
+        if hasattr(clf, 'random_state') and clf.random_state is None:
+            clf.set_params(random_state=random_state)
     
         def objective(trial):
             return optimize_trading_model_with_pruning(
                 trial=trial, X=X, y=y, events=events, data_index=data_index,
-                classifier=classifier,
+                classifier=clf,
                 param_distributions=param_distributions,
                 n_splits=n_splits, metric=metric, 
             )
@@ -400,8 +383,13 @@ def optimize_trading_model(
             # Reconstruct best model from best params
             best_trial = study.best_trial
             best_model = FinancialModelSuggester.apply_from_params(
-                best_trial.params, classifier, events, data_index
+                best_trial.params, clf, events, data_index
             )
+
+            # Return to parallelized mode
+            if hasattr(clf, 'n_jobs'):
+                best_model.set_params(n_jobs=-1)
+            
             best_model.fit(X, y)
             study.best_estimator_ = best_model  # attach for convenience
 
