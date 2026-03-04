@@ -115,7 +115,8 @@ def _avg_train_size(n_observations: int, n_folds: int, n_test_folds: int) -> flo
 # ---------------------------------------------------------------------------
 
 class CombinatorialPurgedCV(BaseCrossValidator):
-    """Combinatorial Purged Cross-Validation for financial time series.
+    """
+    Combinatorial Purged Cross-Validation for financial time series.
 
     Provides train/test indices to split time series data samples based on
     Combinatorial Purged Cross-Validation [1]_.
