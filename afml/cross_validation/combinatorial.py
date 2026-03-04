@@ -1,3 +1,4 @@
+import joblib
 import numpy as np
 import pandas as pd
 from itertools import combinations
@@ -177,7 +178,7 @@ class CPCVAnalyzer:
         self.estimator = estimator
         self.cv_gen = cv_gen
         self.close = close_prices
-        self.n_jobs = n_jobs
+        self.n_jobs = n_jobs if n_jobs != -1 else joblib.cpu_count(only_physical_cores=True)
         self._prediction_matrix = None
         self._X = None
         # High-frequency log returns: r_t = ln(P_{t+1}/P_t)
