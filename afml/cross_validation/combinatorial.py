@@ -324,6 +324,7 @@ class CPCVAnalyzer:
     def recombined_predictions(self):
         """Mean prediction across all folds where a sample was OOS."""
         return self._prediction_matrix.mean(axis=1)
+        
 
 def _fit_predict_fold(estimator, X, y, train_idx, test_idx, fold_idx, sample_weight=None):
     """Worker function for parallelized CV training."""

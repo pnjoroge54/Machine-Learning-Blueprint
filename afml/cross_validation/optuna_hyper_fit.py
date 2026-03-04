@@ -18,8 +18,8 @@ from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 
-from ..cross_validation.cross_validation import PurgedKFold
-from ..production.model_development import _WeightedEstimator
+from afml.cross_validation.cross_validation import PurgedKFold
+from afml.production.model_development import _WeightedEstimator
 
 
 class FinancialModelSuggester:
@@ -209,8 +209,8 @@ def optimize_trading_model_with_pruning(
 
         if metric == "neg_log_loss":
             y_prob = fit.predict_proba(X_val)
-            # Use uniqueness weights for validation scoring to ensure statistical relevance
-            w_val = events.loc[X_val.index, "tW"]
+            # Use return-atrribution weights for validation scoring to ensure statistical relevance
+            w_val = events.loc[X_val.index, "w"]
             score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
             y_pred = fit.predict(X_val)
@@ -251,17 +251,12 @@ class TradingModelPruner(MedianPruner):
         # We use weights to see the economic baseline - i.e., return-attribution (events['w'])
         weighted_counts = pd.Series(sample_weight).groupby(y.values).sum()
         probs = weighted_counts / weighted_counts.sum()
-        self.baseline_entropy = -np.sum(probs * np.log(probs))
 
         if set(y.unique()) != {0,1}:  # metric == "neg_log_loss"
+            self.baseline_entropy = -np.sum(probs * np.log(probs))
             # Threshold: e.g., if baseline is -0.5, threshold is -0.5 * 1.15 = -0.575
             self.min_score_threshold = -self.baseline_entropy * multiplier
         else:
-            # - This original formulation seems to work fine
-            # # For F1, use a proper baseline (e.g., majority-class F1)
-            # majority_ratio = y.value_counts(normalize=True).max()
-            # self.min_score_threshold = majority_ratio * 0.8  # must beat 80% of majority-class
-            
             # For F1, baseline = weighted class prior accuracy
             majority_ratio = probs.max()
             self.min_score_threshold = majority_ratio / multiplier # e.g., 0.52 / 1.15 = 0.45
@@ -301,7 +296,7 @@ def optimize_trading_model(
     events: pd.DataFrame,
     data_index: pd.DatetimeIndex,
     param_distributions: dict,
-    n_trials: int = 30,
+    n_trials: int = 100,
     timeout: int = 3600,
     n_splits: int = 5,
     pruner_type: str = "median",
@@ -424,7 +419,13 @@ def plot_model_vs_baseline(study, y, events):
     # 1. Re-calculate baseline for the whole period
     weighted_counts = events['w'].groupby(y.values).sum()
     probs = weighted_counts / weighted_counts.sum()
-    baseline = -np.sum(probs * np.log(probs))
+    
+    if set(np.unique(y)) == {0, 1}:
+        baseline = probs.max()
+        scoring = "F1"
+    else:
+        baseline = -np.sum(probs * np.log(probs))
+        scoring = "Weighted Log-Loss"
     
     # 2. Extract best trial data
     best_trial = study.best_trial
@@ -435,7 +436,7 @@ def plot_model_vs_baseline(study, y, events):
     
     # Plot the scores
     folds = range(len(fold_scores))
-    plt.plot(folds, fold_scores, marker='o', label='Best Model (Weighted Log-Loss)', color='#1f77b4', lw=2)
+    plt.plot(folds, fold_scores, marker='o', label=f'Best Model ({scoring})', color='#1f77b4', lw=2)
     
     # Plot the baseline
     plt.axhline(y=-baseline, color='red', linestyle='--', label='Naive Baseline (Entropy)', alpha=0.7)
@@ -446,7 +447,7 @@ def plot_model_vs_baseline(study, y, events):
 
     plt.title(f"Best Trial #{best_trial.number}: Performance vs. Information Baseline", fontsize=14)
     plt.xlabel("Cross-Validation Fold", fontsize=12)
-    plt.ylabel("Score (Higher is Better)", fontsize=12)
+    plt.ylabel(f"{scoring} Score (Higher is Better)", fontsize=12)
     plt.legend()
     plt.grid(alpha=0.3)
     plt.show()
