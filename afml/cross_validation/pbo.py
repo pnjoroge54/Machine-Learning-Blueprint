@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
-from combinatorial import CombinatorialPurgedCV
+from .combinatorial import CombinatorialPurgedCV
 
 
 def compute_pbo(
