@@ -26,94 +26,6 @@ from .cross_validation import ml_get_train_times
 _MAX_COMBINATIONS = 100_000
 
 
-# --- Numba Optimized Utilities ---
-
-@njit(cache=True)
-def fill_sides_numba(num_close, t0_idx, t1_idx, side):
-    """
-    Maps event-based signals to a continuous timeline by additive accumulation.
-
-    Parameters
-    ----------
-    num_close : int
-        The total number of bars in the reference price series.
-    t0_idx : np.ndarray (int64)
-        Integer indices for the start (entry) of each bet.
-    t1_idx : np.ndarray (int64)
-        Integer indices for the end (exit) of each bet.
-    side : np.ndarray (float64)
-        The signal values/sizes to be mapped.
-
-    Returns
-    -------
-    np.ndarray (float64)
-        A continuous timeline of accumulated bet sizes.
-    """
-    full_side = np.zeros(num_close, dtype=np.float64)
-    for i in range(len(t0_idx)):
-        start, end = t0_idx[i], t1_idx[i]
-        if start != -1 and end != -1:
-            full_side[start : end + 1] += side[i]
-    return full_side
-
-
-@njit(cache=True)
-def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
-    """
-    Maps event-based signals to a timeline by averaging concurrent signals.
-    Implementation of AFML Snippet 10.3 logic.
-
-    Parameters
-    ----------
-    num_close : int
-        The total number of bars in the reference price series.
-    t0_idx : np.ndarray (int64)
-        Integer indices for signal entries.
-    t1_idx : np.ndarray (int64)
-        Integer indices for signal exits.
-    side : np.ndarray (float64)
-        The conviction/probability signals.
-
-    Returns
-    -------
-    np.ndarray (float64)
-        The time-weighted average signal at every timestamp.
-    """
-    sum_side = np.zeros(num_close, dtype=np.float64)
-    active_count = np.zeros(num_close, dtype=np.int32)
-    
-    for i in range(len(t0_idx)):
-        start, end = t0_idx[i], t1_idx[i]
-        if start != -1 and end != -1:
-            sum_side[start : end + 1] += side[i]
-            active_count[start : end + 1] += 1
-            
-    avg_side = np.zeros(num_close, dtype=np.float64)
-    for t in range(num_close):
-        if active_count[t] > 0:
-            avg_side[t] = sum_side[t] / active_count[t]
-    return avg_side
-
-
-# ---------------------------------------------------------------------------
-# Helper statistics functions
-# ---------------------------------------------------------------------------
-
-def _n_splits(n_folds: int, n_test_folds: int) -> int:
-    """Number of splits = C(n_folds, n_test_folds)."""
-    return math.comb(n_folds, n_test_folds)
-
-
-def _n_test_paths(n_folds: int, n_test_folds: int) -> int:
-    """Number of distinct backtest paths that can be reconstructed."""
-    return _n_splits(n_folds=n_folds, n_test_folds=n_test_folds) * n_test_folds // n_folds
-
-
-def _avg_train_size(n_observations: int, n_folds: int, n_test_folds: int) -> float:
-    """Average number of observations in each training set."""
-    return n_observations / n_folds * (n_folds - n_test_folds)
-
-
 # ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
@@ -989,3 +901,91 @@ class CPCVAnalyzer:
             .set_index(["method", "path_id"])
             .sort_index()
         )
+
+
+# --- Numba Optimized Utilities ---
+
+@njit(cache=True)
+def fill_sides_numba(num_close, t0_idx, t1_idx, side):
+    """
+    Maps event-based signals to a continuous timeline by additive accumulation.
+
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for the start (entry) of each bet.
+    t1_idx : np.ndarray (int64)
+        Integer indices for the end (exit) of each bet.
+    side : np.ndarray (float64)
+        The signal values/sizes to be mapped.
+
+    Returns
+    -------
+    np.ndarray (float64)
+        A continuous timeline of accumulated bet sizes.
+    """
+    full_side = np.zeros(num_close, dtype=np.float64)
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            full_side[start : end + 1] += side[i]
+    return full_side
+
+
+@njit(cache=True)
+def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
+    """
+    Maps event-based signals to a timeline by averaging concurrent signals.
+    Implementation of AFML Snippet 10.3 logic.
+
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for signal entries.
+    t1_idx : np.ndarray (int64)
+        Integer indices for signal exits.
+    side : np.ndarray (float64)
+        The conviction/probability signals.
+
+    Returns
+    -------
+    np.ndarray (float64)
+        The time-weighted average signal at every timestamp.
+    """
+    sum_side = np.zeros(num_close, dtype=np.float64)
+    active_count = np.zeros(num_close, dtype=np.int32)
+    
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            sum_side[start : end + 1] += side[i]
+            active_count[start : end + 1] += 1
+            
+    avg_side = np.zeros(num_close, dtype=np.float64)
+    for t in range(num_close):
+        if active_count[t] > 0:
+            avg_side[t] = sum_side[t] / active_count[t]
+    return avg_side
+
+
+# ---------------------------------------------------------------------------
+# Helper statistics functions
+# ---------------------------------------------------------------------------
+
+def _n_splits(n_folds: int, n_test_folds: int) -> int:
+    """Number of splits = C(n_folds, n_test_folds)."""
+    return math.comb(n_folds, n_test_folds)
+
+
+def _n_test_paths(n_folds: int, n_test_folds: int) -> int:
+    """Number of distinct backtest paths that can be reconstructed."""
+    return _n_splits(n_folds=n_folds, n_test_folds=n_test_folds) * n_test_folds // n_folds
+
+
+def _avg_train_size(n_observations: int, n_folds: int, n_test_folds: int) -> float:
+    """Average number of observations in each training set."""
+    return n_observations / n_folds * (n_folds - n_test_folds)

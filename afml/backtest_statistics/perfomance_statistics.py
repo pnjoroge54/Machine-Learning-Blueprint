@@ -16,40 +16,6 @@ from numba import njit
 from scipy.stats import norm
 
 
-@njit(cache=True)
-def fill_sides_numba(num_close, t0_idx, t1_idx, side):
-    full_side = np.zeros(num_close, dtype=np.float64)
-    for i in range(len(t0_idx)):
-        start, end = t0_idx[i], t1_idx[i]
-        if start != -1 and end != -1:
-            full_side[start : end + 1] += side[i]
-    return full_side
-    
-    
-@njit(cache=True)
-def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
-    """
-    Calculates the average active bet size across a continuous timeline.
-    """
-    sum_side = np.zeros(num_close, dtype=np.float64)
-    active_count = np.zeros(num_close, dtype=np.int32)
-    
-    for i in range(len(t0_idx)):
-        start, end = t0_idx[i], t1_idx[i]
-        if start != -1 and end != -1:
-            # Accumulate the sum of bet sizes
-            sum_side[start : end + 1] += side[i]
-            # Accumulate the count of active bets
-            active_count[start : end + 1] += 1
-            
-    # Calculate average: Sum / Count (handling division by zero)
-    avg_side = np.zeros(num_close, dtype=np.float64)
-    for t in range(num_close):
-        if active_count[t] > 0:
-            avg_side[t] = sum_side[t] / active_count[t]
-            
-    return avg_side
-
 
 def timing_of_flattening_and_flips(target_positions: pd.Series) -> pd.DatetimeIndex:
     """

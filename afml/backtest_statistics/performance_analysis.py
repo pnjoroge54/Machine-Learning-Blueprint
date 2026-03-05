@@ -527,27 +527,64 @@ def analyze_trading_behavior(positions: pd.Series, returns: pd.Series) -> dict:
 
 def get_positions_from_events(
     data_index: pd.DatetimeIndex,
-    events_t1: pd.Series,
-    sides: pd.Series,
+    events: pd.DataFrame,
+    average_active=False,
 ):
     """
     Create series of target positions from event positions.
     Parameters
     ----------
     data_index : pd.DatetimeIndex
-        DateTime index of data.
-    events_t1 : pd.Series
-        End times of events
-    sides: pd.Series
-        Trade direction
+        DateTime index of data used to make events.
+    events: pd.DataFrame
+        t1 - End times of events
+        side - Trade position
 
     Returns
     -------
     pd.Series
         Series containing the target positions for data_index.
     """
-    positions = sides.reindex(data_index)
-    end_times = pd.Index(events_t1).difference(events_t1.index)
-    positions.loc[end_times] = 0  # End of trade
-    positions = positions.ffill().fillna(0)
-    return positions
+    t0_idx, t1_idx = events.t1.index.view(np.int64), events.t1.values.view(np.int64)
+    side = events.side.values
+    num_close = len(data_index)
+    positions = fill_sides_numba(num_close, t0_idx, t1_idx, side)
+    return pd.Series(positions, index=data_index)
+
+
+@njit(cache=True)
+def fill_sides_numba(num_close, t0_idx, t1_idx, side):
+    full_side = np.zeros(num_close, dtype=np.float64)
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            full_side[start : end + 1] += side[i]
+    return full_side
+    
+    
+@njit(cache=True)
+def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
+    """
+    Calculates the average active bet size across a continuous timeline.
+    """
+    sum_side = np.zeros(num_close, dtype=np.float64)
+    active_count = np.zeros(num_close, dtype=np.int32)
+    
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            # Accumulate the sum of bet sizes
+            sum_side[start : end + 1] += side[i]
+            # Accumulate the count of active bets
+            active_count[start : end + 1] += 1
+            
+    # Calculate average: Sum / Count (handling division by zero)
+    avg_side = np.zeros(num_close, dtype=np.float64)
+    for t in range(num_close):
+        if active_count[t] > 0:
+            avg_side[t] = sum_side[t] / active_count[t]
+            
+    return avg_side
+
+    # average_active: bool 
+    #     Option to average the size of active bets, default value is False.
