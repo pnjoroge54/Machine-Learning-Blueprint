@@ -1,19 +1,22 @@
 """Combinatorial Purged Cross-Validation and CPCV-based performance analysis."""
+
 import itertools
 import math
 import numbers
 from collections.abc import Iterator
+from math import comb
+from itertools import combinations
 from typing import List, Optional, Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
-from itertools import combinations
+import plotly.graph_objects as go
+
 from sklearn.base import clone
 from sklearn.model_selection import BaseCrossValidator
 import sklearn.utils as sku
 from joblib import Parallel, delayed
-from math import comb
 from numba import njit
 from scipy.stats import norm, skew as scipy_skew, kurtosis as scipy_kurt
 
@@ -52,6 +55,7 @@ def fill_sides_numba(num_close, t0_idx, t1_idx, side):
         if start != -1 and end != -1:
             full_side[start : end + 1] += side[i]
     return full_side
+
 
 @njit(cache=True)
 def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
@@ -520,6 +524,84 @@ class CombinatorialPurgedCV(BaseCrossValidator):
                 "Number of Training Combinations": self.n_splits,
             }
         )
+
+    def plot_train_test_folds(self) -> go.Figure:
+        """Plot the train/test fold locations."""
+        values = self.binary_train_test_sets
+        fill_color = np.where(values == 0, "blue", "red")
+        fill_color = fill_color.astype(object)
+        fill_color = np.insert(
+            fill_color, 0, np.array(["darkblue" for _ in range(self.n_splits)]), axis=0
+        )
+        values = np.insert(values, 0, np.arange(self.n_splits), axis=0)
+        fig = go.Figure(
+            data=[
+                go.Table(
+                    header=dict(
+                        values=["Train Combinations"]
+                        + [f"Fold {i}" for i in range(self.n_folds)],
+                        fill_color="darkblue",
+                        font=dict(color="white"),
+                        align="left",
+                    ),
+                    cells=dict(
+                        values=values,
+                        font=dict(color="white"),
+                        fill_color=fill_color,
+                        line_color="grey",
+                        align="left",
+                    ),
+                )
+            ]
+        )
+        fig.update_layout(title="Split Train (0) /Test (1) Folds per Combination")
+        return fig
+
+
+
+    def plot_train_test_index(self, X) -> go.Figure:
+        """Plot the training and test indices for each combinations by assigning `0` to
+        training, `1` to test and `-1` to both purge and embargo indices.
+        """
+        next(self.split(X))
+        n_samples = X.shape[0]
+        cond = [
+            self.index_train_test_ == -1,
+            self.index_train_test_ == 0,
+            self.index_train_test_ == 1,
+        ]
+        values = self.index_train_test_.T
+        values = np.insert(values, 0, np.arange(n_samples), axis=0)
+        fill_color = np.select(cond, ["green", "blue", "red"], default="green").T
+        fill_color = fill_color.astype(object)
+        fill_color = np.insert(
+            fill_color, 0, np.array(["darkblue" for _ in range(n_samples)]), axis=0
+        )
+        fig = go.Figure(
+            data=[
+                go.Table(
+                    header=dict(
+                        values=["observations"]
+                        + [f"Split {i}" for i in range(self.n_splits)],
+                        fill_color="darkblue",
+                        font=dict(color="white"),
+                        align="left",
+                    ),
+                    cells=dict(
+                        values=values,
+                        font=dict(color="white"),
+                        fill_color=fill_color,
+                        line_color="grey",
+                        align="left",
+                    ),
+                )
+            ]
+        )
+        fig.update_layout(
+            title="Train (0), Test (1) and Purge/Embargo (-1) observations per splits"
+        )
+
+        return fig
 
 
 # ---------------------------------------------------------------------------
