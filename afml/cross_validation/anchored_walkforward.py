@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from sklearn.base import clone
 
-from ..cross_validation.cross_validation import PurgedWalkForwardCV
+from .cross_validation import PurgedWalkForwardCV
 
 
 def vin_v_anchored_walkforward(
