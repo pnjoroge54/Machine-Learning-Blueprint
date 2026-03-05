@@ -437,6 +437,11 @@ class CombinatorialPurgedCV(BaseCrossValidator):
             }
         )
 
+    # ------------------------------------------------------------------
+    # Charts
+    # ------------------------------------------------------------------
+
+
     def plot_train_test_folds(self) -> go.Figure:
         """Plot the train/test fold locations."""
         values = self.binary_train_test_sets
@@ -468,8 +473,6 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         )
         fig.update_layout(title="Split Train (0) /Test (1) Folds per Combination")
         return fig
-
-
 
     def plot_train_test_index(self, X) -> go.Figure:
         """Plot the training and test indices for each combinations by assigning `0` to
