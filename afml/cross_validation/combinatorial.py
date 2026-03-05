@@ -27,6 +27,96 @@ _MAX_COMBINATIONS = 100_000
 
 
 # ---------------------------------------------------------------------------
+# Numba Optimized Utilities
+# ---------------------------------------------------------------------------
+
+@njit(cache=True)
+def fill_sides_numba(num_close, t0_idx, t1_idx, side):
+    """
+    Maps event-based signals to a continuous timeline by additive accumulation.
+
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for the start (entry) of each bet.
+    t1_idx : np.ndarray (int64)
+        Integer indices for the end (exit) of each bet.
+    side : np.ndarray (float64)
+        The signal values/sizes to be mapped.
+
+    Returns
+    -------
+    np.ndarray (float64)
+        A continuous timeline of accumulated bet sizes.
+    """
+    full_side = np.zeros(num_close, dtype=np.float64)
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            full_side[start : end + 1] += side[i]
+    return full_side
+
+
+@njit(cache=True)
+def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
+    """
+    Maps event-based signals to a timeline by averaging concurrent signals.
+    Implementation of AFML Snippet 10.3 logic.
+
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for signal entries.
+    t1_idx : np.ndarray (int64)
+        Integer indices for signal exits.
+    side : np.ndarray (float64)
+        The conviction/probability signals.
+
+    Returns
+    -------
+    np.ndarray (float64)
+        The time-weighted average signal at every timestamp.
+    """
+    sum_side = np.zeros(num_close, dtype=np.float64)
+    active_count = np.zeros(num_close, dtype=np.int32)
+    
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            sum_side[start : end + 1] += side[i]
+            active_count[start : end + 1] += 1
+            
+    avg_side = np.zeros(num_close, dtype=np.float64)
+    for t in range(num_close):
+        if active_count[t] > 0:
+            avg_side[t] = sum_side[t] / active_count[t]
+    return avg_side
+
+
+# ---------------------------------------------------------------------------
+# Helper statistics functions
+# ---------------------------------------------------------------------------
+
+def _n_splits(n_folds: int, n_test_folds: int) -> int:
+    """Number of splits = C(n_folds, n_test_folds)."""
+    return math.comb(n_folds, n_test_folds)
+
+
+def _n_test_paths(n_folds: int, n_test_folds: int) -> int:
+    """Number of distinct backtest paths that can be reconstructed."""
+    return _n_splits(n_folds=n_folds, n_test_folds=n_test_folds) * n_test_folds // n_folds
+
+
+def _avg_train_size(n_observations: int, n_folds: int, n_test_folds: int) -> float:
+    """Average number of observations in each training set."""
+    return n_observations / n_folds * (n_folds - n_test_folds)
+
+
+# ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
 
@@ -177,9 +267,9 @@ class CombinatorialPurgedCV(BaseCrossValidator):
             "Use `split()` directly – it yields (train_index, [test_0, test_1, ...])."
         )
 
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------------------
     # Read-only combinatorial properties (depend only on n_folds / n_test_folds)
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     @property
     def n_splits(self) -> int:
@@ -438,9 +528,8 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         )
 
     # ------------------------------------------------------------------
-    # Charts
+    # Visualization
     # ------------------------------------------------------------------
-
 
     def plot_train_test_folds(self) -> go.Figure:
         """Plot the train/test fold locations."""
@@ -475,10 +564,52 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         return fig
 
     def plot_train_test_index(self, X) -> go.Figure:
-        """Plot the training and test indices for each combinations by assigning `0` to
-        training, `1` to test and `-1` to both purge and embargo indices.
+        """Plot the training and test indices for each split by assigning ``0`` to
+        training, ``1`` to test, and ``-1`` to purged or embargoed observations.
+
+        Each column of the resulting table corresponds to one of the
+        ``n_splits`` combinatorial train/test splits; each row corresponds to
+        one observation in ``X``.  The colour encoding is:
+
+        * **Blue**  (0)  – observation is in the training set for that split.
+        * **Red**   (1)  – observation is in the test set for that split.
+        * **Green** (−1) – observation has been excluded from the training set
+          due to purging (event-label overlap with the test window) or
+          embargoing (positional buffer immediately after the test block).
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Must share its index with ``self.t1``.  Only the shape and index
+            are used; the feature values are not accessed.
+
+        Returns
+        -------
+        go.Figure
+            An interactive Plotly table figure.
+
+        Notes
+        -----
+        This method requires ``index_train_test_`` to be fully populated
+        across **all** ``n_splits`` columns before it can render a correct
+        visualisation.  ``index_train_test_`` is built incrementally inside
+        the ``split()`` generator and is only finalised once the generator is
+        fully exhausted.
+
+        To guarantee this, the method checks whether ``index_train_test_``
+        already exists (e.g. because ``CPCVAnalyzer.fit_predict`` or a manual
+        ``list(self.split(X))`` call has already run).  If it does not exist,
+        the full generator is exhausted here automatically.  The previous
+        behaviour of calling ``next(self.split(X))`` — which populated only
+        the first column — has been removed, as it produced an incorrect
+        visualisation for all splits after the first.
         """
-        next(self.split(X))
+        if not hasattr(self, "index_train_test_"):
+            # Exhaust the full generator so every column of index_train_test_
+            # is populated before we attempt to render the table.
+            for _ in self.split(X):
+                pass
+
         n_samples = X.shape[0]
         cond = [
             self.index_train_test_ == -1,
@@ -904,91 +1035,3 @@ class CPCVAnalyzer:
             .set_index(["method", "path_id"])
             .sort_index()
         )
-
-
-# --- Numba Optimized Utilities ---
-
-@njit(cache=True)
-def fill_sides_numba(num_close, t0_idx, t1_idx, side):
-    """
-    Maps event-based signals to a continuous timeline by additive accumulation.
-
-    Parameters
-    ----------
-    num_close : int
-        The total number of bars in the reference price series.
-    t0_idx : np.ndarray (int64)
-        Integer indices for the start (entry) of each bet.
-    t1_idx : np.ndarray (int64)
-        Integer indices for the end (exit) of each bet.
-    side : np.ndarray (float64)
-        The signal values/sizes to be mapped.
-
-    Returns
-    -------
-    np.ndarray (float64)
-        A continuous timeline of accumulated bet sizes.
-    """
-    full_side = np.zeros(num_close, dtype=np.float64)
-    for i in range(len(t0_idx)):
-        start, end = t0_idx[i], t1_idx[i]
-        if start != -1 and end != -1:
-            full_side[start : end + 1] += side[i]
-    return full_side
-
-
-@njit(cache=True)
-def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
-    """
-    Maps event-based signals to a timeline by averaging concurrent signals.
-    Implementation of AFML Snippet 10.3 logic.
-
-    Parameters
-    ----------
-    num_close : int
-        The total number of bars in the reference price series.
-    t0_idx : np.ndarray (int64)
-        Integer indices for signal entries.
-    t1_idx : np.ndarray (int64)
-        Integer indices for signal exits.
-    side : np.ndarray (float64)
-        The conviction/probability signals.
-
-    Returns
-    -------
-    np.ndarray (float64)
-        The time-weighted average signal at every timestamp.
-    """
-    sum_side = np.zeros(num_close, dtype=np.float64)
-    active_count = np.zeros(num_close, dtype=np.int32)
-    
-    for i in range(len(t0_idx)):
-        start, end = t0_idx[i], t1_idx[i]
-        if start != -1 and end != -1:
-            sum_side[start : end + 1] += side[i]
-            active_count[start : end + 1] += 1
-            
-    avg_side = np.zeros(num_close, dtype=np.float64)
-    for t in range(num_close):
-        if active_count[t] > 0:
-            avg_side[t] = sum_side[t] / active_count[t]
-    return avg_side
-
-
-# ---------------------------------------------------------------------------
-# Helper statistics functions
-# ---------------------------------------------------------------------------
-
-def _n_splits(n_folds: int, n_test_folds: int) -> int:
-    """Number of splits = C(n_folds, n_test_folds)."""
-    return math.comb(n_folds, n_test_folds)
-
-
-def _n_test_paths(n_folds: int, n_test_folds: int) -> int:
-    """Number of distinct backtest paths that can be reconstructed."""
-    return _n_splits(n_folds=n_folds, n_test_folds=n_test_folds) * n_test_folds // n_folds
-
-
-def _avg_train_size(n_observations: int, n_folds: int, n_test_folds: int) -> float:
-    """Average number of observations in each training set."""
-    return n_observations / n_folds * (n_folds - n_test_folds)
