@@ -256,7 +256,7 @@ class TradingModelPruner(MedianPruner):
         weighted_counts = pd.Series(sample_weight).groupby(y.values).sum()
         probs = weighted_counts / weighted_counts.sum()
 
-        if set(y.unique()) != {0,1}:  # metric == "neg_log_loss"
+        if set(y.unique()) != {0,1}:
             self.baseline_entropy = -np.sum(probs * np.log(probs))
             # Threshold: e.g., if baseline is -0.5, threshold is -0.5 * 1.15 = -0.575
             self.min_score_threshold = -self.baseline_entropy * multiplier
@@ -347,7 +347,7 @@ def optimize_trading_model(
     sampler = TPESampler(seed=random_state)
 
     # Add a 30-second timeout for parallel workers
-    storage_url = f"sqlite:///{db_path}.db.sqlite3?timeout=30"
+    storage_url = f"sqlite:///{db_path}.db?timeout=30"
     
     try:
         study = optuna.create_study(
@@ -368,15 +368,10 @@ def optimize_trading_model(
         # Ensure reproducibility
         if hasattr(clf, 'random_state'):
             clf.set_params(random_state=random_state)
-        
-        valid = X.index.intersection(events.index)
-        X = X.loc[valid]
-        y = y.loc[valid]
-        events_ = events.loc[valid]
     
         def objective(trial):
             return optimize_trading_model_with_pruning(
-                trial=trial, X=X, y=y, events=events_, data_index=data_index,
+                trial=trial, X=X, y=y, events=events, data_index=data_index,
                 classifier=clf,
                 param_distributions=param_distributions,
                 n_splits=n_splits, metric=metric, cpcv=cpcv
