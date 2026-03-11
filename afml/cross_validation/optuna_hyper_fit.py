@@ -218,7 +218,7 @@ def optimize_trading_model_with_pruning(
             score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
             y_pred = fit.predict(X_val)
-            score = f1_score(y_val, y_pred, sample_weight=w_val)
+            score = f1_score(y_val, y_pred)
             
         fold_scores.append(score)
         trial.report(score, step=fold_idx)
@@ -277,14 +277,13 @@ class TradingModelPruner(MedianPruner):
         step = trial.last_step
         if step is None: return False
         
-        # if trial.number >= 5 and len(trial.intermediate_values) >= 3:
-        # Rule 1: Static baseline check (Is it worse than a coin flip/baseline?)
-        current_score = trial.intermediate_values.get(step)
-        if current_score < self.min_score_threshold:
-            return True
+        if trial.number >= 5 and len(trial.intermediate_values) >= 3:
+            # Rule 1: Static baseline check (Is it worse than a coin flip/baseline?)
+            current_score = trial.intermediate_values.get(step)
+            if trial.number > 1 and current_score < self.min_score_threshold:
+                return True
 
-        # Rule 2: High-Variance check (Is the model unstable?)
-        if len(trial.intermediate_values) >= 3:
+            # Rule 2: High-Variance check (Is the model unstable?)
             recent_scores = list(trial.intermediate_values.values())[-3:]
             if np.std(recent_scores) > self.volatility_tolerance:
                 return True
