@@ -5,7 +5,7 @@ Functions derived from Chapter 7: Cross Validation
 from sklearn.metrics import (accuracy_score, f1_score, log_loss,
                              precision_score, recall_score)
 
-from .combinatorial import CombinatorialPurgedCV, CPCVAnalyzer
+from .combinatorial import CombinatorialPurgedCV, CPCVAnalyzer, fill_sides_numba, fill_average_active_sides
 from .cross_validation import (PurgedKFold, PurgedSplit, PurgedWalkForwardCV,
                                analyze_cross_val_scores, ml_cross_val_score,
                                ml_get_train_times)
@@ -22,6 +22,8 @@ scoring_methods = {
 }
 
 __all__ = [
+    "fill_sides_numba",
+    "fill_average_active_sides",
     "ml_get_train_times",
     "ml_cross_val_score",
     "analyze_cross_val_scores",

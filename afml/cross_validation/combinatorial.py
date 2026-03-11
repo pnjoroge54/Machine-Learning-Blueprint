@@ -297,7 +297,8 @@ class CombinatorialPurgedCV(BaseCrossValidator):
 
     @property
     def recombined_paths(self) -> np.ndarray:
-        """Shape (n_folds, n_test_paths) – split index in which each fold appears
+        """
+        Shape (n_folds, n_test_paths) – split index in which each fold appears
         as a test set, ordered by path.  Used to reconstruct backtest paths."""
         return np.argwhere(self.binary_train_test_sets == 1)[:, 1].reshape(
             self.n_folds, -1
@@ -333,7 +334,8 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         y=None,
         groups=None,
     ) -> Iterator[Tuple[np.ndarray, List[np.ndarray]]]:
-        """Generate train/test index arrays for each combinatorial split.
+        """
+        Generate train/test index arrays for each combinatorial split.
 
         Each yielded training set has already been:
 
@@ -445,7 +447,8 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         self,
         all_predictions: List[np.ndarray],
     ) -> List[np.ndarray]:
-        """Recombine per-split predictions into complete backtest paths.
+        """
+        Recombine per-split predictions into complete backtest paths.
 
         Each path covers every test observation exactly once, assigned to
         paths via :meth:`get_path_ids`.
@@ -502,7 +505,8 @@ class CombinatorialPurgedCV(BaseCrossValidator):
     # ------------------------------------------------------------------
 
     def summary(self, X) -> pd.Series:
-        """Return a human-readable summary of the CV configuration.
+        """
+        Return a human-readable summary of the CV configuration.
 
         Parameters
         ----------
@@ -564,7 +568,8 @@ class CombinatorialPurgedCV(BaseCrossValidator):
         return fig
 
     def plot_train_test_index(self, X) -> go.Figure:
-        """Plot the training and test indices for each split by assigning ``0`` to
+        """
+        Plot the training and test indices for each split by assigning ``0`` to
         training, ``1`` to test, and ``-1`` to purged or embargoed observations.
 
         Each column of the resulting table corresponds to one of the
@@ -724,7 +729,8 @@ def _fit_predict_fold(
     fold_idx: int,
     sample_weight: Optional[pd.Series] = None,
 ) -> Tuple[int, np.ndarray, np.ndarray]:
-    """Train one fold and return (fold_idx, test_idx, predictions).
+    """
+    Train one fold and return (fold_idx, test_idx, predictions).
 
     Returns the fold index so that results can be reordered after parallel
     execution regardless of completion order.
@@ -749,7 +755,8 @@ def _apply_bet_method_static(
     sides: pd.Series,
     num_classes: int,
 ):
-    """Apply a bet-sizing method and return a signal Series.
+    """
+    Apply a bet-sizing method and return a signal Series.
 
     Extracted to module scope so it is picklable by joblib workers.
     """
@@ -775,7 +782,8 @@ def _compute_path_metrics(
     num_classes: int,
     step_size: float,
 ) -> Optional[dict]:
-    """Compute all performance metrics for one (path, method) combination.
+    """
+    Compute all performance metrics for one (path, method) combination.
 
     Module-level so joblib can serialise it. Returns None when there are
     insufficient OOS observations to produce meaningful statistics.
@@ -845,7 +853,8 @@ def _compute_path_metrics(
 # ---------------------------------------------------------------------------
 
 class CPCVAnalyzer:
-    """Parallel CPCV execution and MtM performance metric distribution.
+    """
+    Parallel CPCV execution and MtM performance metric distribution.
 
     Handles the full pipeline from raw model predictions to a distribution of
     time-weighted portfolio performance across all combinatorial backtest paths.

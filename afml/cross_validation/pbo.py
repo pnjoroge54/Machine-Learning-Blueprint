@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
-from .combinatorial import CombinatorialPurgedCV
+from combinatorial import CombinatorialPurgedCV
 
 
 def compute_pbo(
@@ -42,7 +42,7 @@ def compute_pbo(
 
     metric : callable(returns: pd.Series) -> float, optional
         Aggregates a column of returns into a scalar performance measure.
-        Defaults to the annualised Sharpe ratio (mean/std * sqrt(252)).
+        Defaults to the Sharpe ratio (mean/std).
 
     Returns
     -------
@@ -52,7 +52,7 @@ def compute_pbo(
         below_median – number of splits where best-IS ranked below OOS median
         oos_ranks    – list of normalised OOS ranks for the best-IS strategy
                        (0 = best OOS, 1 = worst OOS)
-        logit_sr     – logit-transformed OOS Sharpe for best-IS per split
+        logit_sr     – logit-transformed OOS score (if in (0,1)) for best-IS strategy per split
     """
     if n_folds % 2 != 0:
         raise ValueError(f"n_folds must be even for symmetric CSCV; got {n_folds}.")
@@ -61,8 +61,8 @@ def compute_pbo(
 
     if metric is None:
         def metric(r: pd.Series) -> float:
-            """Annualised Sharpe ratio."""
-            return r.mean() / r.std(ddof=1) * np.sqrt(252) if r.std() > 0 else 0.0
+            """Sharpe ratio."""
+            return r.mean() / r.std(ddof=1) if r.std() > 0 else 0.0
 
     # ── Build the CSCV generator ──────────────────────────────────────────
     # pct_embargo=0.0  → no embargo (CSCV is symmetric, not temporal)
@@ -104,7 +104,7 @@ def compute_pbo(
         if norm_rank > 0.5:
             below_median += 1
 
-        # Logit-transformed OOS Sharpe of the best-IS strategy
+        # Logit-transformed OOS score (if in (0,1)) for the best-IS strategy
         oos_sr = float(oos_scores[best_is_col])
         logit_sr.append(np.log(oos_sr / (1 - oos_sr)) if 0 < oos_sr < 1 else np.nan)
 

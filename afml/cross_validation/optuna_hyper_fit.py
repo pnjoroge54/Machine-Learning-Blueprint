@@ -18,7 +18,7 @@ from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 
-from afml.cross_validation.cross_validation import PurgedKFold
+from afml.cross_validation import PurgedKFold, CombinatorialPurgedCV
 from afml.production.model_development import _WeightedEstimator
 
 
@@ -178,12 +178,13 @@ class FinancialModelSuggester:
 
         
 def optimize_trading_model_with_pruning(
-    trial: optuna.Trial,
+    trial: "optuna.Trial",
     X, y, events, data_index,
     classifier,
     param_distributions: dict,
     n_splits: int = 5,
     metric="neg_log_loss",
+    cpcv=False,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
@@ -196,8 +197,11 @@ def optimize_trading_model_with_pruning(
     )
         
     # Setup Cross-Validation
-    t1 = events.loc[X.index, 't1']
-    cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
+    t1 = events['t1']
+    if cpcv:
+        cv = CombinatorialPurgedCV(n_folds=n_splits+1, n_test_folds=2, t1=t1, pct_embargo=0.01)
+    else:
+        cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
         
     fold_scores = []
 
@@ -214,7 +218,7 @@ def optimize_trading_model_with_pruning(
             score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
             y_pred = fit.predict(X_val)
-            score = f1_score(y_val, y_pred)
+            score = f1_score(y_val, y_pred, sample_weight=w_val)
             
         fold_scores.append(score)
         trial.report(score, step=fold_idx)
@@ -304,6 +308,8 @@ def optimize_trading_model(
     study_name: str = None,
     db_path: str = None,
     random_state: int = 42,
+    cpcv: bool = False,
+    refit: bool = False,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -326,6 +332,8 @@ def optimize_trading_model(
         metric (str): Optimization objective ('neg_log_loss' or 'f1').
         study_name (str): Name of Optuna study.
         db_path (str): Path to store trials.
+        cpcv (bool): Use CombinatorialPurgedCV if True, else use PPurgedKFold.
+        refit (bool): Fit best model on full data.
         
     Returns:
         optuna.study.Study: The completed study object with history and best params.
@@ -361,13 +369,18 @@ def optimize_trading_model(
         # Ensure reproducibility
         if hasattr(clf, 'random_state'):
             clf.set_params(random_state=random_state)
+        
+        valid = X.index.intersection(events.index)
+        X = X.loc[valid]
+        y = y.loc[valid]
+        events_ = events.loc[valid]
     
         def objective(trial):
             return optimize_trading_model_with_pruning(
-                trial=trial, X=X, y=y, events=events, data_index=data_index,
+                trial=trial, X=X, y=y, events=events_, data_index=data_index,
                 classifier=clf,
                 param_distributions=param_distributions,
-                n_splits=n_splits, metric=metric, 
+                n_splits=n_splits, metric=metric, cpcv=cpcv
             )
     
         study.optimize(
@@ -376,6 +389,21 @@ def optimize_trading_model(
             timeout=timeout, 
             callbacks=[print_best_trial, save_intermediate_results, check_for_overfitting]
         )
+
+        if refit:
+            # Reconstruct best model from best params
+            best_trial = study.best_trial
+            best_model = FinancialModelSuggester.apply_from_params(
+                best_trial.params, clf, events, data_index
+            )
+
+            # Return to parallelized mode
+            if hasattr(clf, 'n_jobs'):
+                best_model.set_params(n_jobs=-1)
+            
+            best_model.fit(X, y)
+            study.best_estimator_ = best_model  # attach for convenience
+
 
         return study
         
@@ -407,7 +435,7 @@ def save_intermediate_results(study, trial):
 def check_for_overfitting(study, trial):
     scores = trial.user_attrs.get("fold_scores", [])
     score_std = trial.user_attrs.get("score_std", 0.0)
-    if len(scores) >= 3 and (score_std) > 0.3:
+    if len(scores) >= 3 and score_std > 0.3:
         print(f"⚠️ High variance detected in Trial {trial.number}")
         
 
@@ -421,7 +449,7 @@ def plot_model_vs_baseline(study, y, events):
     probs = weighted_counts / weighted_counts.sum()
     
     if set(np.unique(y)) == {0, 1}:
-        baseline = probs.max()
+        baseline = -probs.max()
         scoring = "F1"
     else:
         baseline = -np.sum(probs * np.log(probs))
@@ -482,19 +510,3 @@ def optuna_to_cv_results(study):
     return pd.DataFrame(rows)
 
 
-# def clf_hyperfit_optuna(
-#     refit: bool = False,
-# ):
-        # if refit:
-        #     # Reconstruct best model from best params
-        #     best_trial = study.best_trial
-        #     best_model = FinancialModelSuggester.apply_from_params(
-        #         best_trial.params, clf, events, data_index
-        #     )
-
-        #     # Return to parallelized mode
-        #     if hasattr(clf, 'n_jobs'):
-        #         best_model.set_params(n_jobs=-1)
-            
-        #     best_model.fit(X, y)
-        #     study.best_estimator_ = best_model  # attach for convenience
