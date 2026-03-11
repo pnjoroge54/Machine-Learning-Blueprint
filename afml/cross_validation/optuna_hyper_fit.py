@@ -276,12 +276,12 @@ class TradingModelPruner(MedianPruner):
     def prune(self, study: "optuna.study.Study", trial: "optuna.trial.FrozenTrial") -> bool:
         step = trial.last_step
         if step is None: return False
-
-        current_score = trial.intermediate_values.get(step)
         
         # Rule 1: Static baseline check (Is it worse than a coin flip/baseline?)
-        if current_score < self.min_score_threshold:
-            return True
+        if trial.number >= 5:
+            current_score = trial.intermediate_values.get(step)
+            if current_score < self.min_score_threshold:
+                return True
 
         # Rule 2: High-Variance check (Is the model unstable?)
         if len(trial.intermediate_values) >= 3:
