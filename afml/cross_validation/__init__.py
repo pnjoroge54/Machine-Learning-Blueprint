@@ -12,6 +12,8 @@ from .cross_validation import (PurgedKFold, PurgedSplit, PurgedWalkForwardCV,
 from .hyper_fit import clf_hyper_fit, clf_hyper_fit_cached
 from .scoring import probability_weighted_accuracy
 
+from .hyper_fit_analysis import generate_complete_hyperparameter_report
+
 scoring_methods = {
     "accuracy": accuracy_score,
     "pwa": probability_weighted_accuracy,
@@ -36,4 +38,5 @@ __all__ = [
     "CombinatorialPurgedCV",
     "CPCVAnalyzer",
     "scoring_methods",
+"generate_complete_hyperparameter_report"
 ]
