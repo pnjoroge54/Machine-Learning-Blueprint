@@ -20,23 +20,18 @@ from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
 from ..cache import cacheable, cv_cacheable, get_cache_monitor, log_data_access, print_contamination_report
-from ..cross_validation import PurgedKFold, clf_hyper_fit
-from ..cross_validation.cross_validation import ml_cross_val_score
-from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
+from ..cross_validation import PurgedKFold, clf_hyper_fit, ml_cross_val_score, generate_complete_hyperparameter_report, CombinatorialPurgedCV
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..features.trading_session import get_time_features
 from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
-from ..mt5 import tick_data_loader
+from ..mt5.tick_data_loader import tick_data_loader as loader
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
 from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
 from ..util.misc import date_conversion, value_counts_data
 from ..util.pipelines import make_custom_pipeline, set_pipeline_params
 from .utils import ModelFileManager
-
-
-loader = tick_data_loader.tick_data_loader
 
 
 @cacheable()
