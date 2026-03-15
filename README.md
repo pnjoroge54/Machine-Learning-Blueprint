@@ -1,147 +1,229 @@
-<div align="center">
-   <a href="https://hudsonthames.org/">
-   <img src="https://raw.githubusercontent.com/hudson-and-thames/mlfinlab/master/.github/logo/hudson_and_thames_logo.png" height="300"><br>
-</div>
+# MetaTrader 5 Machine Learning Blueprint
 
+> **A production-grade financial machine learning library for MetaTrader 5.**
+> Implements and extends the techniques from *Advances in Financial Machine Learning*
+> by Marcos López de Prado — with MT5-specific engineering, Numba-accelerated
+> algorithms, and an intelligent caching architecture built for real-world trading
+> research.
 
------------------
-# Machine Learning Financial Laboratory (MlFinLab)
-[![PyPi](https://img.shields.io/pypi/v/mlfinlab.svg)]((https://pypi.org/project/mlfinlab/))
-[![Python](https://img.shields.io/pypi/pyversions/mlfinlab.svg)]((https://pypi.org/project/mlfinlab/))
-[![Build Status](https://travis-ci.com/hudson-and-thames/mlfinlab.svg?branch=master)](https://travis-ci.com/hudson-and-thames/mlfinlab)
-[![codecov](https://codecov.io/gh/hudson-and-thames/mlfinlab/branch/master/graph/badge.svg)](https://codecov.io/gh/hudson-and-thames/mlfinlab)
-
-![pylint Score](https://mperlet.github.io/pybadge/badges/10.svg)
-[![Documentation Status](https://readthedocs.org/projects/mlfinlab/badge/?version=latest)](https://mlfinlab.readthedocs.io/en/latest/?badge=latest)
-[![Downloads](https://img.shields.io/pypi/dm/mlfinlab.svg)]((https://pypi.org/project/mlfinlab/))
-
-MlFinlab is a python package which helps portfolio managers and traders who want to leverage the power of machine learning by providing reproducible, interpretable, and easy to use tools. 
-Adding MlFinLab to your companies pipeline is like adding a department of PhD researchers to your team.
-
-> **pip install mlfinlab**
-
-We source all of our implementations from the most elite and peer-reviewed journals. Including publications from: 
-1. [The Journal of Financial Data Science](https://jfds.pm-research.com/)
-2. [The Journal of Portfolio Management](https://jpm.pm-research.com/)
-3. [The Journal of Algorithmic Finance](http://www.algorithmicfinance.org/)
-4. [Cambridge University Press](https://www.cambridge.org/)
-
-We are making a big drive to include techniques from various authors, however the most dominant author would be Dr. Marcos Lopez de Prado ([QuantResearch.org](http://www.quantresearch.org/)).
-This package has its foundations in the two graduate level textbooks: 
-1. [Advances in Financial Machine Learning](https://www.amazon.co.uk/Advances-Financial-Machine-Learning-Marcos/dp/1119482089)
-2. [Machine Learning for Asset Managers](https://www.cambridge.org/core/books/machine-learning-for-asset-managers/6D9211305EA2E425D33A9F38D0AE3545)
-
-<div align="center">
-   <a href="https://mlfinlab.readthedocs.io/en/latest/">
-   <img src="https://raw.githubusercontent.com/hudson-and-thames/mlfinlab/master/docs/source/logo/journals.png">
-   </a>
-</div>
-
-## Praise for MlFinLab
-> “Financial markets are complex systems like no other. Extracting signal from financial data requires specialized tools
-> that are distinct from those used in general machine learning. The MlFinLab package compiles important algorithms 
->that every quant should know and use.”
-
-[Dr. Marcos Lopez de Prado](https://www.linkedin.com/in/lopezdeprado/), Co-founder and CIO at True Positive Technologies; Professor of Practice at Cornell University
-
-
->"Those who doubt open source libraries just need to look at the impact of Pandas, Scikit-learn, and the like. MIFinLab 
-is doing to financial machine learning what Tensorflow and PyTorch are doing to deep learning."
-
-[Dr. Ernest Chan](https://www.linkedin.com/in/epchan/), Hedge Fund Manager at QTS & Author
-
->"For many decades, finance has relied on overly simplistic statistical techniques to identify patterns in data. 
->Machine learning promises to change that by allowing researchers to use modern nonlinear and highly dimensional 
->techniques. Yet, applying those machine learning algorithms to model financial problems is easier said than done: 
->finance is not a plug-and-play subject as it relates to machine learning.
->
-> MlFinLab provides access to the latest cutting edges methods. MlFinLab is thus essential for quants who want to be 
->ahead of the technology rather than being replaced by it."
-
-[Dr. Thomas Raffinot](https://www.linkedin.com/in/thomas-raffinot-b75734b/), Financial Data Scientist at ENGIE Global Markets
-
-## Unlocking the Commons
-We are currently running a sponsorship model of “Unlocking the Commmons”. Our code base, online documentation, 
-tutorial notebooks and presentations will remain open to everyone for so long as we can meet our minimum sponsorship 
-goals. We have set the **deadline: December 2020** - for a monthly total patronage of $4000 USD.
-
-Nadia Eghbal explains it well: “If you'd like to open source a project but want to ensure that others will invest in 
-its long-term maintenance, you could tell your community that you'll open-source the project once you've hit a 
-certain amount of sponsorship. (Writer Tim Carmody refers to this as "unlocking the commons.")”
-
-[Become a Patron and keep MlFinLab Open!](https://www.patreon.com/HudsonThames)
-
-## Documentation & Tutorials
-We lower barriers to entry for all users by providing extensive [documentation](https://mlfinlab.readthedocs.io/en/latest/) 
-and [tutorial notebooks](https://github.com/hudson-and-thames/research), with code examples.
-
-## Who is Hudson & Thames?
-We are a private research group focused on implementing research based financial machine learning. We all work in 
-virtual teams, spread across the world, primarily: New York, London, and Kyiv.
-
-* [Website](https://hudsonthames.org/)
-* [Github Group](https://github.com/hudson-and-thames)
-* [Project Boards](https://github.com/orgs/hudson-and-thames/projects)
-* [Documentation](https://mlfinlab.readthedocs.io/en/latest/)
-
-
-## Sponsors and Donating
-A special thank you to our sponsors! If you would like to become a sponsor and help support our research, please sign 
-up on [Patreon](https://www.patreon.com/HudsonThames).
-
-Benefits include:
-1. Uninterrupted access: Should the code base pivot to closed source - your company will have access to all 
-   implementations and the source code.
-2. Ongoing access to slide show presentations and Jupyter Notebooks. (files can be edited to suit your personal 
-   needs such as classroom notes or client presentations.)
-3. Company / Organisation profile on [www.hudsonthames.org](https://hudsonthames.org/sponsors/)
-4. Use of Hudson & Thames sponsor badge on your website.
-5. Access to our communities Slack Channel.
-6. Subscription to project release updates and news.
-
-### Platinum Sponsor:
-<div align="center">
-   <a href="https://hudsonthames.org/sponsors/">
-   <img src="https://raw.githubusercontent.com/hudson-and-thames/mlfinlab/master/docs/source/logo/plat_sponsors.png" height="200"><br>
-</div>
-
-
-* [Machine Factor Technologies](https://machinefactor.tech/)
-* [alis_](https://alis.capital/)
-
-### Gold Sponsors:
-<div align="center">
-   <a href="https://hudsonthames.org/sponsors/">
-   <img src="https://raw.githubusercontent.com/hudson-and-thames/mlfinlab/master/docs/source/logo/gold_sponsors.png" height="300"><br>
-</div>
-
-
-* [E.P. Chan & Associates](https://www.epchan.com/)
-* [PolarStar](https://www.polarstarfunds.com/)
-* [Markov Capital](http://www.markovcapital.se/)
-* [Consilium Crypto](https://consiliumcrypto.ai)
-* [3Jane Capital](https://3jane.com/)
-* [Ali Saif](https://www.linkedin.com/in/ali-saif/)
-* [Ace Capital](https://acecapitalinvestments.com/)
+[![Python](https://img.shields.io/pypi/pyversions/mlfinlab.svg)](https://www.python.org/)
+[![Build Status](https://travis-ci.com/pnjoroge54/Machine-Learning-Blueprint.svg?branch=main)](https://travis-ci.com/pnjoroge54/Machine-Learning-Blueprint)
+[![codecov](https://codecov.io/gh/pnjoroge54/Machine-Learning-Blueprint/branch/main/graph/badge.svg)](https://codecov.io/gh/pnjoroge54/Machine-Learning-Blueprint)
+[![pylint Score](https://mperlet.github.io/pybadge/badges/10.svg)](https://github.com/pnjoroge54/Machine-Learning-Blueprint)
+[![License: BSD-3](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](LICENSE.txt)
 
 ---
 
-## Contact us
-We host a booming community of like minded data scientists and quants, join the 
-[Slack Channel](https://www.patreon.com/HudsonThames) now! Open to sponsors of our package. 
+## About This Project
 
-The channel has the following benefits: 
+This repository is the companion codebase for the
+**MetaTrader 5 Machine Learning Blueprint** article series, published on
+[MQL5.com](https://www.mql5.com/en/users/patricknjoroge743/publications)
+by **[Patrick Murimi Njoroge](https://www.mql5.com/en/users/patricknjoroge743)**.
 
-* Community of like minded individuals.
-* Ask questions about the package implementations and get community feedback.
-* Occasional presentations on topics within financial machine learning.
-* A papers channel where we share the papers which are freely available.
-* Access to members of our research group.
- 
-Looking forward to hearing from you!
+The series constructs a complete, reproducible ML pipeline — from raw tick data
+ingestion in MetaTrader 5 through to ONNX model deployment in a live EA —
+addressing the real-world pitfalls that cause most trading ML projects to fail
+out-of-sample.
+
+---
+
+## Article Series
+
+| # | Title | Published | Core Topics |
+|---|-------|-----------|-------------|
+| [1](https://www.mql5.com/en/articles/17520) | Data Leakage & Timestamp Fixes | Jun 2025 | MT5 timestamp trap · activity-driven bars · look-ahead bias |
+| [2](https://www.mql5.com/en/articles/18864) | Labeling Financial Data for ML | Aug 2025 | Triple-Barrier Method · meta-labeling · CUSUM filter |
+| [3](https://www.mql5.com/en/articles/19253) | Trend-Scanning Labeling | Oct 2025 | Adaptive t-stat horizons · 350× Numba speedup |
+| [4](https://www.mql5.com/en/articles/19850) | Label Concurrency | Oct 2025 | Sample weights · average uniqueness · IID correction |
+| [5](https://www.mql5.com/en/articles/20059) | Sequential Bootstrapping | Nov 2025 | Debiased sampling · SB bagging · Monte Carlo validation |
+| [6](https://www.mql5.com/en/articles/20302) | Production-Grade Caching System | Nov 2025 | AFML cache · finance-aware invalidation · session vs disk |
+| [7](https://www.mql5.com/en/articles/20451) | Reproducible Research Pipeline | Feb 2026 | End-to-end pipeline · TickDataLoader · ONNX export |
+
+---
+
+## Repository Structure
+
+```
+Machine-Learning-Blueprint/
+│
+├── afml/                       # Core library
+│   └── cache/                  # Production caching system (Part 6)
+│       ├── backtest_cache.py   # Backtest-stage cache
+│       ├── cache_monitoring.py # Hit/miss telemetry
+│       ├── cv_cache.py         # Cross-validation cache
+│       ├── data_access_tracker.py  # Look-ahead bias guard
+│       ├── robust_cache_keys.py    # Pandas/NumPy-safe hashing
+│       └── selective_cleaner.py    # Code-change invalidation
+│
+├── MQL5/                       # Expert Advisors & Python bridge EA
+│
+├── data/                       # Synthetic / sample market data only
+│
+├── notebooks/                  # Jupyter notebooks (one per article)
+│
+├── testing_tuning/             # Walk-forward & parameter search
+│
+├── tools/                      # Standalone utility scripts
+│
+├── util/                       # Shared helpers (multiprocessing, logging)
+│
+├── performance_attribution.py
+├── requirements.txt
+├── environment.yml
+└── setup.py
+```
+
+---
+
+## Key Features
+
+### Data Structures — Part 1
+- Tick, volume, and dollar bar construction from raw MT5 tick data
+- MT5 timestamp correction (bar-close alignment) to eliminate look-ahead bias
+- Activity-driven sampling for improved statistical properties
+
+### Labeling — Parts 2 & 3
+- **Triple-Barrier Method** with dynamic, volatility-scaled (`get_daily_vol`) barriers
+- **Meta-Labeling** — secondary model to size position conviction
+- **Trend-Scanning** — t-stat-driven adaptive horizons with a Numba-JIT core
+  (~350× faster than the original López de Prado reference implementation)
+
+### Sample Weighting — Parts 4 & 5
+- Concurrency counting (`num_concurrent_events`) and average uniqueness
+- Time-decay weights for recency-aware training
+- **Sequential Bootstrapping** — actively avoids temporally overlapping samples
+  during resampling, correcting the IID violation at its source
+
+### Caching System — Part 6
+- Finance-aware persistent cache (disk-backed, survives Python restarts)
+- Automatic invalidation when source code or upstream data changes
+- Look-ahead-bias guard on cached intermediate outputs
+- Handles Pandas DataFrames and NumPy arrays that Python's `lru_cache` cannot hash
+
+### Reproducible Pipeline — Part 7
+- `TickDataLoader` — RAM cache with intelligent partial-range loading
+- Dependency-graph-aware invalidation (changing hyperparameters skips re-running
+  bar construction; changing symbol triggers a full recompute)
+- Automatic research reports at every pipeline stage
+- ONNX model export for direct deployment inside MetaTrader 5
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.8+
+- MetaTrader 5 terminal (for live data; sample data provided for offline use)
+
+### Installation
+
+**Conda (recommended):**
+```bash
+git clone https://github.com/pnjoroge54/Machine-Learning-Blueprint.git
+cd Machine-Learning-Blueprint
+conda env create -f environment.yml
+conda activate ml-blueprint
+pip install -e .
+```
+
+**pip:**
+```bash
+git clone https://github.com/pnjoroge54/Machine-Learning-Blueprint.git
+cd Machine-Learning-Blueprint
+pip install -r requirements.txt
+pip install -e .
+```
+
+### Quick-Start Example
+
+```python
+from afml.data_structures import get_dollar_bars
+from afml.labeling import get_events, get_bins, get_daily_vol
+from afml.sample_weights import get_sample_weights
+
+# 1. Build activity-driven bars from raw tick data
+bars = get_dollar_bars(ticks, threshold=1_000_000)
+
+# 2. Compute dynamic volatility targets
+daily_vol = get_daily_vol(bars['close'], lookback=100)
+
+# 3. Label with the Triple-Barrier Method
+events = get_events(close=bars['close'], t_events=t_events,
+                    pt_sl=[1, 1], target=daily_vol, min_ret=0.005)
+labels = get_bins(events, bars['close'])
+
+# 4. Correct for label concurrency before training
+weights = get_sample_weights(events, bars['close'])
+
+# 5. Train with corrected sample weights
+model.fit(X_train, y_train, sample_weight=weights.loc[X_train.index])
+```
+
+See `notebooks/` for fully worked examples corresponding to each article.
+
+---
+
+## Running Tests
+
+```bash
+# Full test suite
+pytest
+
+# With HTML coverage report
+pytest --cov=afml --cov-report=html
+open htmlcov/index.html
+```
+
+---
+
+## Code Quality
+
+```bash
+# Lint
+pylint afml/
+
+# Style
+pycodestyle afml/
+```
+
+---
+
+## Attribution & Acknowledgements
+
+### Theoretical Foundation
+
+All core algorithms implement techniques from:
+
+- **Advances in Financial Machine Learning** — Marcos López de Prado (Wiley, 2018)
+- **Machine Learning for Asset Managers** — Marcos López de Prado (Cambridge, 2020)
+
+Every function that implements a named snippet from these books carries a
+docstring citation with the book title, snippet number, and page number.
+
+### Codebase Scaffold
+
+The project structure, CI configuration, and initial module layout were
+bootstrapped from **[MlFinLab](https://github.com/hudson-and-thames/mlfinlab)**
+by Hudson & Thames Quantitative Research, used under the BSD-3-Clause licence.
+The original licence is preserved in [LICENSE.txt](LICENSE.txt).
+
+Original contributions in this repository — including the AFML caching system,
+the Numba-accelerated trend-scanning implementation, the `TickDataLoader`, the
+MetaTrader 5 Python bridge, and the end-to-end reproducible pipeline — are the
+work of **Patrick Murimi Njoroge** and are documented in the MQL5 article series
+above.
+
+---
+
+## Contributing
+
+Contributions, bug reports, and feature requests are welcome.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+---
 
 ## License
 
-This project is licensed under an all rights reserved licence.
-
-[LICENSE.txt](https://github.com/hudson-and-thames/mlfinlab/blob/master/LICENSE.txt) file for details.
+BSD-3-Clause. See [LICENSE.txt](LICENSE.txt) for details.
