@@ -64,7 +64,7 @@ from ..cache.unified_cache_system import (
     reconstruct_param_grid,
 )
 from ..util.pipelines import MyPipeline, make_custom_pipeline, set_pipeline_params
-from .cross_validation import PurgedKFold
+from .cross_validation import PurgedKFold, FinancialModelSuggester
 
 
 # ============================================================================
@@ -379,16 +379,10 @@ def _optuna_search(
     )
 
     def objective(trial: "optuna.Trial") -> float:
-        # Sample one value per parameter from the grid.
-        # suggest_categorical is used because param_grid contains discrete
-        # lists; use suggest_float / suggest_int for continuous distributions.
-        trial_params = {
-            k: trial.suggest_categorical(k, v)
-            for k, v in param_grid.items()
-        }
-
-        trial_pipe = clone(pipe_clf)
-        trial_pipe.set_params(**trial_params)
+        # Apply both weighting params and base model params
+    	trial_pipe = suggester.suggest_and_apply(
+        trial, pipe_clf, param_grid, events, data_index
+        )      
 
         fold_scores = []
         splits = list(inner_cv.split(features, labels))
