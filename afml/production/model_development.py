@@ -334,6 +334,9 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
     def predict(self, X):
         return self.base_estimator.predict(X)
 
+    def predict_proba(self, X):
+        return self.base_estimator.predict_proba(X)
+
     def get_params(self, deep=True):
         # Include ALL parameters for consistent hashing
         params = {
