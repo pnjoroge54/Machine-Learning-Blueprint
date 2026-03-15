@@ -18,7 +18,7 @@ from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 
-from afml.cross_validation import PurgedKFold, CombinatorialPurgedCV
+from afml.cross_validation.cross_validation import PurgedKFold
 from afml.production.model_development import _WeightedEstimator
 
 
@@ -184,7 +184,6 @@ def optimize_trading_model_with_pruning(
     param_distributions: dict,
     n_splits: int = 5,
     metric="neg_log_loss",
-    cpcv=False,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
@@ -198,10 +197,7 @@ def optimize_trading_model_with_pruning(
         
     # Setup Cross-Validation
     t1 = events['t1']
-    if cpcv:
-        cv = CombinatorialPurgedCV(n_folds=n_splits+1, n_test_folds=2, t1=t1, pct_embargo=0.01)
-    else:
-        cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
+    cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
         
     fold_scores = []
 
@@ -307,7 +303,6 @@ def optimize_trading_model(
     study_name: str = None,
     db_path: str = None,
     random_state: int = 42,
-    cpcv: bool = False,
     refit: bool = False,
 ):
     """
@@ -374,7 +369,7 @@ def optimize_trading_model(
                 trial=trial, X=X, y=y, events=events, data_index=data_index,
                 classifier=clf,
                 param_distributions=param_distributions,
-                n_splits=n_splits, metric=metric, cpcv=cpcv
+                n_splits=n_splits, metric=metric
             )
     
         study.optimize(
