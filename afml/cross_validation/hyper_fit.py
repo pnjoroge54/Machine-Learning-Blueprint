@@ -64,7 +64,7 @@ from ..cache.unified_cache_system import (
     reconstruct_param_grid,
 )
 from ..util.pipelines import MyPipeline, make_custom_pipeline, set_pipeline_params
-from .cross_validation import PurgedKFold, FinancialModelSuggester
+from .cross_validation import PurgedKFold, FinancialModelSuggester as suggester
 
 
 # ============================================================================
@@ -380,7 +380,7 @@ def _optuna_search(
 
     def objective(trial: "optuna.Trial") -> float:
         # Apply both weighting params and base model params
-    	trial_pipe = suggester.suggest_and_apply(
+        trial_pipe = suggester.suggest_and_apply(
         trial, pipe_clf, param_grid, events, data_index
         )      
 
@@ -443,6 +443,7 @@ def clf_hyper_fit(
     pct_embargo: float = 0.02,
     random_state: Optional[int] = None,
     verbose: int = 0,
+    use_optuna: bool = True,
     **fit_params,
 ):
     """
@@ -450,9 +451,9 @@ def clf_hyper_fit(
 
     Search priority
     ---------------
-    rnd_search_iter == 0    →  GridSearchCV (exhaustive)
-    rnd_search_iter  > 0    →  Optuna + HyperbandPruner (preferred)
-                               RandomizedSearchCV         (fallback)
+    rnd_search_iter == 0              →  GridSearchCV (exhaustive)
+    rnd_search_iter  > 0, use_optuna  →  Optuna + HyperbandPruner (preferred)
+    rnd_search_iter  > 0, not use_optuna → RandomizedSearchCV (forced fallback)
 
     Sample weight handling
     ----------------------
@@ -498,6 +499,12 @@ def clf_hyper_fit(
         Reproducibility seed.
     verbose : int, default=0
         Verbosity level.
+    use_optuna : bool, default=True
+        When True and rnd_search_iter > 0, uses Optuna with HyperbandPruner
+        if optuna is installed, falling back to RandomizedSearchCV if not.
+        When False and rnd_search_iter > 0, forces RandomizedSearchCV
+        unconditionally — useful for benchmarking Optuna's improvement over
+        a standard randomized search on the same number of iterations.
     **fit_params
         Additional params passed to estimator.fit, e.g. sample_weight.
 
@@ -558,38 +565,65 @@ def clf_hyper_fit(
     # Search
     # ------------------------------------------------------------------
     if rnd_search_iter > 0:
-        try:
-            import optuna  # noqa: F401
+        if use_optuna:
+            try:
+                import optuna  # noqa: F401
 
-            best_params, best_score, best_estimator = _optuna_search(
-                pipe_clf=pipe_clf,
-                param_grid=param_grid,
-                features=features,
-                labels=labels,
-                inner_cv=inner_cv,
-                scoring=base_scoring,
-                n_trials=rnd_search_iter,
-                n_jobs=n_jobs,
-                random_state=random_state,
-                verbose=verbose,
-                fit_params=fit_params,
-            )
-            cv_results = {
-                "best_params":      best_params,
-                "best_score":       best_score,
-                "cv_results":       None,   # Optuna has no cv_results_ DataFrame
-                "scoring":          base_scoring,
-                "weighted_scoring": sample_weight is not None,
-                "search_method":    "optuna",
-            }
+                best_params, best_score, best_estimator = _optuna_search(
+                    pipe_clf=pipe_clf,
+                    param_grid=param_grid,
+                    features=features,
+                    labels=labels,
+                    inner_cv=inner_cv,
+                    scoring=base_scoring,
+                    n_trials=rnd_search_iter,
+                    n_jobs=n_jobs,
+                    random_state=random_state,
+                    verbose=verbose,
+                    fit_params=fit_params,
+                )
+                cv_results = {
+                    "best_params":      best_params,
+                    "best_score":       best_score,
+                    "cv_results":       None,   # Optuna has no cv_results_ DataFrame
+                    "scoring":          base_scoring,
+                    "weighted_scoring": sample_weight is not None,
+                    "search_method":    "optuna",
+                }
 
-        except ImportError:
-            warnings.warn(
-                "Optuna is not installed. Falling back to RandomizedSearchCV. "
-                "Install optuna for pruning support: pip install optuna",
-                UserWarning,
-                stacklevel=2,
-            )
+            except ImportError:
+                warnings.warn(
+                    "Optuna is not installed. Falling back to RandomizedSearchCV. "
+                    "Install optuna for pruning support: pip install optuna",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                scoring = _build_weighted_scorer(base_scoring, sample_weight)
+                gs = RandomizedSearchCV(
+                    estimator=pipe_clf,
+                    param_distributions=param_grid,
+                    scoring=scoring,
+                    cv=inner_cv,
+                    n_jobs=n_jobs,
+                    n_iter=rnd_search_iter,
+                    random_state=random_state,
+                    verbose=verbose,
+                    refit=True,
+                )
+                gs.fit(features, labels, **fit_params)
+                best_estimator = gs.best_estimator_
+                cv_results = {
+                    "best_params":      gs.best_params_,
+                    "best_score":       gs.best_score_,
+                    "cv_results":       pd.DataFrame(gs.cv_results_),
+                    "scoring":          base_scoring,
+                    "weighted_scoring": sample_weight is not None,
+                    "search_method":    "randomized",
+                }
+        else:
+            # use_optuna=False: bypass Optuna unconditionally.
+            # Useful for benchmarking Optuna's gains over a plain
+            # randomized search on the same number of iterations.
             scoring = _build_weighted_scorer(base_scoring, sample_weight)
             gs = RandomizedSearchCV(
                 estimator=pipe_clf,
@@ -678,6 +712,7 @@ def clf_hyper_fit_internal(
     pct_embargo,
     random_state,
     verbose,
+    use_optuna=True,
     **fit_params,
 ):
     """
@@ -687,6 +722,9 @@ def clf_hyper_fit_internal(
     serializes scipy distributions and other non-picklable objects) before
     delegating to clf_hyper_fit. All weighted scoring and per-fold
     normalization behaviour is inherited unchanged.
+
+    use_optuna is threaded through so the bypass flag works correctly
+    from the cached entry point too.
     """
     param_grid = reconstruct_param_grid(param_grid_cacheable)
 
@@ -705,6 +743,7 @@ def clf_hyper_fit_internal(
         pct_embargo=pct_embargo,
         random_state=random_state,
         verbose=verbose,
+        use_optuna=use_optuna,
         **fit_params,
     )
 
@@ -724,6 +763,7 @@ def clf_hyper_fit_cached(
     pct_embargo,
     random_state,
     verbose,
+    use_optuna=True,
     **fit_params,
 ):
     """
@@ -734,6 +774,7 @@ def clf_hyper_fit_cached(
     -----
         from scipy.stats import randint
 
+        # Standard call — uses Optuna if installed
         model, results = clf_hyper_fit_cached(
             features, labels, t1, pipe_clf,
             param_grid={
@@ -742,11 +783,19 @@ def clf_hyper_fit_cached(
             },
             cv=5,
             rnd_search_iter=50,
-            sample_weight=uniqueness_weights,   # activates weighted scoring
+            sample_weight=uniqueness_weights,
         )
+        print(results["search_method"])    # "optuna"
 
-        print(results["search_method"])    # "optuna" or "randomized"
-        print(results["weighted_scoring"]) # True
+        # Benchmark call — forces RandomizedSearchCV even if Optuna is installed
+        model_rs, results_rs = clf_hyper_fit_cached(
+            ...,
+            rnd_search_iter=50,
+            use_optuna=False,
+        )
+        print(results_rs["search_method"]) # "randomized"
+
+        # Compare best_score between the two to demonstrate Optuna's advantage.
     """
     param_grid_cacheable = create_cacheable_param_grid(param_grid)
 
@@ -765,5 +814,6 @@ def clf_hyper_fit_cached(
         pct_embargo=pct_embargo,
         random_state=random_state,
         verbose=verbose,
+        use_optuna=use_optuna,
         **fit_params,
     )
