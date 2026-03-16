@@ -314,9 +314,6 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
         else:
             weights = pd.Series(np.ones(len(y)), index=y.index)
 
-        valid = X.index.intersection(y.index)
-        X, y = X.loc[valid], y.loc[valid]
-
         # Apply decay factor
         if self.decay != 1.0:
             decay_vec = get_weights_by_time_decay_optimized(
@@ -327,9 +324,9 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
                 av_uniqueness=self.events["tW"],
             )
             weights *= decay_vec
-
         self.sample_weight = weights
-        w = weights.loc[valid]
+        w = weights.loc[X.index]
+
         self.base_estimator.fit(X, y, sample_weight=w)
         return self
 
