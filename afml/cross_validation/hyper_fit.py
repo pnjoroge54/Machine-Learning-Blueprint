@@ -64,8 +64,6 @@ from ..cache.unified_cache_system import (
     reconstruct_param_grid,
 )
 from ..util.pipelines import MyPipeline, make_custom_pipeline, set_pipeline_params
-from .cross_validation import PurgedKFold
-from .optuna_hyper_fit import FinancialModelSuggester as suggester
 
 
 # ============================================================================
@@ -367,6 +365,8 @@ def _optuna_search(
         Best pipeline refitted on the full dataset.
     """
     import optuna
+    from .optuna_hyper_fit import FinancialModelSuggester as suggester
+
 
     if verbose == 0:
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -522,6 +522,7 @@ def clf_hyper_fit(
             weighted_scoring: bool   — whether sample_weight was active
             search_method   : str    — "optuna", "randomized", or "grid"
     """
+    from .cross_validation import PurgedKFold
 
     # ------------------------------------------------------------------
     # Pipeline setup
