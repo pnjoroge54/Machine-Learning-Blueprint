@@ -64,7 +64,8 @@ from ..cache.unified_cache_system import (
     reconstruct_param_grid,
 )
 from ..util.pipelines import MyPipeline, make_custom_pipeline, set_pipeline_params
-from .cross_validation import PurgedKFold, FinancialModelSuggester as suggester
+from .cross_validation import PurgedKFold
+from .optuna_hyper_fit import FinancialModelSuggester as suggester
 
 
 # ============================================================================
