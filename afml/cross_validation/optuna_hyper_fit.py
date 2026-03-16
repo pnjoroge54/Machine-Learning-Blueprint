@@ -298,7 +298,7 @@ def optimize_trading_model(
     n_trials: int = 100,
     timeout: int = 3600,
     n_splits: int = 5,
-    pruner_type: str = "median",
+    pruner_type: str = "hyperband",
     metric: str = "neg_log_loss",
     study_name: str = None,
     db_path: str = None,
