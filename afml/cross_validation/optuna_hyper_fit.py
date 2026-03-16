@@ -65,11 +65,13 @@ class FinancialModelSuggester:
                 sampled_params[name] = trial.suggest_categorical(name, dist)
             elif hasattr(dist, 'ppf'):  # scipy.stats distribution
                 low, high = dist.support()
-                is_log = dist.dist.name in ['reciprocal', 'loguniform']
-                sampled_params[name] = trial.suggest_float(name, low, high, log=is_log)
-            elif isinstance(dist, range) or dist.dist.name == "randint":
-                try:
-                    sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
+                if dist.dist.name == "randint":
+                    sampled_params[name] = trial.suggest_int(name, int(low), int(high))    
+                else:
+                    is_log = dist.dist.name in ['reciprocal', 'loguniform']
+                    sampled_params[name] = trial.suggest_float(name, low, high, log=is_log)               
+            elif isinstance(dist, range):
+                sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
                 except AttributeError:
                     low, high = dist.support()
                     sampled_params[name] = trial.suggest_int(name, int(low), int(high))
