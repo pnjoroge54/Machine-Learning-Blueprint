@@ -9,8 +9,7 @@ from .combinatorial import CombinatorialPurgedCV, CPCVAnalyzer, fill_sides_numba
 from .cross_validation import (PurgedKFold, PurgedSplit, PurgedWalkForwardCV,
                                analyze_cross_val_scores, ml_cross_val_score,
                                ml_get_train_times)
-from .hyper_fit import clf_hyper_fit, clf_hyper_fit_cached
-from .optuna_hyper_fit import FinancialModelSuggester
+from .hyper_fit import clf_hyper_fit, clf_hyper_fit_cached 
 from .scoring import probability_weighted_accuracy
 
 from .hyper_fit_analysis import generate_complete_hyperparameter_report
@@ -40,5 +39,4 @@ __all__ = [
     "CPCVAnalyzer",
     "scoring_methods",
     "generate_complete_hyperparameter_report",
-    "FinancialModelSuggester"
 ]
