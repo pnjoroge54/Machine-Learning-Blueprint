@@ -325,8 +325,7 @@ def optimize_trading_model(
         pruner_type (str): Pruning strategy ('median', 'hyperband', or 'successive_halving').
         metric (str): Optimization objective ('neg_log_loss' or 'f1').
         study_name (str): Name of Optuna study.
-        db_path (str): Path to store trials.
-        cpcv (bool): Use CombinatorialPurgedCV if True, else use PPurgedKFold.
+        db_path (str): Path to store trials.      
         refit (bool): Fit best model on full data.
         
     Returns:
