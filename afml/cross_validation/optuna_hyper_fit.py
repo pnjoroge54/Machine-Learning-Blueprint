@@ -206,16 +206,15 @@ def optimize_trading_model_with_pruning(
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
         fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator
-
+        # Extract weights used from estimator variable
+        w_val = fit.sample_weight.loc[X_val.index]
+        
         if metric == "neg_log_loss":
-            y_prob = fit.predict_proba(X_val)
-            # Use return-atrribution weights for validation scoring to ensure statistical relevance
-            w_val = events.loc[X_val.index, "w"]
+            y_prob = fit.predict_proba(X_val)                      
             score = -log_loss(y_val, y_prob, sample_weight=w_val)
         else:
             y_pred = fit.predict(X_val)
-            score = f1_score(y_val, y_pred)
-            
+            score = f1_score(y_val, y_pred, sample_weight=w_val)            
         fold_scores.append(score)
         trial.report(score, step=fold_idx)
 
