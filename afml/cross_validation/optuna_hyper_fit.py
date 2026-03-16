@@ -67,7 +67,7 @@ class FinancialModelSuggester:
                 low, high = dist.support()
                 is_log = dist.dist.name in ['reciprocal', 'loguniform']
                 sampled_params[name] = trial.suggest_float(name, low, high, log=is_log)
-            elif isinstance(dist, (range, stats.randint)):
+            elif isinstance(dist, range) or dist.dist.name == "randint":
                 try:
                     sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
                 except AttributeError:
@@ -352,21 +352,19 @@ def optimize_trading_model(
             storage=storage_url, 
             load_if_exists=True,
         )
-
-        clf = clone(classifier)
         
         # Force single-threaded inside CV to prevent oversubscription
-        if hasattr(clf, 'n_jobs'):
-            clf.set_params(n_jobs=1)
+        if hasattr(classifier, 'n_jobs'):
+            classifier.set_params(n_jobs=1)
     
         # Ensure reproducibility
-        if hasattr(clf, 'random_state'):
-            clf.set_params(random_state=random_state)
+        if hasattr(classifier, 'random_state'):
+            classifier.set_params(random_state=random_state)
     
         def objective(trial):
             return optimize_trading_model_with_pruning(
                 trial=trial, X=X, y=y, events=events, data_index=data_index,
-                classifier=clf,
+                classifier=classifier,
                 param_distributions=param_distributions,
                 n_splits=n_splits, metric=metric
             )
@@ -382,11 +380,11 @@ def optimize_trading_model(
             # Reconstruct best model from best params
             best_trial = study.best_trial
             best_model = FinancialModelSuggester.apply_from_params(
-                best_trial.params, clf, events, data_index
+                best_trial.params, classifier, events, data_index
             )
 
             # Return to parallelized mode
-            if hasattr(clf, 'n_jobs'):
+            if hasattr(classifier, 'n_jobs'):
                 best_model.set_params(n_jobs=-1)
             
             best_model.fit(X, y)
