@@ -308,14 +308,14 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
 
     def fit(self, X, y):
         if self.scheme == "uniqueness":
-            weights = self.events["tW"]
+            weights = self.events["tW"].copy()
         elif self.scheme == "return":
-            weights = self.events["w"]
+            weights = self.events["w"].copy()
         else:
             weights = pd.Series(np.ones(len(y)), index=y.index)
 
         valid = X.index.intersection(y.index)
-        X, y, w = X.loc[valid], y.loc[valid], weights.loc[valid]
+        X, y = X.loc[valid], y.loc[valid]
 
         # Apply decay factor
         if self.decay != 1.0:
@@ -324,11 +324,12 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
                 close_index=self.data_index,
                 last_weight=self.decay,
                 linear=self.linear,
-                av_uniqueness=self.events.loc[X.index, "tW"],
+                av_uniqueness=self.events["tW"],
             )
-            w *= decay_vec
+            weights *= decay_vec
 
-        self.sample_weight = w
+        self.sample_weight = weights
+        w = weights.loc[valid]
         self.base_estimator.fit(X, y, sample_weight=w)
         return self
 
