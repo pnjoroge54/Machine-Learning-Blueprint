@@ -208,8 +208,8 @@ def optimize_trading_model_with_pruning(
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
         fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator
-        # Extract weights used from estimator variable
-        w_val = fit.sample_weight.loc[X_val.index].to_numpy()
+        # Extract return-attribution weights used from events to evaluate with respect to PnL
+        w_val = events['w'].iloc[val_idx].to_numpy()
         
         if metric == "neg_log_loss":
             y_prob = fit.predict_proba(X_val)                      
@@ -304,7 +304,7 @@ def optimize_trading_model(
     study_name: str = None,
     db_path: str = None,
     random_state: int = 42,
-    refit: bool = False,
+    refit: bool = True,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -364,10 +364,8 @@ def optimize_trading_model(
     
         def objective(trial):
             return optimize_trading_model_with_pruning(
-                trial=trial, X=X, y=y, events=events, data_index=data_index,
-                classifier=classifier,
-                param_distributions=param_distributions,
-                n_splits=n_splits, metric=metric
+                trial, X, y, events, data_index, classifier,
+                param_distributions, n_splits, metric
             )
     
         study.optimize(
@@ -390,9 +388,9 @@ def optimize_trading_model(
             
             best_model.fit(X, y)
             study.best_estimator_ = best_model  # attach for convenience
-
-
-        return study
+            
+        cv_results = optuna_to_cv_results(study)
+        return study, cv_results
         
     except StorageInternalError as e:
         print(f"❌ Storage Error: The database at {db_path} is locked or unreachable.")
@@ -495,5 +493,3 @@ def optuna_to_cv_results(study):
         rows.append(res)
     
     return pd.DataFrame(rows)
-
-
