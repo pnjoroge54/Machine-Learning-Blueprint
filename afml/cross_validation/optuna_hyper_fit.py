@@ -162,9 +162,9 @@ class FinancialModelSuggester:
         spaces = {
             "random_forest": {
                 "n_estimators": range(100, 1000),
-                "max_depth": range(3, 12),
-                "min_weight_fraction_leaf": stats.uniform(0.01, 0.1),
-                "max_features": ["sqrt", "log2", 0.5],
+                "max_depth": range(3, 7),
+                "min_weight_fraction_leaf": stats.uniform(0.025, 0.1),
+                "max_features": ["sqrt", "log2", 0.5, 1.0],
                 "ccp_alpha": stats.loguniform(1e-5, 1e-2),
             },
             "xgboost": {
