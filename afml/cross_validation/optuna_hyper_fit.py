@@ -209,7 +209,7 @@ def optimize_trading_model_with_pruning(
 
         fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator
         # Extract weights used from estimator variable
-        w_val = fit.sample_weight.loc[X_val.index]
+        w_val = fit.sample_weight.loc[X_val.index].to_numpy()
         
         if metric == "neg_log_loss":
             y_prob = fit.predict_proba(X_val)                      
