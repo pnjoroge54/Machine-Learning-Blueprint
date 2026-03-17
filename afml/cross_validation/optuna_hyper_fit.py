@@ -72,9 +72,6 @@ class FinancialModelSuggester:
                     sampled_params[name] = trial.suggest_float(name, low, high, log=is_log)               
             elif isinstance(dist, range):
                 sampled_params[name] = trial.suggest_int(name, dist.start, dist.stop - 1)
-                except AttributeError:
-                    low, high = dist.support()
-                    sampled_params[name] = trial.suggest_int(name, int(low), int(high))
             else:
                 sampled_params[name] = dist
 
