@@ -197,6 +197,8 @@ def optimize_trading_model_with_pruning(
     # Setup Cross-Validation
     t1 = events['t1']
     cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
+    # Extract return-attribution weights from to evaluate validation set with respect to PnL
+    w_score = events['w'].to_numpy()
         
     fold_scores = []
 
@@ -204,9 +206,8 @@ def optimize_trading_model_with_pruning(
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator
-        # Extract return-attribution weights used from events to evaluate with respect to PnL
-        w_val = events['w'].iloc[val_idx].to_numpy()
+        fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator       
+        w_val = w_score[val_idx]
         
         if metric == "neg_log_loss":
             y_prob = fit.predict_proba(X_val)                      
