@@ -932,9 +932,27 @@ class ModelDevelopmentPipeline:
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = pipe.steps[-1][1]
         opt_params = {k: v for k, v in self.model_params.items() if k in ("n_trials", "optuna_timeout", "pruner_type", "param_grid")}
-        opt_params["study_name"] = self.strategy.get_strategy_name()
-        opt_params["db_path"] = self.file_paths["db_path"]
-        
+        # ── Study name: globally unique within the strategy's DB ────────────────
+        # Encodes every dimension that distinguishes one experiment from another.
+        # The config_hash (last segment of base_dir) is deterministic for the
+        # same config dict, so the same experiment always resumes its own study.
+        config_hash = self.file_paths["base_dir"].name   # 8-char md5 suffix
+        opt_params["study_name"] = (
+            f"{self.strategy.get_strategy_name()}"
+            f"_{self.symbol}"
+            f"_{self.data_config.get('bar_type', 'unk')}"
+            f"_{self.data_config.get('bar_size', 'unk')}"
+            f"_{config_hash}"
+    )
+    
+
+        # ── SQLite URI: built from the Path object in file_paths ────────────────
+        # Ensure the strategy-level directory exists (it does, but be explicit).
+        db_path: Path = self.file_paths["db_path"]
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Use resolve() so the URI is always absolute — Optuna requires this.
+        opt_params["db_path"] = f"sqlite:///{db_path.resolve()}"
+    
         self.study, cv_results_df = optimize_trading_model(
             classifier=base_clf, X=X, y=y, events=self.events, data_index=self.bar_data.index, 
             n_splits=self.cv_splits, **opt_params, refit=False
