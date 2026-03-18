@@ -348,7 +348,14 @@ class ConfigPathGenerator:
         strategy_filename = self.generate_filename(config, "strategy")
         feature_config_filename = self.generate_filename(config, "feature_config")
         feature_names_filename = self.generate_filename(config, "feature_names")
-
+          
+        # One DB per strategy, shared across all symbols/timeframes/configs.
+        # Studies are separated by study_name (set in _train_model_optuna).
+        # This keeps the DB at a human-navigable level and makes optuna-dashboard
+        # useful across experiments without burying the file 8 levels deep.
+        strategy_key = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
+        db_path = self.base_dir / strategy_key / "optuna_studies.db"
+    
         return {
             "base_dir": base_dir,
             "model": base_dir / model_filename,
@@ -365,6 +372,7 @@ class ConfigPathGenerator:
             "logs": base_dir / "logs",
             "plots": base_dir / "plots",
             "reports": base_dir / "reports",
+            "db_path": db_path,
         }
 
     def create_navigation_index(self, config: dict, file_paths: dict = None) -> str:
