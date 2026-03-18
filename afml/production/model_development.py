@@ -88,7 +88,7 @@ from pathlib import Path
 from scipy.stats import uniform
 from sklearn import clone
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
@@ -111,7 +111,7 @@ from ..sample_weights.optimized_attribution import get_weights_by_time_decay_opt
 from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
 from ..util.misc import date_conversion, value_counts_data
-from ..util.pipelines import make_custom_pipeline, set_pipeline_params
+from ..util.pipelines import make_custom_pipeline, set_pipeline_params, MyPipeline
 from .utils import ModelFileManager
 
 # ============================================================================
@@ -903,24 +903,51 @@ class ModelDevelopmentPipeline:
         self.preprocessed_features = preprocessor.fit_transform(enhanced)
         self.events = self.events.loc[self.preprocessed_features.index]
 
-    def train_model(self):
-        self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
-        pipe = clone(self.model_params["pipe_clf"])
 
-        if is_tree(pipe.steps[-1][-1]):
-            pipe = set_pipeline_params(pipe, max_samples=self.events["tW"].mean())
+	def train_model(self):
+    	"""
+    	Dispatch to the appropriate HPO backend.
+		
+    	When use_optuna=True:
+     	   - optimize_trading_model is called with the base estimator and events.
+     	   - FinancialModelSuggester wraps it in _WeightedEstimator per trial.
+     	   - weight_scheme, weight_decay, and weight_linear are jointly optimized.
+     	   - Return-attribution weights (events['w']) always used for scoring.
+     	   - FinancialModelSuggester.apply_from_params handles the final refit.
+     	   - self.study is populated for post-study visualization.
+		
+    	When use_optuna=False:
+     	   - clf_hyper_fit is called with the pre-computed sample_weight.
+     	   - Behavior is identical to the original pipeline.
+    	"""
+  	  self.model_params['pipe_clf'] = make_custom_pipeline(self.model_params['pipe_clf'])
+   	 pipe = clone(self.model_params['pipe_clf'])
+        
+        if bagging_n_estimators > 0:
+            if self.model_params["bagging_max_samples"] == 1.0:
+                av_uniqueness = self.events['tW'].mean()
+                self.model_params["bagging_max_samples"] = av_uniqueness
+                logger.info(f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})")
+        elif isinstance(pipe.steps[-1][-1], RandomForestClassifier):
+    	    av_uniqueness = self.events['tW'].mean()
+    	    pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
 
-        if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
-            pipe = set_pipeline_params(pipe, samples_info_sets=self.events["t1"], price_bars_index=self.bar_data.index)
+    	if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
+    	    pipe = set_pipeline_params(
+    	        pipe,
+    	        samples_info_sets=self.events['t1'],
+    	        price_bars_index=self.bar_data.index,
+    	    )
 
-        self.model_params["pipe_clf"] = pipe
-        if self.model_params.get("use_optuna", False):
-            self._train_model_optuna(pipe)
-        else:
-            self._train_model_sklearn(pipe)
+    	self.model_params['pipe_clf'] = pipe
 
-        self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
-        self.completed_steps["model_training"] = True
+    	if self.model_params.get('use_optuna', False):
+     	   self._train_model_optuna(pipe)
+    	else:
+     	   self._train_model_sklearn(pipe)
+
+    	self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
+ 	   self.completed_steps['model_training'] = True
 
     def _train_model_sklearn(self, pipe):
         params = {k: v for k, v in self.model_params.items() if k not in ("use_optuna", "n_trials", "optuna_timeout")}
@@ -968,13 +995,47 @@ class ModelDevelopmentPipeline:
             refit=True,
             **opt_params,
         )
+        
+		logger.info(
+  	      f"Optuna complete. Best score: {self.study.best_value:.4f}  "
+  	      f"Best params: {self.study.best_params}"
+ 	   )
+		best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)        
+ 
+		# Handle bagging if requested
+   	 if bagging_n_estimators > 0:
+       	 # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
+      	  base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
 
-        self.best_model = Pipeline([("clf", self.study.best_estimator_)])
+        	# Create and fit bagging classifier
+        	bag = BaggingClassifier(
+         	   estimator=MyPipeline(base_estimator.steps),
+          	  n_estimators=int(bagging_n_estimators),
+          	  max_samples=bagging_max_samples,
+          	  max_features=bagging_max_features,
+          	  n_jobs=n_jobs,
+          	  random_state=random_state,
+        	)
+
+        	# Fit bagging classifier with sample_weight
+            bag.fit(features, labels, sample_weight=self.study.best_estimator_.sample_weight_)
+            bag.estimator = Pipeline(bag.estimator.steps)
+        	self.best_model = Pipeline([("bag", bag)])
+    	else:
+     	   self.best_model = Pipeline(best_estimator.steps)       
+         
         self.cv_results = {
-            "best_params": self.study.best_params,
-            "best_score":  self.study.best_value,
-            "cv_results":  cv_results_df,
-        }
+        	'best_params': self.study.best_params,
+     	   'best_score': self.study.best_value,
+      	  'cv_results': cv_results_df,
+       	 'scoring': 'f1' if set(y.unique()) == {0, 1} else 'neg_log_loss',
+       	 'search_method': 'optuna',
+       	 'pruner_type': pruner_type,
+       	 'n_trials_completed': len([t for t in self.study.trials
+                                    if t.state.name == 'COMPLETE']),
+       	 'n_trials_pruned': len([t for t in self.study.trials
+                                    if t.state.name == 'PRUNED']),
+  	  }
 
     def analyze_features(self):
         feat_names = self._get_feature_names()
