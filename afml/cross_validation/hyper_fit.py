@@ -5,7 +5,7 @@ from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 
 from ..cache.unified_cache_system import (
-    cacheable,
+    cv_cacheable,
     create_cacheable_param_grid,
     reconstruct_param_grid,
 )
@@ -167,14 +167,15 @@ def clf_hyper_fit(
             bag.fit(features, labels, sample_weight=fit_params["sample_weight"])
         else:
             bag.fit(features, labels)
-
+        
+        bag.estimator = Pipeline(bag.estimator.steps)
         bag = Pipeline([("bag", bag)])
         return bag, cv_results
     else:
         return Pipeline(best_estimator.steps), cv_results
 
 
-@cacheable()
+@cv_cacheable
 def clf_hyper_fit_internal(
     features,
     labels,
