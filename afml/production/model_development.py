@@ -18,7 +18,6 @@ When use_optuna=True the following changes apply:
     get_optimal_sample_weight is still run for meta-features and reporting.
   - train_model dispatches to _train_model_optuna.
   - self.study is populated with the completed Optuna study for visualization.
-  - Refit uses FinancialModelSuggester.apply_from_params (deterministic).
 
 Architecture Overview:
 This pipeline represents a production-grade implementation of the "Advances in 
@@ -100,7 +99,6 @@ from ..cross_validation import PurgedKFold, clf_hyper_fit
 from ..cross_validation.cross_validation import ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
 from ..cross_validation.optuna_hyper_fit import (
-    FinancialModelSuggester,
     optimize_trading_model,
     optuna_to_cv_results,
 )
@@ -738,7 +736,7 @@ class ModelDevelopmentPipeline:
                     Toggles Bayesian HPO (True) vs. Grid/Random Search (False).
                 - n_trials : (int, if Optuna=True)
                     Number of Optuna trials.
-                - optuna_timeout : (int, if Optuna=True)
+                - timeout : (int, if Optuna=True)
                     Time limit in seconds for HPO.                  
                 - verbose : int, default=0
                     Controls verbosity of output.
@@ -931,7 +929,7 @@ class ModelDevelopmentPipeline:
     def _train_model_optuna(self, pipe):
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = pipe.steps[-1][1]
-        opt_params = {k: v for k, v in self.model_params.items() if k in ("n_trials", "optuna_timeout", "pruner_type", "param_grid")}
+        opt_params = {k: v for k, v in self.model_params.items() if k in ("n_trials", "timeout", "pruner_type", "param_grid")}
         # ── Study name: globally unique within the strategy's DB ────────────────
         # Encodes every dimension that distinguishes one experiment from another.
         # The config_hash (last segment of base_dir) is deterministic for the
@@ -955,11 +953,10 @@ class ModelDevelopmentPipeline:
     
         self.study, cv_results_df = optimize_trading_model(
             classifier=base_clf, X=X, y=y, events=self.events, data_index=self.bar_data.index, 
-            n_splits=self.cv_splits, **opt_params, refit=False
+            n_splits=self.cv_splits, **opt_params, refit=True
         )
 
-        best_est = FinancialModelSuggester.apply_from_params(self.study.best_params, base_clf, self.events, self.bar_data.index)
-        best_est.fit(X, y)
+        best_est = self.study.best_estimator_
         self.best_model = Pipeline([("clf", best_est)])
         self.cv_results = {"best_params": self.study.best_params, "best_score": self.study.best_value, "cv_results": cv_results_df}
 
