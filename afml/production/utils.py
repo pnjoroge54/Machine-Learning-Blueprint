@@ -354,7 +354,7 @@ class ConfigPathGenerator:
         # This keeps the DB at a human-navigable level and makes optuna-dashboard
         # useful across experiments without burying the file 8 levels deep.
         strategy_key = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
-        db_path = self.base_dir / strategy_key / "optuna_studies.db"
+        db_path = base_dir / strategy_key / "optuna_studies.db"
     
         return {
             "base_dir": base_dir,
