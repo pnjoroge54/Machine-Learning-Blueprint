@@ -340,7 +340,10 @@ def optimize_trading_model(
     sampler = TPESampler(seed=random_state)
 
     # Add a 30-second timeout for parallel workers
-    storage_url = f"sqlite:///{db_path}.db?timeout=30"
+			if str(db_path).startswith("sqlite") and str(db_path).endswith("db"):
+			    storage_url = f"{db_path}?timeout=30"
+    else:
+        storage_url = f"sqlite:///{db_path}.db?timeout=30"
     
     try:
         study = optuna.create_study(
