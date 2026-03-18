@@ -354,8 +354,10 @@ class ConfigPathGenerator:
         # This keeps the DB at a human-navigable level and makes optuna-dashboard
         # useful across experiments without burying the file 8 levels deep.
         strategy_key = self.sanitize_filename(config.get("strategy", "UnknownStrategy"))
-        db_path = base_dir / strategy_key / "optuna_studies.db"
-    
+        # Intentionally self.base_dir (root), not base_dir (config-hash leaf).
+        # The DB scope is the strategy, not the experiment.
+        db_path = self.base_dir / strategy_key / "optuna_studies.db"
+        
         return {
             "base_dir": base_dir,
             "model": base_dir / model_filename,
@@ -643,7 +645,7 @@ class ModelFileManager:
                                 model_data[key] = json.load(g)
                         except UnicodeDecodeError:
                             # f = Path(f).rename(f.replace(".json", ".pkl"))
-                            with open(f, "rb") as g:
+                            with open((f, "rb") as g:
                                 model_data[key] = cloudpickle.load(g)
                     elif f.endswith("pkl"):
                         with open(f, "rb") as g:
@@ -655,11 +657,4 @@ class ModelFileManager:
             result[barriers].setdefault(bar_size, {})
             result[barriers][bar_size][bar_type] = model_data
 
-            # key = date_range
-            # barriers = "_".join(fname.name.split(date_range)[1].split("_")[:-2])[1:]
-            # result.setdefault(key, {})
-            # result[key].setdefault(bar_size, {}).setdefault(bar_type, {})
-            # # result[key][bar_size].setdefault(bar_type, {})
-            # result[key][bar_size][bar_type].setdefault(barriers, model_data)
-
-        return result
+            return result
