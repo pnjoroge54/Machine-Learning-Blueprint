@@ -51,6 +51,23 @@ def _generate_random_features(random_state, bootstrap, n_population, n_samples):
     return indices
 
 
+def _get_feature_count(max_features, n_features):
+    """Convert max_features to an integer count."""
+    if isinstance(max_features, str):
+        if max_features == "sqrt":
+            return int(np.sqrt(n_features))
+        elif max_features == "log2":
+            return int(np.log2(n_features))
+        else:
+            raise ValueError(f"Invalid string for max_features: {max_features}")
+    elif isinstance(max_features, numbers.Integral):
+        return max_features
+    elif isinstance(max_features, numbers.Real):
+        return int(round(max_features * n_features))
+    else:
+        raise TypeError(f"max_features must be int, float, or str, got {type(max_features)}")
+
+
 def _generate_bagging_indices(
     random_state,
     bootstrap_features,
@@ -80,15 +97,8 @@ def _generate_bagging_indices(
 
     # Draw feature indices only if bootstrap_features is True
     if bootstrap_features:
-        if isinstance(max_features, numbers.Integral):
-            n_feat = max_features
-        elif isinstance(max_features, numbers.Real):
-            n_feat = int(round(max_features * n_features))
-        else:
-            raise ValueError(
-                "max_features must be int or float when bootstrap_features=True"
-            )
-
+        n_feat = _get_feature_count(max_features, n_features)
+    
         feature_indices = _generate_random_features(
             random_state_obj, bootstrap_features, n_features, n_feat
         )
@@ -191,7 +201,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
     max_samples : int or float, optional (default=1.0)
         If int, the exact number of training rows drawn per estimator; if float in
         (0, 1], the fraction of the training set drawn per estimator.
-    max_features : int or float or None, optional (default=None)
+    max_features : int, float or {“sqrt”, “log2”}, optional (default=None)
         If None and bootstrap_features is True, the full feature set is sampled
         (with replacement). If int, draw exactly `max_features` columns per
         estimator. If float in (0, 1], draw that fraction of the total feature
