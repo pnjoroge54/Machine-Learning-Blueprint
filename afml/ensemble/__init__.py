@@ -4,6 +4,8 @@ from .sb_bagging import (
     SequentiallyBootstrappedBaggingClassifier,
     SequentiallyBootstrappedBaggingRegressor,
 )
+from .utils import train_bagging_ensemble
+
 
 __all__ = [
     "main_mc",
@@ -11,4 +13,5 @@ __all__ = [
     "SequentiallyBootstrappedBaggingRegressor",
     "compute_custom_oob_metrics",
     "estimate_ensemble_size",
+    "train_bagging_ensemble",
 ]
