@@ -104,6 +104,7 @@ from ..cross_validation.optuna_hyper_fit import (
 )
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from ..ensemble.utils import train_bagging_ensemble
 from ..features.trading_session import get_time_features
 from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
 from ..mt5.tick_data_loader import tick_data_loader as loader 
@@ -352,6 +353,11 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
         linear=True,
         **params,
     ):
+        from sklearn.utils.validation import has_fit_parameter
+
+        if not has_fit_parameter(base_estimator, "sample_weight"):
+            raise TypeError("The base estimator must accept sample_weight.")
+
         self.base_estimator = base_estimator
         self.base_estimator.set_params(**params)
         self.scheme = scheme
