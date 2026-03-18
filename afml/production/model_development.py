@@ -3,11 +3,15 @@ model_development.py
 --------------------
 Production model development pipeline with optional Optuna HPO integration.
 
+This module serves as the central orchestrator for the Machine Learning Blueprint,
+integrating high-performance data processing, advanced labeling techniques, 
+and rigorous cross-validation protocols designed for non-IID financial data.
+
 The pipeline now supports two training paths controlled by
 `model_params['use_optuna']`:
 
-    False (default): clf_hyper_fit via GridSearchCV / RandomizedSearchCV
-    True:            optimize_trading_model via Optuna + HyperbandPruner
+    False (default): clf_hyper_fit via GridSearchCV / RandomizedSearchCV.
+    True:            optimize_trading_model via Optuna + HyperbandPruner.
 
 When use_optuna=True the following changes apply:
   - Weight computation for HPO is handled internally by _WeightedEstimator;
@@ -21,6 +25,53 @@ This pipeline represents a production-grade implementation of the "Advances in
 Financial Machine Learning" (AFML) framework. It orchestrates the complex 
 interaction between labeling, sample weighting, and cross-validation while 
 maintaining rigorous data integrity through time-aware caching.
+
+Key AFML Methodologies Implemented:
+----------------------------------
+1. Triple-Barrier Method (TBM):
+   Moves beyond fixed-horizon labeling by utilizing dynamic profit-taking, 
+   stop-loss, and time-exhaustion barriers. This captures the path-dependency 
+   essential for realistic trading strategy modeling.
+
+2. Sample Weighting & Time Decay:
+   Addresses the issue of overlapping outcomes in financial time series. 
+   The pipeline searches for optimal weights using:
+     - Uniqueness (tW): Weights inverse to the concurrency of labels.
+     - Return (w): Weights based on the absolute magnitude of the price move.
+     - Time Decay: Both linear and exponential decay to prioritize recent data.
+
+3. Purged & Embargoed Cross-Validation:
+   Prevents information leakage by removing training observations that overlap 
+   with the test set (purging) and adding a buffer following the test set 
+   (embargo) to account for serial correlation.
+
+4. Meta-Feature Engineering:
+   The pipeline calculates rolling performance metrics (Accuracy, Precision, 
+   Recall, F1) using Numba-accelerated functions. These "self-referential" 
+   metrics are fed back into the model, allowing it to adapt to changing 
+   market regimes and its own recent performance.
+
+Performance Optimizations:
+-------------------------
+- Numba JIT Compilation: High-frequency rolling metrics and weight attributions 
+  are offloaded to parallelized C-level code for maximum throughput.
+- Time-Aware Caching: Utilizes a custom hashing mechanism to ensure that 
+  feature engineering and data loading are only re-computed when the 
+  underlying data or parameters change, effectively eliminating look-ahead bias.
+- Memory Management: Efficient use of Parquet for artifact storage and 
+  DataFrame pruning via constant and duplicate feature removal.
+
+Pipeline Workflow:
+-----------------
+1. Data Loading: Fetches tick data and constructs specialized bars.
+2. Feature Engineering: Generates primary indicators and time-based features.
+3. Label Generation: Applies the Triple-Barrier Method to define 'bin' targets.
+4. Weight Optimization: Evaluates multiple weighting schemes to find the best 
+   fit for the current market environment.
+5. Meta-Feature Integration: Joins rolling performance metrics to the feature set.
+6. Training/HPO: Executes either Scikit-learn or Optuna-based hyperparameter 
+   optimization with Purged-KFold validation.
+7. Reporting: Generates HTML summaries and hyperparameter importance reports.
 """
 
 import inspect
@@ -96,6 +147,28 @@ def load_and_prepare_training_data(
     """
     Load tick data and construct bars for training.
 
+    Parameters
+    ----------
+    symbol : str
+        Trading instrument symbol.
+    start_date : str
+        Training start date ('YYYY-MM-DD').
+    end_date : str
+        Training end date ('YYYY-MM-DD').
+    account_name : str
+        MT5 account identifier.
+    bar_type : str
+        Type of bar ('tick', 'volume', 'time').
+    bar_size : int or str
+        Bar size. If 'tick' and str, converted via `get_bar_size`.
+    price : str
+        Price type ('bid', 'ask', 'mid_price', 'bid_ask').
+
+    Returns
+    -------
+    pd.DataFrame
+        Constructed bars indexed by timestamp.
+
     Notes
     -----
     - Logs data access for contamination tracking.
@@ -128,6 +201,30 @@ def create_feature_engineering_pipeline(
     """
     Compute engineered features with caching.
 
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Input bar data.
+    feature_config : dict
+        Feature configuration.
+        Expected keys:
+        - func : callable
+            Function that computes features from a DataFrame.
+        - params : dict
+            Parameters passed to `func`.
+    data_config:
+        Data configuration.
+        Expected keys:
+        - bar_size : str
+            Bar size using MT5 naming conventions, e.g., M1, H1, D1.
+        - bar_type : str
+            Bar type should be one of "time", "tick", "volume", "dollar"
+
+    Returns
+    -------
+    pd.DataFrame
+        Feature matrix.
+
     Notes
     -----
     - Prevents data leakage via time-aware caching.
@@ -155,8 +252,41 @@ def generate_events_triple_barrier(
 ) -> pd.DataFrame:
     """
     Generate trading events using the triple-barrier method.
-    Superior to standard fixed-horizon labeling by accounting for price 
-    targets and stop-losses.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Price bars with 'close' column.
+    strategy : BaseStrategy
+        Strategy instance implementing `generate_signals()`.
+    target_config : int
+        Lookback window for volatility estimation.
+    profit_target : float, default=1
+        Profit-taking threshold multiplier.
+    stop_loss : float, default=1
+        Stop-loss threshold multiplier.
+    max_holding_period : dict, default={'days': 1}
+        Maximum holding period for vertical barrier.
+    min_ret : float, default=0.0
+        Minimum return threshold.
+    vertical_barrier_zero : bool, default=True
+        Set label to zero if vertical barrier is reached.
+    filter_as_series : bool, default=True
+        Pass volatility threshold as series instead of scalar.
+    on_crossover : bool, default=True
+        Whether strategy expects crossover for signal
+    Returns
+    -------
+    pd.DataFrame
+        Event labels with columns:
+        - 'bin' : {-1, 0, 1} classification
+        - 't1'  : vertical barrier timestamps
+        - 'w'   : sample weights
+        - 'tW'  : uniqueness weights
+
+    Notes
+    -----
+    - Prevents data leakage via time-aware caching.
     """
     data_dict = dict(
         open=data["open"], high=data["high"], low=data["low"],
@@ -203,7 +333,16 @@ def generate_events_triple_barrier(
 # ============================================================================
 
 class _WeightedEstimator(BaseEstimator, ClassifierMixin):
-    """Static class for weighted estimators - essential for caching."""
+    """
+    A transparency wrapper for scikit-learn estimators to support AFML weights.
+
+    Technical Constraints:
+    - Required for seamless integration with Scikit-learn's Pipeline and 
+      GridSearchCV/Optuna, which do not always pass 'sample_weight' through 
+      standard 'fit' calls in complex nested structures.
+    - Manages the internal application of 'Time Decay' and 'Uniqueness' 
+      weights at the moment of training.
+    """
 
     def __init__(
         self,
@@ -328,9 +467,13 @@ def _rolling_metrics_numba(y_true, y_pred, weights, window):
 @cacheable()
 def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     """
-    Calculate rolling performance metrics with Numba acceleration.
-    Enables meta-labeling by allowing the model to 'know' its own recent accuracy.
+    Generates self-referential 'Meta-Features' for the model.
+
+    By observing its own recent performance metrics as input features, the 
+    primary model can learn to 'size down' or avoid trades during periods 
+    where its recent accuracy or F1-score is declining (Meta-Labeling concept).
     """
+
     y_true = events["bin"].to_numpy(np.int8)
     y_pred = np.ones(len(y_true), dtype=np.int8)
     weights = sample_weight.to_numpy(np.float32)
@@ -385,13 +528,47 @@ def get_optimal_sample_weight(
     events: pd.DataFrame,
     features: pd.DataFrame,
     cv_splits: int = 5,
-    linear: bool = None,
-    decay_factors: Union[list, np.ndarray] = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9],
+    **kwargs
 ) -> pd.Series:
     """
-    Compute best sample weight with time decay.
-    Searches for best weighting scheme (return, uniqueness, or time-decay).
+    Search-based optimization for sample weighting schemes.
+
+    Financial Rationale:
+    Financial observations are rarely IID. This function conducts a systematic 
+    search to find the weighting scheme that yields the highest cross-validated 
+    performance, effectively 'de-noising' the dataset.
+
+    Evaluated Schemes:
+    1. Uniqueness (tW): Weights samples based on how little they overlap with 
+       other concurrent labels.
+    2. Return (w): Weights samples by the absolute log-return of the outcome.
+    3. Time-Decay: Applies linear or exponential decay to prioritize recent 
+       market structure over distant history.
+
+    Parameters
+    ----------
+    data_index: pd.DatetimeIndex
+        Price data index.
+    events : pd.DataFrame
+        Event labels with uniqueness weights.
+    features: pd.DataFrame
+        Training features
+    cv_splits : int, optional
+        Number of cross-validation splits (default: 5).
+    linear : bool, optional
+        Default is None, which seraches both linear and exponential time-decay. 
+        If True, use linear time-decay, if False, exponential.
+    decay_factors: Union[list, np.ndarray]
+        Time-decay factors to apply to best sample weight.
+
+    Returns
+    -------
+    weights : pd.Series
+        Computed sample weights.
+    cv_results : dict
+        Cross-validation results.
     """
+
     valid_index = features.index.intersection(events.index)
     cont = events.loc[valid_index]
     X = features.loc[valid_index]
@@ -460,17 +637,21 @@ def get_optimal_sample_weight(
 
 class ModelDevelopmentPipeline:
     """
-    Encapsulates the entire production model development pipeline.
+    The central production controller for Model Training and HPO.
 
-    Supports two HPO backends:
-        False (default): Uses clf_hyper_fit (GridSearchCV / RandomizedSearchCV).
-        True: Uses optimize_trading_model (Optuna + HyperbandPruner).
+    This class encapsulates the state of the model development lifecycle, 
+    ensuring that hyperparameters, feature names, and evaluation metrics 
+    are kept in sync with the physical artifacts saved to disk.
 
-    Key Features:
-    - Time-Aware Caching: Prevents look-ahead bias and redundant computation.
-    - Purged Cross-Validation: Avoids leakage from serially correlated labels.
-    - Meta-Feature Integration: Self-referential performance metrics.
-    - Artifact Management: Unified saving of models, weights, and metrics.
+    Core Responsibilities:
+    - Pre-processing: Removes constant and duplicate features to reduce 
+      model variance and training time.
+    - Backend Switching: Transparently toggles between Scikit-learn (Grid) 
+      and Optuna (Bayesian) optimization based on 'use_optuna' config.
+    - Artifact Management: Automatically organizes models, parquet data, 
+      and HTML reports into a versioned directory structure.
+    - Analysis: Triggers feature importance calculation and automated 
+      contamination reports after every successful run.
     """
 
     def __init__(
@@ -483,6 +664,88 @@ class ModelDevelopmentPipeline:
         model_params: dict,
         base_dir: str = "Models",
     ):
+        """
+        Initialize the pipeline with configuration parameters.
+
+        Parameters
+        ----------
+        data_config : dict
+            Bar construction configuration.
+            - symbol : str
+                Trading instrument symbol.
+            - start_date : str
+                Training start date ('YYYY-MM-DD').
+            - end_date : str
+                Training end date ('YYYY-MM-DD').
+            - account_name : str
+                Name of trading account
+            - bar_type : str
+                Type of bar ('tick', 'volume', 'time').
+            - bar_size : str
+                Bar size specification (e.g., 'M1', 'M5').
+            - price : str
+                Price type ('bid', 'ask', 'mid_price', 'bid_ask').
+            - path : Union[str, Path] = None
+                Path to data folder. If None uses default, Path.home() / "tick_data_parquet"
+        strategy : BaseStrategy
+            Signal generating strategy.
+        feature_config : dict
+            Feature engineering configuration.
+            - func: Feature engineering function
+            - params: Function parameters
+        target_config : dict
+            Volatility target configuration.
+            - func: Volatility target function
+            - params: Function parameters
+        label_config : dict
+            Triple-barrier labeling configuration.
+            - profit_target : float
+            - stop_loss : float
+            - max_holding_period : int
+            - min_ret : float
+            - vertical_barrier_zero : bool
+            - filter_as_series : bool
+        model_params : dict
+            Model training configuration.
+                - pipe_clf : BaseEstimator or sklearn.pipeline.Pipeline or MyPipeline
+                    A BaseEstimator or Pipeline containing preprocessing and classification steps.
+                - param_grid : dict or list of dicts
+                    Hyperparameter grid for search. Keys should include pipeline step
+                    names as prefixes (e.g., 'classifier__max_depth').
+                - cv : int, default=5
+                    Number of folds for purged k-fold cross-validation.
+                - bagging_n_estimators : int, default=0
+                    Number of base estimators in bagging ensemble. If 0, no bagging
+                    is applied and the best single estimator is returned. If > 0,
+                    returns a BaggingClassifier fitted on the full dataset.
+                - bagging_max_samples : float or int, default=1.0
+                    For bagging: fraction (if float in (0, 1]) or number (if int) of
+                    samples to draw for each base estimator.
+                - bagging_max_features : float or int, default=1.0
+                    For bagging: fraction (if float in (0, 1]) or number (if int) of
+                    features to draw for each base estimator.
+                - rnd_search_iter : int, default=0
+                    If 0, uses GridSearchCV (exhaustive search). If > 0, uses
+                    RandomizedSearchCV with this many iterations.
+                - n_jobs : int, default=-1
+                    Number of parallel jobs. -1 uses all available cores.
+                - pct_embargo : float, default=0.02
+                    Percentage of samples to embargo in test folds to prevent leakage
+                    from serially correlated labels. Range: [0, 1).
+                - random_state : int, RandomState instance or None, default=None
+                    Random state for reproducibility.           
+                - use_optuna : bool, default=False
+                    Toggles Bayesian HPO (True) vs. Grid/Random Search (False).
+                - n_trials : (int, if Optuna=True)
+                    Number of Optuna trials.
+                - optuna_timeout : (int, if Optuna=True)
+                    Time limit in seconds for HPO.                  
+                - verbose : int, default=0
+                    Controls verbosity of output.
+        base_dir: str
+            Path to save pipeline data
+        """
+        
         self.data_config = data_config
         self.symbol = data_config["symbol"]
         self.train_start = data_config["start_date"]
@@ -553,6 +816,27 @@ class ModelDevelopmentPipeline:
         export_onnx: bool = False,
         verbose: bool = True,
     ) -> Tuple:
+        """
+        Run the complete model development pipeline with integrated reporting.
+
+        Parameters
+        ----------
+        generate_reports : bool, optional
+            Generate analysis reports (default: True).
+        cache_reports : bool, optional
+            Display cache performance reports (default: False).
+        save : bool, optional
+            Save model and artifacts (default: True).
+        export_onxx : bool, optional
+            Export model to ONNX format (default: False).
+        verbose : bool, optional
+            Print progress information (default: True).
+
+        Returns
+        -------
+        tuple
+            (best_model, features_columns, metrics, config)
+        """
         time0 = time.time()
         self.export_onnx = export_onnx
         use_optuna = self.model_params.get("use_optuna", False)
@@ -647,7 +931,9 @@ class ModelDevelopmentPipeline:
     def _train_model_optuna(self, pipe):
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = pipe.steps[-1][1]
-        opt_params = {k: v for k, v in self.model_params.items() if k in ("n_trials", "optuna_timeout", "pruner_type", "study_name", "db_path", "param_grid")}
+        opt_params = {k: v for k, v in self.model_params.items() if k in ("n_trials", "optuna_timeout", "pruner_type", "param_grid")}
+        opt_params["study_name"] = self.strategy.get_strategy_name()
+        opt_params["db_path"] = self.file_paths["db_path"]
         
         self.study, cv_results_df = optimize_trading_model(
             classifier=base_clf, X=X, y=y, events=self.events, data_index=self.bar_data.index, 
