@@ -736,8 +736,11 @@ class ModelDevelopmentPipeline:
                     Toggles Bayesian HPO (True) vs. Grid/Random Search (False).
                 - n_trials : (int, if Optuna=True)
                     Number of Optuna trials.
-                - timeout : (int, if Optuna=True)
-                    Time limit in seconds for HPO.                  
+                - optuna_timeout : (int, if Optuna=True)
+                    Time limit in seconds for HPO.
+                - pruner_type : (str, if Optuna=True, default="hyperband")
+                    Model used for pruning. Options are "hyperband" and "median".
+                    If any other value, SuccessiveHalvingPruner is used.
                 - verbose : int, default=0
                     Controls verbosity of output.
         base_dir: str
@@ -929,11 +932,18 @@ class ModelDevelopmentPipeline:
     def _train_model_optuna(self, pipe):
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = pipe.steps[-1][1]
-        opt_params = {k: v for k, v in self.model_params.items() if k in ("n_trials", "timeout", "pruner_type", "param_grid")}
-        # ── Study name: globally unique within the strategy's DB ────────────────
-        # Encodes every dimension that distinguishes one experiment from another.
-        # The config_hash (last segment of base_dir) is deterministic for the
-        # same config dict, so the same experiment always resumes its own study.
+
+        opt_params = {}
+        for k, v in self.model_params.items():
+            if k == "param_grid":
+                opt_params["param_distributions"] = v
+            elif k in ("n_trials", "pruner_type", "timeout"):
+                opt_params[k] = v
+
+        # ── FIX 2: study_name encodes every experiment dimension ─────────────────
+        # The config_hash is the last path segment of base_dir — a deterministic
+        # MD5 of the full config dict. The same experiment always maps to the same
+        # study, so a crashed run resumes exactly where it left off.
         config_hash = self.file_paths["base_dir"].name   # 8-char md5 suffix
         opt_params["study_name"] = (
             f"{self.strategy.get_strategy_name()}"
@@ -941,24 +951,30 @@ class ModelDevelopmentPipeline:
             f"_{self.data_config.get('bar_type', 'unk')}"
             f"_{self.data_config.get('bar_size', 'unk')}"
             f"_{config_hash}"
-    )
-    
-
-        # ── SQLite URI: built from the Path object in file_paths ────────────────
-        # Ensure the strategy-level directory exists (it does, but be explicit).
-        db_path: Path = self.file_paths["db_path"]
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        # Use resolve() so the URI is always absolute — Optuna requires this.
-        opt_params["db_path"] = f"sqlite:///{db_path.resolve()}"
-    
-        self.study, cv_results_df = optimize_trading_model(
-            classifier=base_clf, X=X, y=y, events=self.events, data_index=self.bar_data.index, 
-            n_splits=self.cv_splits, **opt_params, refit=True
         )
 
-        best_est = self.study.best_estimator_
-        self.best_model = Pipeline([("clf", best_est)])
-        self.cv_results = {"best_params": self.study.best_params, "best_score": self.study.best_value, "cv_results": cv_results_df}
+        # ── FIX 1: db_path now exists in file_paths (added to utils.py) ─────────
+        # Build the SQLite URI with an absolute path so it is correct regardless
+        # of the working directory at runtime.
+        db_path: Path = self.file_paths["db_path"]
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        opt_params["db_path"] = f"sqlite:///{db_path.resolve()}"
+
+        # ── Run the study (refit=True: handled internally) ───────────────────
+        self.study, cv_results_df = optimize_trading_model(
+            classifier=base_clf, X=X, y=y, events=self.events,
+            data_index=self.bar_data.index,
+            n_splits=self.cv_splits,
+            refit=True,
+            **opt_params,
+        )
+
+        self.best_model = Pipeline([("clf", self.study.best_estimator_)])
+        self.cv_results = {
+            "best_params": self.study.best_params,
+            "best_score":  self.study.best_value,
+            "cv_results":  cv_results_df,
+        }
 
     def analyze_features(self):
         feat_names = self._get_feature_names()
