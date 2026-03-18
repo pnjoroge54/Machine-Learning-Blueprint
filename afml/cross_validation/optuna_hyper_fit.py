@@ -340,8 +340,8 @@ def optimize_trading_model(
     sampler = TPESampler(seed=random_state)
 
     # Add a 30-second timeout for parallel workers
-			if str(db_path).startswith("sqlite") and str(db_path).endswith("db"):
-			    storage_url = f"{db_path}?timeout=30"
+    if str(db_path).startswith("sqlite") and str(db_path).endswith("db"):
+        storage_url = f"{db_path}?timeout=30"
     else:
         storage_url = f"sqlite:///{db_path}.db?timeout=30"
     
@@ -375,9 +375,9 @@ def optimize_trading_model(
             timeout=timeout, 
             callbacks=[print_best_trial, save_intermediate_results, check_for_overfitting]
         )
-
+        
+        # Reconstruct best model from best params
         if refit:
-            # Reconstruct best model from best params
             best_trial = study.best_trial
             best_model = FinancialModelSuggester.apply_from_params(
                 best_trial.params, classifier, events, data_index
