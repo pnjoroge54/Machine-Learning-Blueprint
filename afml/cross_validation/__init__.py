@@ -9,10 +9,11 @@ from .combinatorial import CombinatorialPurgedCV, CPCVAnalyzer, fill_sides_numba
 from .cross_validation import (PurgedKFold, PurgedSplit, PurgedWalkForwardCV,
                                analyze_cross_val_scores, ml_cross_val_score,
                                ml_get_train_times)
-from .hyper_fit import clf_hyper_fit, clf_hyper_fit_cached 
-from .scoring import probability_weighted_accuracy
-
+from .hyper_fit import clf_hyper_fit, clf_hyper_fit_cached
 from .hyper_fit_analysis import generate_complete_hyperparameter_report
+from .optuna_hyper_fit import (FinancialModelSuggester, optimize_trading_model,
+                               print_best_trial, check_for_overfitting, save_intermediate_results)
+from .scoring import probability_weighted_accuracy
 
 scoring_methods = {
     "accuracy": accuracy_score,
@@ -39,4 +40,9 @@ __all__ = [
     "CPCVAnalyzer",
     "scoring_methods",
     "generate_complete_hyperparameter_report",
+    "FinancialModelSuggester",
+    "optimize_trading_model",
+    "print_best_trial",
+    "check_for_overfitting",
+    "save_intermediate_results",
 ]

@@ -100,10 +100,8 @@ from ..cross_validation import PurgedKFold, clf_hyper_fit
 from ..cross_validation.cross_validation import ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
 from ..cross_validation.optuna_hyper_fit import (
-    check_for_overfitting,
     optimize_trading_model,
     optuna_to_cv_results,
-    print_best_trial,
 )
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier

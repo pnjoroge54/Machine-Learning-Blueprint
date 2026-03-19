@@ -19,8 +19,7 @@ from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 
-from afml.cross_validation.cross_validation import PurgedKFold
-from afml.production.model_development import _WeightedEstimator
+from .cross_validation import PurgedKFold
 
 
 class FinancialModelSuggester:
@@ -32,7 +31,8 @@ class FinancialModelSuggester:
         suggest_and_apply  — Trial → params → model  (stochastic, used in objective)
         apply_from_params  — params → model           (deterministic, used for refit)
     """
-
+    from ..production.model_development import _WeightedEstimator
+    
     # ----- Central registry of weighting hyperparameters -----
     # Both methods reference this to separate weight keys from model keys.
     WEIGHT_KEYS = frozenset({"weight_scheme", "weight_decay", "weight_linear"})
@@ -301,6 +301,7 @@ def optimize_trading_model(
     pruner_type: str = "hyperband",
     metric: str = "neg_log_loss",
     study_name: str = None,
+    reports_path: str = None,
     db_path: str = None,
     random_state: int = 42,
     refit: bool = True,
@@ -323,9 +324,10 @@ def optimize_trading_model(
         n_trials (int): Maximum number of unique hyperparameter combinations to evaluate.
         timeout (int): Total search time limit in seconds.
         n_splits (int): Number of folds for PurgedKFold.
-        pruner_type (str): Pruning strategy ('median', 'hyperband', or 'successive_halving').
+        pruner_type (str): Pruning strategy ('median' or 'hyperband').
         metric (str): Optimization objective ('neg_log_loss' or 'f1').
         study_name (str): Name of Optuna study.
+        reports_path (str): Path to store intermediate trials.
         db_path (str): Path to store trials.      
         refit (bool): Fit best model on full data.
         
@@ -336,10 +338,8 @@ def optimize_trading_model(
     
     if pruner_type == "median":
         pruner = TradingModelPruner(y, sample_weight=events.loc[X.index, 'w']) 
-    elif pruner_type == "hyperband":
-        pruner = HyperbandPruner(min_resource=1, max_resource=n_splits, reduction_factor=3)
     else:
-        pruner = SuccessiveHalvingPruner()
+        pruner = HyperbandPruner(min_resource=1, max_resource=n_splits, reduction_factor=3)
 
     sampler = TPESampler(seed=random_state)
 
@@ -377,12 +377,17 @@ def optimize_trading_model(
                 trial, X, y, events, data_index, classifier,
                 param_distributions, n_splits, metric
             )
-    
+        
+        callbacks = [print_best_trial, check_for_overfitting]
+        if reports_path:
+            study.path = reports_path
+            callbacks += [save_intermediate_results]
+
         study.optimize(
             objective, 
             n_trials=n_trials, 
             timeout=timeout, 
-            callbacks=[*callbacks],
+            callbacks=callbacks
         )
         
         # Reconstruct best model from best params
