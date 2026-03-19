@@ -1,3 +1,81 @@
+"""
+File management utilities for model development pipelines.
+
+This module provides classes for organizing, generating, and persisting model
+artifacts (models, configurations, metrics, features, etc.) in a structured,
+human‑readable directory hierarchy. It ensures reproducible storage by deriving
+paths from experiment configurations and creating unique but navigable folder
+structures.
+
+Classes
+-------
+ConfigPathGenerator
+    Generates filenames and directory paths based on a configuration dictionary.
+    Creates human‑readable folder structures (strategy/symbol/account/bar type/bar size/date range/hash)
+    and provides methods for sanitizing text, creating config hashes, and building
+    standard file names for different artifact types (model, features, metrics, …).
+
+ModelFileManager
+    High‑level interface for setting up a model directory, saving/loading artifacts,
+    and finding existing models. Wraps the path generator and provides convenience
+    methods like `save_model()`, `save_metrics()`, `save_dataframe()`, and
+    `load_artifacts()`.
+
+Typical Usage
+-------------
+    config = {
+        "strategy": "my_strategy",
+        "symbol": "BTCUSD",
+        "bar_type": "minute",
+        "bar_size": 5,
+        "training_start": "2023-01-01",
+        "training_end": "2023-12-31",
+        "account_name": "live",
+        "profit_target": 0.02
+    }
+
+    # Initialize manager
+    mgr = ModelFileManager(base_dir="./Models")
+
+    # Create directory structure and obtain all file paths
+    paths = mgr.setup_model_directory(config)
+
+    # Save model and metrics
+    mgr.save_model(trained_model, metadata={"auc": 0.85})
+    mgr.save_metrics({"accuracy": 0.92, "f1": 0.89})
+
+    # Later, find all models for a given symbol
+    models = mgr.find_models({"symbol": "BTCUSD"})
+
+Directory Structure Example
+---------------------------
+Models/
+├── my_strategy/
+│   └── BTCUSD/
+│       └── live/
+│           └── minute/
+│               └── 5/
+│                   └── 20230101_20231231/
+│                       └── a1b2c3d4/               # config hash
+│                           ├── model_rf_...joblib
+│                           ├── config.json
+│                           ├── metrics_...json
+│                           ├── features_...parquet
+│                           ├── logs/
+│                           ├── plots/
+│                           ├── reports/
+│                           └── index.html
+
+Notes
+-----
+- All paths are built from the configuration, ensuring that identical
+  configurations produce the same hash and therefore land in the same directory.
+- Filenames include timestamps to avoid collisions when retraining with the
+  same configuration.
+- The module uses `cloudpickle` for serializing arbitrary Python objects and
+  `joblib` for scikit‑learn models.
+"""
+
 import hashlib
 import json
 import cloudpickle
