@@ -4,7 +4,7 @@ model_development.py
 Production model development pipeline with optional Optuna HPO integration.
 
 This module serves as the central orchestrator for the Machine Learning Blueprint,
-integrating high-performance data processing, advanced labeling techniques, 
+integrating high-performance data processing, advanced labeling techniques,
 and rigorous cross-validation protocols designed for non-IID financial data.
 
 The pipeline now supports two training paths controlled by
@@ -20,44 +20,44 @@ When use_optuna=True the following changes apply:
   - self.study is populated with the completed Optuna study for visualization.
 
 Architecture Overview:
-This pipeline represents a production-grade implementation of the "Advances in 
-Financial Machine Learning" (AFML) framework. It orchestrates the complex 
-interaction between labeling, sample weighting, and cross-validation while 
+This pipeline represents a production-grade implementation of the "Advances in
+Financial Machine Learning" (AFML) framework. It orchestrates the complex
+interaction between labeling, sample weighting, and cross-validation while
 maintaining rigorous data integrity through time-aware caching.
 
 Key AFML Methodologies Implemented:
 ----------------------------------
 1. Triple-Barrier Method (TBM):
-   Moves beyond fixed-horizon labeling by utilizing dynamic profit-taking, 
-   stop-loss, and time-exhaustion barriers. This captures the path-dependency 
+   Moves beyond fixed-horizon labeling by utilizing dynamic profit-taking,
+   stop-loss, and time-exhaustion barriers. This captures the path-dependency
    essential for realistic trading strategy modeling.
 
 2. Sample Weighting & Time Decay:
-   Addresses the issue of overlapping outcomes in financial time series. 
+   Addresses the issue of overlapping outcomes in financial time series.
    The pipeline searches for optimal weights using:
      - Uniqueness (tW): Weights inverse to the concurrency of labels.
      - Return (w): Weights based on the absolute magnitude of the price move.
      - Time Decay: Both linear and exponential decay to prioritize recent data.
 
 3. Purged & Embargoed Cross-Validation:
-   Prevents information leakage by removing training observations that overlap 
-   with the test set (purging) and adding a buffer following the test set 
+   Prevents information leakage by removing training observations that overlap
+   with the test set (purging) and adding a buffer following the test set
    (embargo) to account for serial correlation.
 
 4. Meta-Feature Engineering:
-   The pipeline calculates rolling performance metrics (Accuracy, Precision, 
-   Recall, F1) using Numba-accelerated functions. These "self-referential" 
-   metrics are fed back into the model, allowing it to adapt to changing 
+   The pipeline calculates rolling performance metrics (Accuracy, Precision,
+   Recall, F1) using Numba-accelerated functions. These "self-referential"
+   metrics are fed back into the model, allowing it to adapt to changing
    market regimes and its own recent performance.
 
 Performance Optimizations:
 -------------------------
-- Numba JIT Compilation: High-frequency rolling metrics and weight attributions 
+- Numba JIT Compilation: High-frequency rolling metrics and weight attributions
   are offloaded to parallelized C-level code for maximum throughput.
-- Time-Aware Caching: Utilizes a custom hashing mechanism to ensure that 
-  feature engineering and data loading are only re-computed when the 
+- Time-Aware Caching: Utilizes a custom hashing mechanism to ensure that
+  feature engineering and data loading are only re-computed when the
   underlying data or parameters change, effectively eliminating look-ahead bias.
-- Memory Management: Efficient use of Parquet for artifact storage and 
+- Memory Management: Efficient use of Parquet for artifact storage and
   DataFrame pruning via constant and duplicate feature removal.
 
 Pipeline Workflow:
@@ -65,10 +65,10 @@ Pipeline Workflow:
 1. Data Loading: Fetches tick data and constructs specialized bars.
 2. Feature Engineering: Generates primary indicators and time-based features.
 3. Label Generation: Applies the Triple-Barrier Method to define 'bin' targets.
-4. Weight Optimization: Evaluates multiple weighting schemes to find the best 
+4. Weight Optimization: Evaluates multiple weighting schemes to find the best
    fit for the current market environment.
 5. Meta-Feature Integration: Joins rolling performance metrics to the feature set.
-6. Training/HPO: Executes either Scikit-learn or Optuna-based hyperparameter 
+6. Training/HPO: Executes either Scikit-learn or Optuna-based hyperparameter
    optimization with Purged-KFold validation.
 7. Reporting: Generates HTML summaries and hyperparameter importance reports.
 """
@@ -107,7 +107,7 @@ from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..ensemble.utils import train_bagging_ensemble
 from ..features.trading_session import get_time_features
 from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
-from ..mt5.tick_data_loader import tick_data_loader as loader 
+from ..mt5.tick_data_loader import tick_data_loader as loader
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
 from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
@@ -336,10 +336,10 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
     A transparency wrapper for scikit-learn estimators to support AFML weights.
 
     Technical Constraints:
-    - Required for seamless integration with Scikit-learn's Pipeline and 
-      GridSearchCV/Optuna, which do not always pass 'sample_weight' through 
+    - Required for seamless integration with Scikit-learn's Pipeline and
+      GridSearchCV/Optuna, which do not always pass 'sample_weight' through
       standard 'fit' calls in complex nested structures.
-    - Manages the internal application of 'Time Decay' and 'Uniqueness' 
+    - Manages the internal application of 'Time Decay' and 'Uniqueness'
       weights at the moment of training.
     """
 
@@ -473,8 +473,8 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     """
     Generates self-referential 'Meta-Features' for the model.
 
-    By observing its own recent performance metrics as input features, the 
-    primary model can learn to 'size down' or avoid trades during periods 
+    By observing its own recent performance metrics as input features, the
+    primary model can learn to 'size down' or avoid trades during periods
     where its recent accuracy or F1-score is declining (Meta-Labeling concept).
     """
 
@@ -503,19 +503,19 @@ def best_weighting_scheme(
     scoring,
     sample_weight,
     scheme=None,
-    best_score=0, 
+    best_score=0,
     best_scheme=None,
     cv_results=pd.DataFrame(),
 ):
     scores = ml_cross_val_score(
-            classifier,
-            X,
-            y,
-            cv_gen,
-            sample_weight_train=sample_weight,
-            sample_weight_score=sample_weight,
-            scoring=scoring,
-        )
+        classifier,
+        X,
+        y,
+        cv_gen,
+        sample_weight_train=sample_weight,
+        sample_weight_score=sample_weight,
+        scoring=scoring,
+    )
     score = scores.mean()
     cv_results[scheme] = scores
 
@@ -538,15 +538,15 @@ def get_optimal_sample_weight(
     Search-based optimization for sample weighting schemes.
 
     Financial Rationale:
-    Financial observations are rarely IID. This function conducts a systematic 
-    search to find the weighting scheme that yields the highest cross-validated 
+    Financial observations are rarely IID. This function conducts a systematic
+    search to find the weighting scheme that yields the highest cross-validated
     performance, effectively 'de-noising' the dataset.
 
     Evaluated Schemes:
-    1. Uniqueness (tW): Weights samples based on how little they overlap with 
+    1. Uniqueness (tW): Weights samples based on how little they overlap with
        other concurrent labels.
     2. Return (w): Weights samples by the absolute log-return of the outcome.
-    3. Time-Decay: Applies linear or exponential decay to prioritize recent 
+    3. Time-Decay: Applies linear or exponential decay to prioritize recent
        market structure over distant history.
 
     Parameters
@@ -560,7 +560,7 @@ def get_optimal_sample_weight(
     cv_splits : int, optional
         Number of cross-validation splits (default: 5).
     linear : bool, optional
-        Default is None, which seraches both linear and exponential time-decay. 
+        Default is None, which seraches both linear and exponential time-decay.
         If True, use linear time-decay, if False, exponential.
     decay_factors: Union[list, np.ndarray]
         Time-decay factors to apply to best sample weight.
@@ -594,7 +594,7 @@ def get_optimal_sample_weight(
         "unweighted": pd.Series(1.0, index=cont.index),
         "uniqueness": cont["tW"],
     }
-    
+
     best_score, best_scheme = 0, None
     cv_results = pd.DataFrame()
     scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
@@ -603,10 +603,10 @@ def get_optimal_sample_weight(
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
         )
-    
+
     best_weight = weights[best_scheme]
     linear_search = [1, 0] if linear is None else ([1] if linear else [0])
-    
+
     time_decay_weights = {}
     for decay in decay_factors:
         for lin in linear_search:
@@ -619,7 +619,7 @@ def get_optimal_sample_weight(
             )
             scheme = f"{best_scheme}_{'linear' if lin else 'exp'}_{decay}"
             time_decay_weights[scheme] = best_weight * decay_vec
-    
+
     for scheme, weight in tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay for {best_scheme}"):
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
@@ -643,18 +643,18 @@ class ModelDevelopmentPipeline:
     """
     The central production controller for Model Training and HPO.
 
-    This class encapsulates the state of the model development lifecycle, 
-    ensuring that hyperparameters, feature names, and evaluation metrics 
+    This class encapsulates the state of the model development lifecycle,
+    ensuring that hyperparameters, feature names, and evaluation metrics
     are kept in sync with the physical artifacts saved to disk.
 
     Core Responsibilities:
-    - Pre-processing: Removes constant and duplicate features to reduce 
+    - Pre-processing: Removes constant and duplicate features to reduce
       model variance and training time.
-    - Backend Switching: Transparently toggles between Scikit-learn (Grid) 
+    - Backend Switching: Transparently toggles between Scikit-learn (Grid)
       and Optuna (Bayesian) optimization based on 'use_optuna' config.
-    - Artifact Management: Automatically organizes models, parquet data, 
+    - Artifact Management: Automatically organizes models, parquet data,
       and HTML reports into a versioned directory structure.
-    - Analysis: Triggers feature importance calculation and automated 
+    - Analysis: Triggers feature importance calculation and automated
       contamination reports after every successful run.
     """
 
@@ -737,7 +737,7 @@ class ModelDevelopmentPipeline:
                     Percentage of samples to embargo in test folds to prevent leakage
                     from serially correlated labels. Range: [0, 1).
                 - random_state : int, RandomState instance or None, default=None
-                    Random state for reproducibility.           
+                    Random state for reproducibility.
                 - use_optuna : bool, default=False
                     Toggles Bayesian HPO (True) vs. Grid/Random Search (False).
                 - n_trials : (int, if Optuna=True)
@@ -752,7 +752,7 @@ class ModelDevelopmentPipeline:
         base_dir: str
             Path to save pipeline data
         """
-        
+
         self.data_config = data_config
         self.symbol = data_config["symbol"]
         self.train_start = data_config["start_date"]
@@ -787,7 +787,7 @@ class ModelDevelopmentPipeline:
         self.weight_cv_results = None
         self.feature_importance = None
         self.metrics = None
-        self.study = None 
+        self.study = None
 
         if isinstance(model_params["pipe_clf"], Pipeline):
             model = model_params["pipe_clf"].steps[-1][1]
@@ -864,11 +864,15 @@ class ModelDevelopmentPipeline:
             self.analyze_features()
             self._compile_metrics()
 
-            if generate_reports: self._generate_analysis_reports()
-            if cache_reports: self._display_cache_reports()
-            if save and self.best_model is not None: self._save_all_artifacts()
+            if generate_reports:
+                self._generate_analysis_reports()
+            if cache_reports:
+                self._display_cache_reports()
+            if save and self.best_model is not None:
+                self._save_all_artifacts()
 
-            if verbose: print(f"\n✓ Completed in {pd.Timedelta(seconds=time.time()-time0).round('1s')}")
+            if verbose:
+                print(f"\n✓ Completed in {pd.Timedelta(seconds=time.time()-time0).round('1s')}")
             return self.best_model, self._get_feature_names(), self.metrics, self.config
 
         except Exception as e:
@@ -909,51 +913,56 @@ class ModelDevelopmentPipeline:
         self.preprocessed_features = preprocessor.fit_transform(enhanced)
         self.events = self.events.loc[self.preprocessed_features.index]
 
+    def train_model(self):
+        """
+        Dispatch to the appropriate HPO backend.
 
-	def train_model(self):
-    	"""
-    	Dispatch to the appropriate HPO backend.
-		
-    	When use_optuna=True:
-     	   - optimize_trading_model is called with the base estimator and events.
-     	   - FinancialModelSuggester wraps it in _WeightedEstimator per trial.
-     	   - weight_scheme, weight_decay, and weight_linear are jointly optimized.
-     	   - Return-attribution weights (events['w']) always used for scoring.
-     	   - FinancialModelSuggester.apply_from_params handles the final refit.
-     	   - self.study is populated for post-study visualization.
-		
-    	When use_optuna=False:
-     	   - clf_hyper_fit is called with the pre-computed sample_weight.
-     	   - Behavior is identical to the original pipeline.
-    	"""
-  	  self.model_params['pipe_clf'] = make_custom_pipeline(self.model_params['pipe_clf'])
-   	 pipe = clone(self.model_params['pipe_clf'])
-        
+        When use_optuna=True:
+          - optimize_trading_model is called with the base estimator and events.
+          - FinancialModelSuggester wraps it in _WeightedEstimator per trial.
+          - weight_scheme, weight_decay, and weight_linear are jointly optimized.
+          - Return-attribution weights (events['w']) always used for scoring.
+          - FinancialModelSuggester.apply_from_params handles the final refit.
+          - self.study is populated for post-study visualization.
+
+        When use_optuna=False:
+          - clf_hyper_fit is called with the pre-computed sample_weight.
+          - Behavior is identical to the original pipeline.
+        """
+        self.model_params['pipe_clf'] = make_custom_pipeline(self.model_params['pipe_clf'])
+        pipe = clone(self.model_params['pipe_clf'])
+
+        bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
+        bagging_max_samples = self.model_params.get("bagging_max_samples", 1.0)
+        bagging_max_features = self.model_params.get("bagging_max_features", 1.0)
+        n_jobs = self.model_params.get("n_jobs", -1)
+        random_state = self.model_params.get("random_state", None)
+
         if bagging_n_estimators > 0:
             if self.model_params["bagging_max_samples"] == 1.0:
                 av_uniqueness = self.events['tW'].mean()
                 self.model_params["bagging_max_samples"] = av_uniqueness
                 logger.info(f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})")
         elif isinstance(pipe.steps[-1][-1], RandomForestClassifier):
-    	    av_uniqueness = self.events['tW'].mean()
-    	    pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
+            av_uniqueness = self.events['tW'].mean()
+            pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
 
-    	if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
-    	    pipe = set_pipeline_params(
-    	        pipe,
-    	        samples_info_sets=self.events['t1'],
-    	        price_bars_index=self.bar_data.index,
-    	    )
+        if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
+            pipe = set_pipeline_params(
+                pipe,
+                samples_info_sets=self.events['t1'],
+                price_bars_index=self.bar_data.index,
+            )
 
-    	self.model_params['pipe_clf'] = pipe
+        self.model_params['pipe_clf'] = pipe
 
-    	if self.model_params.get('use_optuna', False):
-     	   self._train_model_optuna(pipe)
-    	else:
-     	   self._train_model_sklearn(pipe)
+        if self.model_params.get('use_optuna', False):
+            self._train_model_optuna(pipe)
+        else:
+            self._train_model_sklearn(pipe)
 
-    	self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
- 	   self.completed_steps['model_training'] = True
+        self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
+        self.completed_steps['model_training'] = True
 
     def _train_model_sklearn(self, pipe):
         params = {k: v for k, v in self.model_params.items() if k not in ("use_optuna", "n_trials", "optuna_timeout")}
@@ -1001,47 +1010,54 @@ class ModelDevelopmentPipeline:
             refit=True,
             **opt_params,
         )
-        
-		logger.info(
-  	      f"Optuna complete. Best score: {self.study.best_value:.4f}  "
-  	      f"Best params: {self.study.best_params}"
- 	   )
-		best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)        
- 
-		# Handle bagging if requested
-   	 if bagging_n_estimators > 0:
-       	 # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
-      	  base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
 
-        	# Create and fit bagging classifier
-        	bag = BaggingClassifier(
-         	   estimator=MyPipeline(base_estimator.steps),
-          	  n_estimators=int(bagging_n_estimators),
-          	  max_samples=bagging_max_samples,
-          	  max_features=bagging_max_features,
-          	  n_jobs=n_jobs,
-          	  random_state=random_state,
-        	)
+        logger.info(
+            f"Optuna complete. Best score: {self.study.best_value:.4f}  "
+            f"Best params: {self.study.best_params}"
+        )
+        best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
 
-        	# Fit bagging classifier with sample_weight
-            bag.fit(features, labels, sample_weight=self.study.best_estimator_.sample_weight_)
+        # Handle bagging if requested
+        bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
+        bagging_max_samples = self.model_params.get("bagging_max_samples", 1.0)
+        bagging_max_features = self.model_params.get("bagging_max_features", 1.0)
+        n_jobs = self.model_params.get("n_jobs", -1)
+        random_state = self.model_params.get("random_state", None)
+
+        if bagging_n_estimators > 0:
+            # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
+            base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
+
+            # Create and fit bagging classifier
+            bag = BaggingClassifier(
+                estimator=MyPipeline(base_estimator.steps),
+                n_estimators=int(bagging_n_estimators),
+                max_samples=bagging_max_samples,
+                max_features=bagging_max_features,
+                n_jobs=n_jobs,
+                random_state=random_state,
+            )
+
+            # Fit bagging classifier with sample_weight
+            bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
             bag.estimator = Pipeline(bag.estimator.steps)
-        	self.best_model = Pipeline([("bag", bag)])
-    	else:
-     	   self.best_model = Pipeline(best_estimator.steps)       
-         
+            self.best_model = Pipeline([("bag", bag)])
+        else:
+            self.best_model = Pipeline(best_estimator.steps)
+
+        pruner_type = self.model_params.get("pruner_type", "hyperband")
         self.cv_results = {
-        	'best_params': self.study.best_params,
-     	   'best_score': self.study.best_value,
-      	  'cv_results': cv_results_df,
-       	 'scoring': 'f1' if set(y.unique()) == {0, 1} else 'neg_log_loss',
-       	 'search_method': 'optuna',
-       	 'pruner_type': pruner_type,
-       	 'n_trials_completed': len([t for t in self.study.trials
-                                    if t.state.name == 'COMPLETE']),
-       	 'n_trials_pruned': len([t for t in self.study.trials
-                                    if t.state.name == 'PRUNED']),
-  	  }
+            'best_params': self.study.best_params,
+            'best_score': self.study.best_value,
+            'cv_results': cv_results_df,
+            'scoring': 'f1' if set(y.unique()) == {0, 1} else 'neg_log_loss',
+            'search_method': 'optuna',
+            'pruner_type': pruner_type,
+            'n_trials_completed': len([t for t in self.study.trials
+                                        if t.state.name == 'COMPLETE']),
+            'n_trials_pruned': len([t for t in self.study.trials
+                                     if t.state.name == 'PRUNED']),
+        }
 
     def analyze_features(self):
         feat_names = self._get_feature_names()
@@ -1053,21 +1069,28 @@ class ModelDevelopmentPipeline:
 
     def _compile_metrics(self):
         self.metrics = {
-            "cv_results": self.cv_results, "feature_importance": self.feature_importance,
-            "training_samples": len(self.bar_data), "feature_count": len(self._get_feature_names()),
-            "best_weighting_scheme": self.best_weighting_scheme, "average_uniqueness": self.events["tW"].mean(),
+            "cv_results": self.cv_results,
+            "feature_importance": self.feature_importance,
+            "training_samples": len(self.bar_data),
+            "feature_count": len(self._get_feature_names()),
+            "best_weighting_scheme": self.best_weighting_scheme,
+            "average_uniqueness": self.events["tW"].mean(),
             "completed_steps": self.completed_steps,
         }
 
     def _get_feature_names(self):
-        if self.best_model is None: return []
-        if len(self.best_model) > 1: return self.best_model[:-1].get_feature_names_out().tolist()
+        if self.best_model is None:
+            return []
+        if len(self.best_model) > 1:
+            return self.best_model[:-1].get_feature_names_out().tolist()
         return self.preprocessed_features.columns.tolist()
 
     def _save_all_artifacts(self):
         metadata = {
-            "strategy": self.strategy, "feature_names": self._get_feature_names(),
-            "use_optuna": self.model_params.get("use_optuna", False), "pipeline_version": self.pipeline_version
+            "strategy": self.strategy,
+            "feature_names": self._get_feature_names(),
+            "use_optuna": self.model_params.get("use_optuna", False),
+            "pipeline_version": self.pipeline_version
         }
         self.file_manager.save_model(self.best_model, metadata)
         self.file_manager.save_dataframe(self.preprocessed_features, "features")
@@ -1092,12 +1115,12 @@ class ModelDevelopmentPipeline:
         """Constructs a comprehensive HTML training report."""
         try:
             report_path = self.file_paths["reports"] / "training_summary.html"
-            
+
             # Use .get() with defaults to prevent KeyErrors during dict extraction
             best_score = self.cv_results.get("best_score", 0)
             # Detect backend based on presence of study attribute
             search_method = "Optuna" if self.study is not None else "Scikit-Learn"
-            
+
             html_content = f"""
             <html>
             <head>
@@ -1118,7 +1141,7 @@ class ModelDevelopmentPipeline:
                 <div class="container">
                     <h1>Training Summary: {self.symbol}</h1>
                     <p class="label">Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-                    
+
                     <div class="card">
                         <h2>Performance Snapshot</h2>
                         <table>
@@ -1142,14 +1165,13 @@ class ModelDevelopmentPipeline:
             </body>
             </html>
             """
-            
+
             with open(report_path, "w") as f:
                 f.write(html_content)
             logger.info(f"Generated HTML summary report: {report_path}")
 
         except Exception as e:
             logger.error(f"HTML report generation failed: {e}")
-
 
     def check_contamination(self):
         print("\n" + "=" * 70)
@@ -1187,9 +1209,11 @@ class ModelDevelopmentPipeline:
                 })
         return pd.DataFrame(summary_data)
 
+
 def get_model_type(model):
     types = {"RandomForestClassifier": "rf", "SequentiallyBootstrappedBaggingClassifier": "seq_rf"}
     return types.get(type(model).__name__, "model")
+
 
 def is_tree(estimator):
     return isinstance(estimator, (RandomForestClassifier, DecisionTreeClassifier))
