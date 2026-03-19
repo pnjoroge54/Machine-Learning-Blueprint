@@ -692,12 +692,14 @@ class ModelDevelopmentPipeline:
         self.best_weighting_scheme = None
         self.meta_features = None
         self.preprocessed_features = None
+        self.preprocessor = None          # fitted DropConstant+DropDuplicate, prepended to best_model
         self.best_model = None
         self.cv_results = None
         self.weight_cv_results = None
         self.feature_importance = None
         self.metrics = None
         self.study = None
+        self.is_primary = None            # True = primary model ({-1,0,1}), False = secondary ({0,1})
 
         if isinstance(model_params["pipe_clf"], Pipeline):
             model = model_params["pipe_clf"].steps[-1][1]
@@ -799,6 +801,12 @@ class ModelDevelopmentPipeline:
 
     def generate_labels(self):
         self.events = generate_events_triple_barrier(self.bar_data, self.strategy, self.target_config, **self.label_config)
+        # 'side' is present only when side_prediction was passed (secondary / meta-labeling model).
+        # For primary models (triple-barrier without side, trend-scanning), side is absent.
+        # This flag gates meta-feature computation and artifact naming.
+        self.is_primary = 'side' not in self.events.columns
+        self.config['model_role'] = 'primary' if self.is_primary else 'secondary'
+        logger.info(f"Model role: {self.config['model_role']} | Label space: {sorted(self.events['bin'].unique())}")
         self.completed_steps["label_generation"] = True
 
     def compute_sample_weights(self):
@@ -814,13 +822,33 @@ class ModelDevelopmentPipeline:
         self.completed_steps["weight_computation"] = True
 
     def add_meta_features(self):
-        self.meta_features = calculate_rolling_metrics(self.events, self.sample_weight)
+        if self.is_primary:
+            # No prior model exists whose rolling performance we can track.
+            # Meta-features are a self-referential concept that only makes sense
+            # for a secondary model evaluating a primary model's signal quality.
+            self.meta_features = pd.DataFrame(index=self.events.index)
+            logger.info("Primary model detected — rolling meta-features skipped.")
+        else:
+            self.meta_features = calculate_rolling_metrics(self.events, self.sample_weight)
         self.completed_steps["meta_features"] = True
 
     def preprocess_features(self):
-        enhanced = self.features.join(self.meta_features, how="inner").dropna()
-        preprocessor = Pipeline([("dcf", DropConstantFeatures()), ("ddf", DropDuplicateFeatures())])
-        self.preprocessed_features = preprocessor.fit_transform(enhanced)
+        # Join meta-features only when they exist (secondary model path).
+        # For primary models meta_features is an empty DataFrame, so we skip the join.
+        if self.meta_features.empty:
+            combined = self.features.dropna()
+        else:
+            combined = self.features.join(self.meta_features, how='inner').dropna()
+
+        # Store the fitted preprocessor so it can be prepended to best_model after training.
+        # This makes the column-dropping a permanent part of inference — the saved model
+        # always produces predictions on exactly the same column set it was trained on,
+        # regardless of what columns appear in new data.
+        self.preprocessor = Pipeline([
+            ("dcf", DropConstantFeatures()),
+            ("ddf", DropDuplicateFeatures()),
+        ])
+        self.preprocessed_features = self.preprocessor.fit_transform(combined)
         self.events = self.events.loc[self.preprocessed_features.index]
 
     def train_model(self):
@@ -828,32 +856,39 @@ class ModelDevelopmentPipeline:
         Dispatch to the appropriate HPO backend.
 
         When use_optuna=True:
-          - optimize_trading_model is called with the base estimator and events.
-          - FinancialModelSuggester wraps it in _WeightedEstimator per trial.
-          - weight_scheme, weight_decay, and weight_linear are jointly optimized.
-          - Return-attribution weights (events['w']) always used for scoring.
-          - FinancialModelSuggester.apply_from_params handles the final refit.
-          - self.study is populated for post-study visualization.
+            - optimize_trading_model is called with the base estimator and events.
+            - FinancialModelSuggester wraps it in _WeightedEstimator per trial.
+            - weight_scheme, weight_decay, and weight_linear are jointly optimized.
+            - Return-attribution weights (events['w']) always used for scoring.
+            - self.study is populated for post-study visualization.
 
         When use_optuna=False:
-          - clf_hyper_fit is called with the pre-computed sample_weight.
-          - Behavior is identical to the original pipeline.
+            - clf_hyper_fit is called with the pre-computed sample_weight.
+            - Behavior is identical to the original pipeline.
+
+        In both paths, when bagging_sequential=True:
+            - HPO tunes the base classifier without any bagging wrapper.
+            - SequentiallyBootstrappedBaggingClassifier is applied post-HPO using
+              the tuned base estimator, events['t1'], and bar_data.index.
+
+        Post-dispatch (both paths):
+            - The fitted preprocessor (DropConstant + DropDuplicate) is prepended
+              to best_model so that inference is fully self-contained.
         """
         self.model_params['pipe_clf'] = make_custom_pipeline(self.model_params['pipe_clf'])
         pipe = clone(self.model_params['pipe_clf'])
 
-        bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
-        bagging_max_samples = self.model_params.get("bagging_max_samples", 1.0)
-        bagging_max_features = self.model_params.get("bagging_max_features", 1.0)
-        n_jobs = self.model_params.get("n_jobs", -1)
-        random_state = self.model_params.get("random_state", None)
+        bagging_n_estimators = self.model_params.get('bagging_n_estimators', 0)
 
         if bagging_n_estimators > 0:
-            if self.model_params["bagging_max_samples"] == 1.0:
+            # Auto-resolve bagging_max_samples to average uniqueness when left at 1.0.
+            if self.model_params.get('bagging_max_samples', 1.0) == 1.0:
                 av_uniqueness = self.events['tW'].mean()
-                self.model_params["bagging_max_samples"] = av_uniqueness
+                self.model_params['bagging_max_samples'] = av_uniqueness
                 logger.info(f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})")
         elif isinstance(pipe.steps[-1][-1], RandomForestClassifier):
+            # max_samples is a bootstrap parameter specific to RandomForestClassifier.
+            # DecisionTreeClassifier has no bootstrap step and no max_samples parameter.
             av_uniqueness = self.events['tW'].mean()
             pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
 
@@ -871,15 +906,53 @@ class ModelDevelopmentPipeline:
         else:
             self._train_model_sklearn(pipe)
 
+        # Prepend the fitted preprocessor so the saved model is fully self-contained.
+        # best_model.predict(raw_features) now applies DropConstant + DropDuplicate
+        # (fitted on training data) before reaching the classifier, at inference time.
+        self.best_model = Pipeline([
+            ("preprocessor", self.preprocessor),
+            *self.best_model.steps,
+        ])
         self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
         self.completed_steps['model_training'] = True
 
     def _train_model_sklearn(self, pipe):
-        params = {k: v for k, v in self.model_params.items() if k not in ("use_optuna", "n_trials", "optuna_timeout")}
-        self.best_model, self.cv_results = clf_hyper_fit(
-            features=self.preprocessed_features, labels=self.events["bin"], t1=self.events["t1"],
-            pipe_clf=pipe, sample_weight=self.sample_weight, **params
-        )
+        bagging_sequential = self.model_params.get('bagging_sequential', False)
+        bagging_n = self.model_params.get('bagging_n_estimators', 0)
+
+        # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
+        excluded = {"use_optuna", "n_trials", "optuna_timeout", "bagging_sequential"}
+
+        if bagging_sequential and bagging_n > 0:
+            # Tune the base classifier first with no bagging, then apply sequential
+            # bootstrapping post-HPO. Exclude bagging params so clf_hyper_fit returns
+            # the plain tuned pipeline rather than a standard BaggingClassifier.
+            excluded |= {"bagging_n_estimators", "bagging_max_samples", "bagging_max_features"}
+            params = {k: v for k, v in self.model_params.items() if k not in excluded}
+            params["bagging_n_estimators"] = 0
+
+            tuned_pipeline, self.cv_results = clf_hyper_fit(
+                features=self.preprocessed_features,
+                labels=self.events["bin"],
+                t1=self.events["t1"],
+                pipe_clf=pipe,
+                sample_weight=self.sample_weight,
+                **params,
+            )
+            self.best_model = self._apply_sequential_bagging(
+                self.preprocessed_features, self.events["bin"],
+                tuned_pipeline, sample_weight=self.sample_weight,
+            )
+        else:
+            params = {k: v for k, v in self.model_params.items() if k not in excluded}
+            self.best_model, self.cv_results = clf_hyper_fit(
+                features=self.preprocessed_features,
+                labels=self.events["bin"],
+                t1=self.events["t1"],
+                pipe_clf=pipe,
+                sample_weight=self.sample_weight,
+                **params,
+            )
 
     def _train_model_optuna(self, pipe):
         X, y = self.preprocessed_features, self.events["bin"]
@@ -927,39 +1000,41 @@ class ModelDevelopmentPipeline:
             f"Optuna complete. Best score: {self.study.best_value:.4f}  "
             f"Best params: {self.study.best_params}"
         )
-        # best_estimator = self.study.best_estimator_
+        # Unwrap: best_estimator_ is a _WeightedEstimator. Extract the tuned base
+        # classifier and re-wrap in MyPipeline for downstream compatibility.
         best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
 
-        # Handle bagging if requested
-        bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
-        bagging_max_samples = self.model_params.get("bagging_max_samples", 1.0)
-        bagging_max_features = self.model_params.get("bagging_max_features", 1.0)
-        n_jobs = self.model_params.get("n_jobs", -1)
-        random_state = self.model_params.get("random_state", None)
+        bagging_sequential   = self.model_params.get('bagging_sequential', False)
+        bagging_n_estimators = self.model_params.get('bagging_n_estimators', 0)
+        bagging_max_samples  = self.model_params.get('bagging_max_samples', 1.0)
+        bagging_max_features = self.model_params.get('bagging_max_features', 1.0)
+        n_jobs               = self.model_params.get('n_jobs', -1)
+        random_state         = self.model_params.get('random_state', None)
 
-        if bagging_n_estimators > 0:
-            # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
-            base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
-
-            # Create and fit bagging classifier
+        if bagging_sequential and bagging_n_estimators > 0:
+            # Sequential bootstrapping with the winning trial's weights.
+            # Weights are passed explicitly because SequentiallyBootstrappedBaggingClassifier
+            # uses numpy integer indexing for bootstrap samples, which strips the pandas
+            # index that _WeightedEstimator relies on for alignment.
+            self.best_model = self._apply_sequential_bagging(
+                X, y, best_estimator,
+                sample_weight=self.study.best_estimator_.sample_weight_,
+            )
+        elif bagging_n_estimators > 0:
+            base_est = set_pipeline_params(best_estimator, n_jobs=1)
             bag = BaggingClassifier(
-                estimator=MyPipeline(base_estimator.steps),
+                estimator=MyPipeline(base_est.steps),
                 n_estimators=int(bagging_n_estimators),
                 max_samples=bagging_max_samples,
                 max_features=bagging_max_features,
                 n_jobs=n_jobs,
                 random_state=random_state,
             )
-
-            # Single fit using the optimal weights from the winning trial.
-            # _WeightedEstimator.sample_weight_ holds the final computed weights
-            # (scheme + decay applied). Passing them here preserves that choice
-            # without re-deriving weights on each bootstrap sample.
+            # Single fit with the optimal weights from the winning trial.
             bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
-            self.best_model = Pipeline([("bag", bag)])
+            self.best_model = Pipeline([('bag', bag)])
         else:
-            # best_estimator is already MyPipeline([("clf", RF)]); use directly.
-            self.best_model = best_estimator
+            self.best_model = best_estimator  # MyPipeline([("clf", RF)])
 
         pruner_type = self.model_params.get("pruner_type", "hyperband")
         self.cv_results = {
@@ -975,11 +1050,96 @@ class ModelDevelopmentPipeline:
                                      if t.state.name == 'PRUNED']),
         }
 
+    def _apply_sequential_bagging(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        tuned_pipeline,
+        sample_weight: pd.Series = None,
+    ) -> Pipeline:
+        """
+        Wrap a tuned base pipeline in SequentiallyBootstrappedBaggingClassifier.
+
+        Called by both training paths when bagging_sequential=True.
+
+        Sequential bootstrapping (López de Prado, Chapter 4) draws bootstrap
+        samples proportionally to average label uniqueness rather than uniformly.
+        This reduces the redundancy that arises when overlapping triple-barrier
+        labels are resampled together, producing a less correlated ensemble.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Full training feature matrix.
+        y : pd.Series
+            Full training labels.
+        tuned_pipeline : MyPipeline
+            The HPO-optimised base classifier wrapped in MyPipeline.
+        sample_weight : pd.Series, optional
+            Sample weights to pass to fit(). For the sklearn path this is
+            self.sample_weight; for the Optuna path it is
+            study.best_estimator_.sample_weight_ (the winning trial's weights).
+
+        Returns
+        -------
+        Pipeline
+            sklearn Pipeline whose single step is the fitted
+            SequentiallyBootstrappedBaggingClassifier.
+        """
+        bagging_n       = self.model_params.get('bagging_n_estimators', 0)
+        bagging_samples = self.model_params.get('bagging_max_samples', 1.0)
+        bagging_feats   = self.model_params.get('bagging_max_features', 1.0)
+        random_state    = self.model_params.get('random_state', None)
+
+        # n_jobs=1 on the base estimator avoids nested parallelism;
+        # the outer SequentiallyBootstrappedBaggingClassifier parallelises across bags.
+        base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
+
+        seq_bag = SequentiallyBootstrappedBaggingClassifier(
+            base_estimator=MyPipeline(base_est.steps),
+            n_estimators=int(bagging_n),
+            max_samples=bagging_samples,
+            max_features=bagging_feats,
+            samples_info_sets=self.events['t1'],
+            price_bars_index=self.bar_data.index,
+            random_state=random_state,
+        )
+
+        if sample_weight is not None:
+            seq_bag.fit(X, y, sample_weight=sample_weight)
+        else:
+            seq_bag.fit(X, y)
+
+        return Pipeline([('seq_bag', seq_bag)])
+
     def analyze_features(self):
+        from .weighted_estimator import _WeightedEstimator
+
+        # best_model is now preprocessor → clf/bag. The last step is the classifier.
+        clf = self.best_model.steps[-1][1]
         feat_names = self._get_feature_names()
+
+        if isinstance(clf, SequentiallyBootstrappedBaggingClassifier):
+            # Each bag is a MyPipeline([("clf", RF)]). Average importances across bags.
+            importances = np.mean([
+                est.steps[-1][1].feature_importances_
+                for est in clf.estimators_
+            ], axis=0)
+        elif isinstance(clf, BaggingClassifier):
+            # Standard bagging path. Each bag is a MyPipeline([("clf", RF)]).
+            importances = np.mean([
+                est.steps[-1][1].feature_importances_
+                for est in clf.estimators_
+            ], axis=0)
+        elif isinstance(clf, _WeightedEstimator):
+            # Optuna no-bagging path (edge case if preprocessor prepend is removed).
+            importances = clf.base_estimator.feature_importances_
+        else:
+            importances = clf.feature_importances_
+
         self.feature_importance = pd.DataFrame({
             "feature": feat_names,
-            "importance": self.best_model.steps[-1][1].feature_importances_,
+            "importance": importances,
         }).sort_values("importance", ascending=False)
         self.completed_steps["analysis"] = True
 
@@ -995,10 +1155,11 @@ class ModelDevelopmentPipeline:
         }
 
     def _get_feature_names(self):
-        if self.best_model is None:
+        # preprocessed_features already has constant and duplicate columns removed.
+        # Since the preprocessor is now part of best_model, this is the authoritative
+        # column list for both training and inference.
+        if self.preprocessed_features is None:
             return []
-        if len(self.best_model) > 1:
-            return self.best_model[:-1].get_feature_names_out().tolist()
         return self.preprocessed_features.columns.tolist()
 
     def _save_all_artifacts(self):
