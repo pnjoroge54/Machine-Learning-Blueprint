@@ -20,6 +20,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 
 from .cross_validation import PurgedKFold
+from ..production.utils import _WeightedEstimator
 
 
 class FinancialModelSuggester:
@@ -31,8 +32,7 @@ class FinancialModelSuggester:
         suggest_and_apply  — Trial → params → model  (stochastic, used in objective)
         apply_from_params  — params → model           (deterministic, used for refit)
     """
-    from ..production.model_development import _WeightedEstimator
-    
+
     # ----- Central registry of weighting hyperparameters -----
     # Both methods reference this to separate weight keys from model keys.
     WEIGHT_KEYS = frozenset({"weight_scheme", "weight_decay", "weight_linear"})
@@ -378,7 +378,7 @@ def optimize_trading_model(
                 param_distributions, n_splits, metric
             )
         
-        callbacks = [print_best_trial, check_for_overfitting]
+        callbacks = [*callbacks]
         if reports_path:
             study.path = reports_path
             callbacks += [save_intermediate_results]

@@ -3,6 +3,7 @@ import json
 import cloudpickle
 from datetime import datetime
 from pathlib import Path
+from sklearn.base import BaseEstimator, ClassifierMixin
 from typing import List, Union
 
 from .model_export import export_model_to_onnx
@@ -645,7 +646,7 @@ class ModelFileManager:
                                 model_data[key] = json.load(g)
                         except UnicodeDecodeError:
                             # f = Path(f).rename(f.replace(".json", ".pkl"))
-                            with open((f, "rb") as g:
+                            with open(f, "rb") as g:
                                 model_data[key] = cloudpickle.load(g)
                     elif f.endswith("pkl"):
                         with open(f, "rb") as g:
@@ -658,3 +659,98 @@ class ModelFileManager:
             result[barriers][bar_size][bar_type] = model_data
 
             return result
+
+
+class _WeightedEstimator(BaseEstimator, ClassifierMixin):
+    """
+    A transparency wrapper for scikit-learn estimators to support AFML weights.
+
+    Technical Constraints:
+    - Required for seamless integration with Scikit-learn's Pipeline and
+      GridSearchCV/Optuna, which do not always pass 'sample_weight' through
+      standard 'fit' calls in complex nested structures.
+    - Manages the internal application of 'Time Decay' and 'Uniqueness'
+      weights at the moment of training.
+    """
+
+    def __init__(
+        self,
+        base_estimator,
+        events,
+        data_index,
+        scheme="unweighted",
+        decay=1.0,
+        linear=True,
+        **params,
+    ):
+        from sklearn.utils.validation import has_fit_parameter
+
+        if not has_fit_parameter(base_estimator, "sample_weight"):
+            raise TypeError("The base estimator must accept sample_weight.")
+
+        self.base_estimator = base_estimator
+        self.base_estimator.set_params(**params)
+        self.scheme = scheme
+        self.decay = decay
+        self.linear = linear
+        self.events = events
+        self.data_index = data_index
+
+    def fit(self, X, y):
+        if self.scheme == "uniqueness":
+            weights = self.events["tW"]
+        elif self.scheme == "return":
+            weights = self.events["w"]
+        else:
+            weights = pd.Series(np.ones(len(y)), index=y.index)
+
+        valid = X.index.intersection(y.index)
+        X, y = X.loc[valid], y.loc[valid]
+
+        if self.decay != 1.0:
+            decay_vec = get_weights_by_time_decay_optimized(
+                triple_barrier_events=self.events,
+                close_index=self.data_index,
+                last_weight=self.decay,
+                linear=self.linear,
+                av_uniqueness=self.events["tW"],
+            )
+            weights *= decay_vec
+
+        self.sample_weight_ = weights
+        self.base_estimator.fit(X, y, sample_weight=weights.loc[valid])
+        return self
+
+    def predict(self, X):
+        return self.base_estimator.predict(X)
+
+    def predict_proba(self, X):
+        return self.base_estimator.predict_proba(X)
+
+    def get_params(self, deep=True):
+        params = {
+            "scheme": self.scheme,
+            "decay": self.decay,
+            "linear": self.linear,
+            "base_estimator": self.base_estimator,
+            "events": self.events,
+            "data_index": self.data_index,
+        }
+        if deep:
+            base_params = self.base_estimator.get_params(deep=True)
+            params.update({f"base_{k}": v for k, v in base_params.items()})
+        return params
+
+    def set_params(self, **params):
+        base_params = {}
+        for key in list(params.keys()):
+            if key.startswith("base_"):
+                base_params[key[5:]] = params.pop(key)
+
+        for key in ["scheme", "decay", "linear", "base_estimator", "events", "data_index"]:
+            if key in params:
+                setattr(self, key, params.pop(key))
+
+        if base_params:
+            self.base_estimator.set_params(**base_params)
+        return self

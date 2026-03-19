@@ -102,6 +102,8 @@ from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparamet
 from ..cross_validation.optuna_hyper_fit import (
     optimize_trading_model,
     optuna_to_cv_results,
+    print_best_trial,
+    check_for_overfitting,
 )
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
@@ -331,100 +333,6 @@ def generate_events_triple_barrier(
 # ============================================================================
 # Pipeline Components
 # ============================================================================
-
-class _WeightedEstimator(BaseEstimator, ClassifierMixin):
-    """
-    A transparency wrapper for scikit-learn estimators to support AFML weights.
-
-    Technical Constraints:
-    - Required for seamless integration with Scikit-learn's Pipeline and
-      GridSearchCV/Optuna, which do not always pass 'sample_weight' through
-      standard 'fit' calls in complex nested structures.
-    - Manages the internal application of 'Time Decay' and 'Uniqueness'
-      weights at the moment of training.
-    """
-
-    def __init__(
-        self,
-        base_estimator,
-        events,
-        data_index,
-        scheme="unweighted",
-        decay=1.0,
-        linear=True,
-        **params,
-    ):
-        from sklearn.utils.validation import has_fit_parameter
-
-        if not has_fit_parameter(base_estimator, "sample_weight"):
-            raise TypeError("The base estimator must accept sample_weight.")
-
-        self.base_estimator = base_estimator
-        self.base_estimator.set_params(**params)
-        self.scheme = scheme
-        self.decay = decay
-        self.linear = linear
-        self.events = events
-        self.data_index = data_index
-
-    def fit(self, X, y):
-        if self.scheme == "uniqueness":
-            weights = self.events["tW"]
-        elif self.scheme == "return":
-            weights = self.events["w"]
-        else:
-            weights = pd.Series(np.ones(len(y)), index=y.index)
-
-        valid = X.index.intersection(y.index)
-        X, y = X.loc[valid], y.loc[valid]
-
-        if self.decay != 1.0:
-            decay_vec = get_weights_by_time_decay_optimized(
-                triple_barrier_events=self.events,
-                close_index=self.data_index,
-                last_weight=self.decay,
-                linear=self.linear,
-                av_uniqueness=self.events["tW"],
-            )
-            weights *= decay_vec
-
-        self.sample_weight_ = weights
-        self.base_estimator.fit(X, y, sample_weight=weights.loc[valid])
-        return self
-
-    def predict(self, X):
-        return self.base_estimator.predict(X)
-
-    def predict_proba(self, X):
-        return self.base_estimator.predict_proba(X)
-
-    def get_params(self, deep=True):
-        params = {
-            "scheme": self.scheme,
-            "decay": self.decay,
-            "linear": self.linear,
-            "base_estimator": self.base_estimator,
-            "events": self.events,
-            "data_index": self.data_index,
-        }
-        if deep:
-            base_params = self.base_estimator.get_params(deep=True)
-            params.update({f"base_{k}": v for k, v in base_params.items()})
-        return params
-
-    def set_params(self, **params):
-        base_params = {}
-        for key in list(params.keys()):
-            if key.startswith("base_"):
-                base_params[key[5:]] = params.pop(key)
-
-        for key in ["scheme", "decay", "linear", "base_estimator", "events", "data_index"]:
-            if key in params:
-                setattr(self, key, params.pop(key))
-
-        if base_params:
-            self.base_estimator.set_params(**base_params)
-        return self
 
 
 @njit(parallel=True, fastmath=True, cache=True)
@@ -1002,19 +910,10 @@ class ModelDevelopmentPipeline:
         db_path: Path = self.file_paths["db_path"]
         db_path.parent.mkdir(parents=True, exist_ok=True)
         opt_params["db_path"] = f"sqlite:///{db_path.resolve()}"
+        opt_params["reports_path"] = self.file_paths["reports"]
+        callbacks = [check_for_overfitting, print_best_trial]
 
         # ── Run the study (refit=True: handled internally) ───────────────────
-        def _save_intermediate_results(study, trial):
-            results_dir = self.file_paths["reports"]
-            results_dir.mkdir(exist_ok=True)
-            trial_data = {
-                "trial": trial.number, "value": trial.value, "params": trial.params,
-                "state": str(trial.state), "user_attrs": trial.user_attrs
-            }
-            with open(results_dir / f"trial_{trial.number:04d}.json", "w") as f:
-                json.dump(trial_data, f, indent=2, default=str)
-
-        callbacks = [check_for_overfitting, print_best_trial, _save_intermediate_results]
         self.study, cv_results_df = optimize_trading_model(
             classifier=base_clf, X=X, y=y, events=self.events,
             data_index=self.bar_data.index,

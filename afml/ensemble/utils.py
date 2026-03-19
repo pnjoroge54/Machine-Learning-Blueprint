@@ -65,7 +65,7 @@ def train_bagging_ensemble(
     n_jobs = bagging_params.get("n_jobs", -1)
 
     if use_sequential:
-        from .sequential_bagging import SequentiallyBootstrappedBaggingClassifier
+        from .sb_bagging import SequentiallyBootstrappedBaggingClassifier
 
         # Validate required sequential parameters
         required = ["samples_info_sets", "price_bars_index"]
