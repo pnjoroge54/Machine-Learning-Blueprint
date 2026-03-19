@@ -927,8 +927,8 @@ class ModelDevelopmentPipeline:
             f"Optuna complete. Best score: {self.study.best_value:.4f}  "
             f"Best params: {self.study.best_params}"
         )
-        best_estimator = self.study.best_estimator_
-        # best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
+        # best_estimator = self.study.best_estimator_
+        best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
 
         # Handle bagging if requested
         bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
@@ -939,13 +939,11 @@ class ModelDevelopmentPipeline:
 
         if bagging_n_estimators > 0:
             # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
-            # base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
-            best_estimator.set_params(n_jobs=1)
+            base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
 
             # Create and fit bagging classifier
             bag = BaggingClassifier(
-                # estimator=MyPipeline(base_estimator.steps),
-                estimator=best_estimator,
+                estimator=MyPipeline(base_estimator.steps),
                 n_estimators=int(bagging_n_estimators),
                 max_samples=bagging_max_samples,
                 max_features=bagging_max_features,
@@ -955,9 +953,9 @@ class ModelDevelopmentPipeline:
 
             # Fit bagging classifier with sample_weight
             bag.fit(X, y)
-            bag.estimator = best_estimator.base_estimator
-            # bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
-            # bag.estimator = Pipeline(bag.estimator.steps) # to allow for ONNX conversiom
+            # bag.estimator = best_estimator.base_estimator
+            bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
+            bag.estimator = Pipeline(bag.estimator.steps) # to allow for ONNX conversiom
             self.best_model = Pipeline([("bag", bag)])
         else:
             self.best_model = Pipeline([("clf", best_estimator.base_estimator)])
