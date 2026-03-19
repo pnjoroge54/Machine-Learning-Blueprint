@@ -78,12 +78,16 @@ Notes
 
 import hashlib
 import json
-import cloudpickle
+import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Optional, Dict, Any
 
-from .model_export import export_model_to_onnx
+import cloudpickle
+import joblib
+import pandas as pd
+
+from .model_export import export_model_to_onnx  # adjust import as needed
 
 
 class ConfigPathGenerator:
@@ -581,8 +585,6 @@ class ModelFileManager:
     def save_model(self, model, metadata: dict = None):
         """Save model with metadata."""
         if self.current_paths:
-            import joblib
-
             save_data = {
                 "model": model,
                 "metadata": metadata or {},
@@ -686,54 +688,197 @@ class ModelFileManager:
 
         return results
 
-    def load_artifacts(self, search_criteria: dict = None, base_dir: str = None) -> dict:
-        import json
-        import os
+    def load_artifacts(
+        self,
+        search_criteria: Optional[Dict[str, str]] = None,
+        base_dir: Optional[Union[str, Path]] = None,
+        artifact_types: Optional[List[str]] = None,
+        group_by: Optional[List[str]] = None
+    ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Find and load all artifacts for models matching search criteria.
 
-        import joblib
-        import pandas as pd
+        Parameters
+        ----------
+        search_criteria : dict, optional
+            Criteria passed to `find_models` (e.g., {'symbol': 'BTCUSD'}).
+        base_dir : str or Path, optional
+            Base directory to search; defaults to the manager's base_dir.
+        artifact_types : list of str, optional
+            List of artifact keys to load (e.g., ['model', 'metrics', 'features']).
+            If None, all recognized artifact files in the model folder are loaded.
+        group_by : list of str, optional
+            If provided, the result is grouped by the specified keys (e.g., ['symbol', 'bar_size']).
+            Keys are first looked up in the model's metadata (from `get_model_info`), then in its config.
+            The returned value is a nested dictionary where each level corresponds to one key,
+            and leaf values are **lists** of artifact dictionaries (because multiple models may share
+            the same key combination).
+            If `group_by` is None (default), a flat list of artifact dictionaries is returned.
 
-        data = self.find_models(search_criteria, base_dir)
-        result = {}
+        Returns
+        -------
+        list or dict
+            - If `group_by` is None: a list where each element corresponds to one model and contains
+              all its loaded artifacts (see below for structure).
+            - If `group_by` is provided: a nested dictionary where keys are the unique values of the
+              grouping keys, and leaf values are lists of artifact dictionaries.
 
-        for d in data:
-            model_data = {}
-            fname = Path(d["file_path"])
-            folder = fname.parent
+        Artifact Dictionary Structure
+        -----------------------------
+        Each element (or leaf value) is a dict with the following keys:
+            - 'metadata' : dict from `get_model_info` (file path, strategy, symbol, bar_type, bar_size, etc.)
+            - 'config' : dict loaded from config.json (if present)
+            - For each loaded artifact, a key like 'model', 'metrics', 'features', etc., containing
+              the loaded object (DataFrame for parquet/csv, dict for json, estimator for joblib, etc.).
 
-            model_dict = joblib.load(fname)
-            for k, v in model_dict.items():
-                model_data[k] = v
+        Examples
+        --------
+        # Group by symbol only
+        by_symbol = mgr.load_artifacts(group_by=['symbol'])
+        # Access models for 'BTCUSD'
+        btc_models = by_symbol['BTCUSD']   # list of artifact dicts
 
-            for fp in os.listdir(folder):
-                f = str(folder / fp)
-                key = (
-                    fp.split("_")[0]
-                    if not fp.startswith(("feature_"))
-                    else "_".join(fp.split("_")[:2])
-                )
-                if key not in model_data:
-                    if f.endswith("csv"):
-                        model_data[key] = pd.read_csv(f)
-                    elif f.endswith("parquet"):
-                        model_data[key] = pd.read_parquet(f)
-                    elif f.endswith("json"):
-                        try:
-                            with open(f, "r") as g:
-                                model_data[key] = json.load(g)
-                        except UnicodeDecodeError:
-                            # f = Path(f).rename(f.replace(".json", ".pkl"))
-                            with open(f, "rb") as g:
-                                model_data[key] = cloudpickle.load(g)
-                    elif f.endswith("pkl"):
-                        with open(f, "rb") as g:
-                            model_data[key] = cloudpickle.load(g)
+        # Group by symbol and bar_size
+        by_sym_size = mgr.load_artifacts(group_by=['symbol', 'bar_size'])
+        # Access models for 'BTCUSD' with bar_size '5'
+        btc_5_models = by_sym_size['BTCUSD']['5']
 
-            date_range, bar_size, bar_type = d["date_range"], d["bar_size"], d["bar_type"]
-            barriers = f"{date_range}" + "_".join(fname.name.split(date_range)[1].split("_")[:-2])
-            result.setdefault(barriers, {})
-            result[barriers].setdefault(bar_size, {})
-            result[barriers][bar_size][bar_type] = model_data
+        # Group by a configuration parameter (e.g., profit_target)
+        by_target = mgr.load_artifacts(group_by=['profit_target'])
+        # All models with profit_target=0.02
+        target_02_models = by_target['0.02']
 
-            return result
+        # Flat list (default) – access first model's data
+        artifacts = mgr.load_artifacts()
+        first = artifacts[0]
+        print(first['metadata']['strategy'])
+        print(first['config']['profit_target'])
+        print(first['model'])                     # the trained estimator
+        print(first['metrics']['accuracy'])
 
+        # Load only model and metrics, then group by strategy
+        grouped = mgr.load_artifacts(
+            artifact_types=['model', 'metrics'],
+            group_by=['strategy']
+        )
+        for strategy, models in grouped.items():
+            print(f"Strategy: {strategy}, found {len(models)} models")
+
+        # Convert flat list to any custom structure (e.g., by date_range)
+        artifacts = mgr.load_artifacts()
+        by_date = {}
+        for art in artifacts:
+            dr = art['metadata']['date_range']
+            by_date.setdefault(dr, []).append(art)
+        """
+        if base_dir is None:
+            base_dir = self.path_generator.base_dir
+
+        # Get model info using existing find_models
+        models_info = self.find_models(search_criteria, base_dir)
+
+        # --- Internal function to load a single model's artifacts ---
+        def _load_one(info: Dict[str, Any]) -> Dict[str, Any]:
+            model_folder = Path(info['file_path']).parent
+            data = {
+                'metadata': info,
+                'config': {}
+            }
+
+            # Load config.json if it exists
+            config_path = model_folder / 'config.json'
+            if config_path.exists():
+                try:
+                    with open(config_path, 'r') as f:
+                        data['config'] = json.load(f)
+                except Exception as e:
+                    data['config'] = {'error': f'Failed to load config: {e}'}
+
+            # Determine which files to load
+            files_to_load = []
+            if artifact_types is None:
+                files_to_load = list(model_folder.glob('*'))
+            else:
+                for pattern in artifact_types:
+                    files_to_load.extend(model_folder.glob(f'{pattern}_*'))
+
+            for file_path in files_to_load:
+                if not file_path.is_file():
+                    continue
+
+                # Derive artifact key from filename
+                stem = file_path.stem
+                key = stem.split('_')[0]          # simple: first part before underscore
+                # Handle special multi-word prefixes
+                if key == 'feature' and stem.startswith('feature_importance'):
+                    key = 'feature_importance'
+                elif key == 'feature' and stem.startswith('feature_config'):
+                    key = 'feature_config'
+                elif key == 'feature' and stem.startswith('feature_names'):
+                    key = 'feature_names'
+
+                # Skip if already loaded (e.g., config already handled)
+                if key in data:
+                    continue
+
+                # Load based on extension
+                try:
+                    if file_path.suffix == '.csv':
+                        data[key] = pd.read_csv(file_path)
+                    elif file_path.suffix == '.parquet':
+                        data[key] = pd.read_parquet(file_path)
+                    elif file_path.suffix == '.json':
+                        with open(file_path, 'r') as f:
+                            data[key] = json.load(f)
+                    elif file_path.suffix == '.pkl':
+                        with open(file_path, 'rb') as f:
+                            data[key] = cloudpickle.load(f)
+                    elif file_path.suffix == '.joblib':
+                        # Main model file – load under 'model' key
+                        if file_path == Path(info['file_path']):
+                            model_dict = joblib.load(file_path)
+                            if isinstance(model_dict, dict) and 'model' in model_dict:
+                                data['model'] = model_dict['model']
+                                # Store extra metadata from the dict
+                                for k, v in model_dict.items():
+                                    if k != 'model' and k not in data:
+                                        data[k] = v
+                            else:
+                                data['model'] = model_dict
+                    # Add other extensions as needed
+                except Exception as e:
+                    data[f'{key}_load_error'] = str(e)
+
+            return data
+
+        # Load all models
+        artifacts = [_load_one(info) for info in models_info]
+
+        # If no grouping requested, return flat list
+        if group_by is None:
+            return artifacts
+
+        # --- Grouping logic ---
+        def _get_value(art: Dict[str, Any], key: str) -> str:
+            """Extract grouping value from metadata or config."""
+            if key in art['metadata']:
+                val = art['metadata'][key]
+            else:
+                val = art['config'].get(key, None)
+            # Ensure hashable and string for dict keys
+            return 'None' if val is None else str(val)
+
+        def _nest(items: List[Dict], keys: List[str]) -> Union[List, Dict]:
+            if not keys:
+                return items
+            key = keys[0]
+            groups = {}
+            for art in items:
+                group_val = _get_value(art, key)
+                groups.setdefault(group_val, []).append(art)
+            # Recurse for each group
+            for val in groups:
+                groups[val] = _nest(groups[val], keys[1:])
+            return groups
+
+        return _nest(artifacts, group_by)
