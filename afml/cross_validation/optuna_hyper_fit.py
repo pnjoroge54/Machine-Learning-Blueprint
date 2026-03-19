@@ -304,7 +304,7 @@ def optimize_trading_model(
     db_path: str = None,
     random_state: int = 42,
     refit: bool = True,
-    callbacks: List[Callable] = [print_best_trial],
+    callbacks: List[Callable] = [],
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -347,7 +347,7 @@ def optimize_trading_model(
     if str(db_path).startswith("sqlite:///") and str(db_path).endswith("db"):
         storage_url = f"{db_path}"
     else:
-        storage_url = f"sqlite:///{db_path}1"
+        storage_url = f"sqlite:///{db_path}"
     
     storage = RDBStorage(
         url=storage_url,
@@ -417,7 +417,7 @@ def print_best_trial(study, trial):
 
 
 def save_intermediate_results(study, trial):
-    results_dir = Path("optuna_results")
+    results_dir = study.path
     results_dir.mkdir(exist_ok=True)
     trial_data = {
         "trial": trial.number, "value": trial.value, "params": trial.params,
@@ -442,13 +442,7 @@ def plot_model_vs_baseline(study, y, events):
     # 1. Re-calculate baseline for the whole period
     weighted_counts = events['w'].groupby(y.values).sum()
     probs = weighted_counts / weighted_counts.sum()
-    
-    if set(np.unique(y)) == {0, 1}:
-        baseline = -probs.max()
-        scoring = "F1"
-    else:
-        baseline = -np.sum(probs * np.log(probs))
-        scoring = "Weighted Log-Loss"
+    baseline = -np.sum(probs * np.log(probs))
     
     # 2. Extract best trial data
     best_trial = study.best_trial
@@ -459,7 +453,7 @@ def plot_model_vs_baseline(study, y, events):
     
     # Plot the scores
     folds = range(len(fold_scores))
-    plt.plot(folds, fold_scores, marker='o', label=f'Best Model ({scoring})', color='#1f77b4', lw=2)
+    plt.plot(folds, fold_scores, marker='o', label=f'Best Model (Weighted Log-Loss)', color='#1f77b4', lw=2)
     
     # Plot the baseline
     plt.axhline(y=-baseline, color='red', linestyle='--', label='Naive Baseline (Entropy)', alpha=0.7)
@@ -470,7 +464,7 @@ def plot_model_vs_baseline(study, y, events):
 
     plt.title(f"Best Trial #{best_trial.number}: Performance vs. Information Baseline", fontsize=14)
     plt.xlabel("Cross-Validation Fold", fontsize=12)
-    plt.ylabel(f"{scoring} Score (Higher is Better)", fontsize=12)
+    plt.ylabel(f"Weighted Log-Loss Score (Higher is Better)", fontsize=12)
     plt.legend()
     plt.grid(alpha=0.3)
     plt.show()

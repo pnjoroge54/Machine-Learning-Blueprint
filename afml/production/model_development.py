@@ -74,6 +74,7 @@ Pipeline Workflow:
 """
 
 import inspect
+import json
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
@@ -99,8 +100,10 @@ from ..cross_validation import PurgedKFold, clf_hyper_fit
 from ..cross_validation.cross_validation import ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
 from ..cross_validation.optuna_hyper_fit import (
+    check_for_overfitting,
     optimize_trading_model,
     optuna_to_cv_results,
+    print_best_trial,
 )
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
@@ -532,7 +535,8 @@ def get_optimal_sample_weight(
     events: pd.DataFrame,
     features: pd.DataFrame,
     cv_splits: int = 5,
-    **kwargs
+    linear: bool = None,
+    decay_factors: Union[list, np.ndarray] = np.arange(0.1, 1, 0.1), 
 ) -> pd.Series:
     """
     Search-based optimization for sample weighting schemes.
@@ -982,7 +986,7 @@ class ModelDevelopmentPipeline:
             elif k in ("n_trials", "pruner_type", "timeout"):
                 opt_params[k] = v
 
-        # ── FIX 2: study_name encodes every experiment dimension ─────────────────
+        # study_name encodes every experiment dimension 
         # The config_hash is the last path segment of base_dir — a deterministic
         # MD5 of the full config dict. The same experiment always maps to the same
         # study, so a crashed run resumes exactly where it left off.
@@ -995,7 +999,6 @@ class ModelDevelopmentPipeline:
             f"_{config_hash}"
         )
 
-        # ── FIX 1: db_path now exists in file_paths (added to utils.py) ─────────
         # Build the SQLite URI with an absolute path so it is correct regardless
         # of the working directory at runtime.
         db_path: Path = self.file_paths["db_path"]
@@ -1003,11 +1006,23 @@ class ModelDevelopmentPipeline:
         opt_params["db_path"] = f"sqlite:///{db_path.resolve()}"
 
         # ── Run the study (refit=True: handled internally) ───────────────────
+        def _save_intermediate_results(study, trial):
+            results_dir = self.file_paths["reports"]
+            results_dir.mkdir(exist_ok=True)
+            trial_data = {
+                "trial": trial.number, "value": trial.value, "params": trial.params,
+                "state": str(trial.state), "user_attrs": trial.user_attrs
+            }
+            with open(results_dir / f"trial_{trial.number:04d}.json", "w") as f:
+                json.dump(trial_data, f, indent=2, default=str)
+
+        callbacks = [check_for_overfitting, print_best_trial, _save_intermediate_results]
         self.study, cv_results_df = optimize_trading_model(
             classifier=base_clf, X=X, y=y, events=self.events,
             data_index=self.bar_data.index,
             n_splits=self.cv_splits,
             refit=True,
+            callbacks=callbacks,
             **opt_params,
         )
 
@@ -1015,7 +1030,8 @@ class ModelDevelopmentPipeline:
             f"Optuna complete. Best score: {self.study.best_value:.4f}  "
             f"Best params: {self.study.best_params}"
         )
-        best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
+        best_estimator = self.study.best_estimator_
+        # best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
 
         # Handle bagging if requested
         bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
@@ -1026,11 +1042,13 @@ class ModelDevelopmentPipeline:
 
         if bagging_n_estimators > 0:
             # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
-            base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
+            # base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
+            best_estimator.set_params(n_jobs=1)
 
             # Create and fit bagging classifier
             bag = BaggingClassifier(
-                estimator=MyPipeline(base_estimator.steps),
+                # estimator=MyPipeline(base_estimator.steps),
+                estimator=best_estimator,
                 n_estimators=int(bagging_n_estimators),
                 max_samples=bagging_max_samples,
                 max_features=bagging_max_features,
@@ -1039,11 +1057,13 @@ class ModelDevelopmentPipeline:
             )
 
             # Fit bagging classifier with sample_weight
-            bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
-            bag.estimator = Pipeline(bag.estimator.steps)
+            bag.fit(X, y)
+            bag.estimator = best_estimator.base_estimator
+            # bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
+            # bag.estimator = Pipeline(bag.estimator.steps) # to allow for ONNX conversiom
             self.best_model = Pipeline([("bag", bag)])
         else:
-            self.best_model = Pipeline(best_estimator.steps)
+            self.best_model = Pipeline([("clf", best_estimator.base_estimator)])
 
         pruner_type = self.model_params.get("pruner_type", "hyperband")
         self.cv_results = {
@@ -1211,7 +1231,10 @@ class ModelDevelopmentPipeline:
 
 
 def get_model_type(model):
-    types = {"RandomForestClassifier": "rf", "SequentiallyBootstrappedBaggingClassifier": "seq_rf"}
+    types = {
+        "RandomForestClassifier": "rf",
+        "SequentiallyBootstrappedBaggingClassifier": "seq_rf",
+        }
     return types.get(type(model).__name__, "model")
 
 
