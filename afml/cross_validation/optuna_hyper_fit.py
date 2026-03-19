@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
 from pathlib import Path 
+from typing import Callable, List
 
 import numpy as np
 import optuna
@@ -303,6 +304,7 @@ def optimize_trading_model(
     db_path: str = None,
     random_state: int = 42,
     refit: bool = True,
+    callbacks: List[Callable] = [print_best_trial],
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -330,6 +332,8 @@ def optimize_trading_model(
     Returns:
         optuna.study.Study: The completed study object with history and best params.
     """
+    from optuna.storages import RDBStorage
+    
     if pruner_type == "median":
         pruner = TradingModelPruner(y, sample_weight=events.loc[X.index, 'w']) 
     elif pruner_type == "hyperband":
@@ -340,11 +344,16 @@ def optimize_trading_model(
     sampler = TPESampler(seed=random_state)
 
     # Add a 30-second timeout for parallel workers
-    if str(db_path).startswith("sqlite") and str(db_path).endswith("db"):
-        storage_url = f"{db_path}?timeout=30"
+    if str(db_path).startswith("sqlite:///") and str(db_path).endswith("db"):
+        storage_url = f"{db_path}"
     else:
-        storage_url = f"sqlite:///{db_path}.db?timeout=30"
+        storage_url = f"sqlite:///{db_path}1"
     
+    storage = RDBStorage(
+        url=storage_url,
+        engine_kwargs={"connect_args": {"timeout": 30}, "pool_pre_ping": True},
+    )
+
     try:
         study = optuna.create_study(
             direction="maximize", 
@@ -373,7 +382,7 @@ def optimize_trading_model(
             objective, 
             n_trials=n_trials, 
             timeout=timeout, 
-            callbacks=[print_best_trial, save_intermediate_results, check_for_overfitting]
+            callbacks=[*callbacks],
         )
         
         # Reconstruct best model from best params
