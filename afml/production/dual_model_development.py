@@ -198,7 +198,7 @@ class BidAskLongShortPipeline:
         self.bar_data = load_and_prepare_training_data(**self.data_config)
         bar_size = self.bar_data["tick_volume"].iloc[0]
         
-        if self.data_config == "tick":
+        if self.data_config['bar_type'] == "tick":
             self.short_config["tick_bar_size"] = bar_size
             self.short_pipeline.file_manager.save_config(self.short_config)
             self.long_config["tick_bar_size"] = bar_size
@@ -216,6 +216,9 @@ class BidAskLongShortPipeline:
         self.bar_spread = self.long_bars['close'] - self.short_bars['close']
         self.short_bars['spread'] = self.bar_spread
         self.long_bars['spread'] = self.bar_spread
+        # spread_series is the bar-level spread series used by _calculate_spread_statistics.
+        # Tick-level spread would require raw tick data; bar-level is the available proxy.
+        self.spread_series = self.bar_spread
         
         logger.info(f"Created {len(self.long_bars)} bars for each side")
         logger.info(f"Average bar-level spread: {self.bar_spread.mean():.5f}")
@@ -256,6 +259,7 @@ class BidAskLongShortPipeline:
         long_events = generate_events_triple_barrier(
             self.long_bars,
             self.strategy,
+            self.target_config,
             **self.label_config
         )
         # Filter to only long signals
@@ -265,6 +269,7 @@ class BidAskLongShortPipeline:
         short_events = generate_events_triple_barrier(
             self.short_bars,
             self.strategy,
+            self.target_config,
             **self.label_config
         )
         # Filter to only short signals
@@ -323,15 +328,19 @@ class BidAskLongShortPipeline:
         )
     
     def _calculate_spread_statistics(self) -> Dict:
-        """Calculate comprehensive spread statistics."""
+        """Calculate spread statistics at bar frequency.
+
+        Note: spread_series is bar-level (ask_close - bid_close). True tick-level
+        spread statistics require raw tick data and are not computed here.
+        """
+        mid_price = (self.long_bars['close'] + self.short_bars['close']) / 2
+        spread_bps = float((self.spread_series.mean() / mid_price.mean()) * 10000)
         return {
-            'tick_spread_mean': float(self.spread_series.mean()),
-            'tick_spread_std': float(self.spread_series.std()),
-            'tick_spread_median': float(self.spread_series.median()),
-            'tick_spread_95th': float(self.spread_series.quantile(0.95)),
-            'bar_spread_mean': float(self.bar_spread.mean()),
-            'bar_spread_std': float(self.bar_spread.std()),
-            'spread_bps': float((self.spread_series.mean() / self.tick_data['bid'].mean()) * 10000),
+            'spread_mean':   float(self.spread_series.mean()),
+            'spread_std':    float(self.spread_series.std()),
+            'spread_median': float(self.spread_series.median()),
+            'spread_95th':   float(self.spread_series.quantile(0.95)),
+            'spread_bps':    spread_bps,
         }
     
     def _generate_spread_analysis(self, long_results, short_results) -> Dict:
@@ -340,15 +349,13 @@ class BidAskLongShortPipeline:
         short_metrics = short_results[2]
         
         return {
-            'long_events': long_metrics['events_count'],
-            'short_events': short_metrics['events_count'],
-            'long_cv_score': long_metrics['cv_results'].get('best_score', 0),
+            'long_events':    long_metrics['training_samples'],
+            'short_events':   short_metrics['training_samples'],
+            'long_cv_score':  long_metrics['cv_results'].get('best_score', 0),
             'short_cv_score': short_metrics['cv_results'].get('best_score', 0),
-            'long_features': long_metrics['feature_count'],
+            'long_features':  long_metrics['feature_count'],
             'short_features': short_metrics['feature_count'],
-            'spread_stats': self._calculate_spread_statistics(),
-            'long_label_dist': long_metrics['label_distribution'],
-            'short_label_dist': short_metrics['label_distribution'],
+            'spread_stats':   self._calculate_spread_statistics(),
         }
     
     def _print_summary(self, results: Dict):
@@ -357,18 +364,18 @@ class BidAskLongShortPipeline:
         print("-" * 80)
         
         spread_stats = results['spread_stats']
-        print(f"\nSpread Statistics:")
-        print(f"  Average Spread: {spread_stats['tick_spread_mean']:.5f} ({spread_stats['spread_bps']:.2f} bps)")
-        print(f"  Spread StdDev: {spread_stats['tick_spread_std']:.5f}")
-        print(f"  95th Percentile: {spread_stats['tick_spread_95th']:.5f}")
+        print(f"\nSpread Statistics (bar-level):")
+        print(f"  Average Spread: {spread_stats['spread_mean']:.5f} ({spread_stats['spread_bps']:.2f} bps)")
+        print(f"  Spread StdDev:  {spread_stats['spread_std']:.5f}")
+        print(f"  95th Percentile:{spread_stats['spread_95th']:.5f}")
         
         print(f"\nLONG Model (ASK-based):")
-        print(f"  Events: {results['combined_metrics']['long_events']:,}")
+        print(f"  Events:   {results['combined_metrics']['long_events']:,}")
         print(f"  CV Score: {results['combined_metrics']['long_cv_score']:.4f}")
         print(f"  Features: {results['combined_metrics']['long_features']}")
         
         print(f"\nSHORT Model (BID-based):")
-        print(f"  Events: {results['combined_metrics']['short_events']:,}")
+        print(f"  Events:   {results['combined_metrics']['short_events']:,}")
         print(f"  CV Score: {results['combined_metrics']['short_cv_score']:.4f}")
         print(f"  Features: {results['combined_metrics']['short_features']}")
 
