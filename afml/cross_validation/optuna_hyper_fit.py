@@ -360,8 +360,14 @@ def optimize_trading_model(
             sampler=sampler, 
             pruner=pruner, 
             study_name=study_name, 
-            storage=storage_url, 
+            storage=storage,       # RDBStorage object, not raw URL
             load_if_exists=True,
+        )
+
+        logger.info(
+            f"📊 Live dashboard available. In a separate terminal run:\n"
+            f"   optuna-dashboard {storage_url}\n"
+            f"   Study: {study_name}"
         )
         
         # Force single-threaded inside CV to prevent oversubscription
