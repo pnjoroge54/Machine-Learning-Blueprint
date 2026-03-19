@@ -951,14 +951,15 @@ class ModelDevelopmentPipeline:
                 random_state=random_state,
             )
 
-            # Fit bagging classifier with sample_weight
-            bag.fit(X, y)
-            # bag.estimator = best_estimator.base_estimator
+            # Single fit using the optimal weights from the winning trial.
+            # _WeightedEstimator.sample_weight_ holds the final computed weights
+            # (scheme + decay applied). Passing them here preserves that choice
+            # without re-deriving weights on each bootstrap sample.
             bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
-            bag.estimator = Pipeline(bag.estimator.steps) # to allow for ONNX conversiom
             self.best_model = Pipeline([("bag", bag)])
         else:
-            self.best_model = Pipeline([("clf", best_estimator.base_estimator)])
+            # best_estimator is already MyPipeline([("clf", RF)]); use directly.
+            self.best_model = best_estimator
 
         pruner_type = self.model_params.get("pruner_type", "hyperband")
         self.cv_results = {
