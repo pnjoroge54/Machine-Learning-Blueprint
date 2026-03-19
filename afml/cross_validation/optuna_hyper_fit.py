@@ -20,7 +20,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 
 from .cross_validation import PurgedKFold
-from ..production.utils import _WeightedEstimator
+from ..production.weighted_estimator import _WeightedEstimator
 
 
 class FinancialModelSuggester:
