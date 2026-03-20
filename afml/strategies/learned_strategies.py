@@ -178,4 +178,3 @@ class LearnedStrategy(BaseStrategy):
         # Declaring meta_labeling here causes get_entries() to use the predicted
         # side from generate_signals() as the position direction for labeling.
         return 'meta_labeling'
-
