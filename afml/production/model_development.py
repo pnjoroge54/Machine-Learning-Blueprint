@@ -921,7 +921,7 @@ class ModelDevelopmentPipeline:
         bagging_n = self.model_params.get('bagging_n_estimators', 0)
 
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
-        excluded = {"use_optuna", "n_trials", "optuna_timeout", "bagging_sequential"}
+        excluded = {"pipe_clf", "use_optuna", "n_trials", "optuna_timeout", "bagging_sequential"}
 
         if bagging_sequential and bagging_n > 0:
             # Tune the base classifier first with no bagging, then apply sequential
@@ -930,7 +930,6 @@ class ModelDevelopmentPipeline:
             excluded |= {"bagging_n_estimators", "bagging_max_samples", "bagging_max_features"}
             params = {k: v for k, v in self.model_params.items() if k not in excluded}
             params["bagging_n_estimators"] = 0
-            del params["pipe_clf"]
 
             tuned_pipeline, self.cv_results = clf_hyper_fit(
                 features=self.preprocessed_features,
