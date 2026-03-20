@@ -927,7 +927,7 @@ class ModelDevelopmentPipeline:
             # Tune the base classifier first with no bagging, then apply sequential
             # bootstrapping post-HPO. Exclude bagging params so clf_hyper_fit returns
             # the plain tuned pipeline rather than a standard BaggingClassifier.
-            excluded |= {"bagging_n_estimators", "bagging_max_samples", "bagging_max_features"}
+            excluded |= {"bagging_n_estimators", "bagging_max_samples", "bagging_max_features", "pipe_clf"}
             params = {k: v for k, v in self.model_params.items() if k not in excluded}
             params["bagging_n_estimators"] = 0
 
