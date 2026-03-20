@@ -1185,8 +1185,121 @@ class ModelDevelopmentPipeline:
                     cv_results=cv_df, strategy_config=self.config, output_dir=self.file_paths["reports"]
                 )
             self._generate_training_summary_html()
+            if self.study is not None:
+                self._generate_optuna_report()
         except Exception as e:
             logger.warning(f"Report generation failed: {e}")
+
+    def _generate_optuna_report(self):
+        """
+        Save a self-contained HTML report with Optuna visualisation plots.
+
+        Four plots are included:
+          1. Optimization history — objective value vs trial number, showing
+             convergence and the improvement trajectory over the study.
+          2. Intermediate values — fold-by-fold scores for each trial, making
+             the pruner's decisions visible: pruned trials end early.
+          3. Hyperparameter importances — fANOVA-based ranking of which parameters
+             drove score variance. Parameters near the top deserve tighter search
+             bounds on a subsequent study.
+          4. Parallel coordinates — one line per completed trial, coloured by
+             score. Crossing lines reveal parameter interactions; parallel lines
+             indicate an insensitive parameter.
+
+        Additionally, the custom baseline comparison plot from optuna_hyper_fit.py
+        is saved as a PNG alongside the HTML report.
+
+        The report is saved to file_paths['reports'] / 'optuna_study_report.html'.
+        """
+        import optuna.visualization as vis
+        from plotly.io import to_html
+
+        report_path = self.file_paths['reports'] / 'optuna_study_report.html'
+        study = self.study
+
+        n_complete = len([t for t in study.trials if t.state.name == 'COMPLETE'])
+        n_pruned   = len([t for t in study.trials if t.state.name == 'PRUNED'])
+
+        plot_specs = [
+            ('Optimization History',
+             'Objective value per trial. Dashed line shows the running best.',
+             lambda: vis.plot_optimization_history(study)),
+            ('Fold Scores per Trial (Intermediate Values)',
+             'Each line is one trial. Trials that end early were pruned by HyperbandPruner.',
+             lambda: vis.plot_intermediate_values(study)),
+            ('Hyperparameter Importances',
+             'fANOVA estimate of each parameter\'s contribution to score variance.',
+             lambda: vis.plot_param_importances(study)),
+            ('Parallel Coordinates',
+             'One line per completed trial, coloured by score. '
+             'Converging lines on the right indicate the high-scoring region.',
+             lambda: vis.plot_parallel_coordinate(study)),
+        ]
+
+        html_parts = [f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Optuna Study Report — {study.study_name}</title>
+    <style>
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; background: #0f172a;
+               color: #f1f5f9; padding: 40px; line-height: 1.6; }}
+        h1   {{ color: #38bdf8; border-bottom: 2px solid #334155; padding-bottom: 10px; }}
+        h2   {{ color: #7dd3fc; margin-top: 48px; }}
+        p.caption {{ color: #64748b; font-size: 0.88rem; margin-top: 4px; }}
+        .meta {{ color: #94a3b8; font-size: 0.9rem; margin-bottom: 32px; }}
+        .meta span {{ color: #22c55e; font-weight: 600; }}
+        .plot {{ margin-bottom: 56px; }}
+    </style>
+</head>
+<body>
+<h1>Optuna Study Report</h1>
+<p class="meta">
+    Study: <b>{study.study_name}</b><br>
+    Completed: <span>{n_complete}</span> trials &nbsp;|&nbsp;
+    Pruned: <span style="color:#f97316">{n_pruned}</span> trials &nbsp;|&nbsp;
+    Best score: <span>{study.best_value:.4f}</span>
+</p>"""]
+
+        for title, caption, plot_fn in plot_specs:
+            try:
+                fig = plot_fn()
+                fig.update_layout(
+                    paper_bgcolor='#1e293b',
+                    plot_bgcolor='#1e293b',
+                    font=dict(color='#f1f5f9'),
+                )
+                plot_html = to_html(fig, include_plotlyjs='cdn', full_html=False)
+                html_parts.append(
+                    f'<div class="plot">'
+                    f'<h2>{title}</h2>'
+                    f'<p class="caption">{caption}</p>'
+                    f'{plot_html}'
+                    f'</div>'
+                )
+            except Exception as e:
+                logger.warning(f"Optuna plot '{title}' failed: {e}")
+
+        html_parts.append('</body></html>')
+
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(html_parts))
+        logger.info(f"Optuna study report saved: {report_path}")
+
+        # Baseline comparison plot (matplotlib) saved as a companion PNG
+        try:
+            from ..cross_validation.optuna_hyper_fit import plot_model_vs_baseline
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            plot_model_vs_baseline(study, self.events['bin'], self.events)
+            baseline_path = self.file_paths['reports'] / 'optuna_baseline_comparison.png'
+            plt.savefig(baseline_path, dpi=150, bbox_inches='tight',
+                        facecolor='#0f172a', edgecolor='none')
+            plt.close()
+            logger.info(f"Baseline comparison plot saved: {baseline_path}")
+        except Exception as e:
+            logger.warning(f"Baseline plot failed: {e}")
 
     def _generate_training_summary_html(self):
         """Constructs a comprehensive HTML training report."""
