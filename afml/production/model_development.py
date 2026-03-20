@@ -652,7 +652,7 @@ class ModelDevelopmentPipeline:
                     Toggles Bayesian HPO (True) vs. Grid/Random Search (False).
                 - n_trials : (int, if Optuna=True)
                     Number of Optuna trials.
-                - optuna_timeout : (int, if Optuna=True)
+                - timeout : (int, if Optuna=True)
                     Time limit in seconds for HPO.
                 - pruner_type : (str, if Optuna=True, default="hyperband")
                     Model used for pruning. Options are "hyperband" and "median".
@@ -881,23 +881,18 @@ class ModelDevelopmentPipeline:
         bagging_n_estimators = self.model_params.get('bagging_n_estimators', 0)
 
         if bagging_n_estimators > 0:
-            # Auto-resolve bagging_max_samples to average uniqueness when left at 1.0.
-            if self.model_params.get('bagging_max_samples', 1.0) == 1.0:
-                av_uniqueness = self.events['tW'].mean()
+            # Auto-resolve bagging_max_samples to average uniqueness when left as None.
+            if self.model_params.get('bagging_max_samples') is None:
+                av_uniqueness = self.events['tW'].mean().round(2)
                 self.model_params['bagging_max_samples'] = av_uniqueness
                 logger.info(f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})")
-        elif isinstance(pipe.steps[-1][-1], RandomForestClassifier):
+        elif hasattr(pipe.steps[-1][-1], "max_samples"):
             # max_samples is a bootstrap parameter specific to RandomForestClassifier.
             # DecisionTreeClassifier has no bootstrap step and no max_samples parameter.
-            av_uniqueness = self.events['tW'].mean()
+            av_uniqueness = self.events['tW'].mean().round(2)
             pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
-
-        if isinstance(pipe.steps[-1][-1], SequentiallyBootstrappedBaggingClassifier):
-            pipe = set_pipeline_params(
-                pipe,
-                samples_info_sets=self.events['t1'],
-                price_bars_index=self.bar_data.index,
-            )
+            if self.model_params.get("use_optuna", False) or self.model_params.get("rnd_search_iter", 0) > 0:
+                self.model_params["param_grid"]["max_samples"] = uniform(av_uniqueness, 1 - av_uniqueness)
 
         self.model_params['pipe_clf'] = pipe
 
@@ -916,27 +911,24 @@ class ModelDevelopmentPipeline:
         self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
         self.completed_steps['model_training'] = True
 
-    def _train_model_sklearn(self, pipe):
+    def _train_model_sklearn(self):
         bagging_sequential = self.model_params.get('bagging_sequential', False)
         bagging_n = self.model_params.get('bagging_n_estimators', 0)
 
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
-        excluded = {"pipe_clf", "use_optuna", "n_trials", "optuna_timeout", "bagging_sequential"}
-
+        excluded = {"use_optuna", "n_trials", "timeout", "bagging_sequential", "pruner_type"}
+		params = {k: v for k, v in self.model_params.items() if k not in excluded}
+		params["sample_weight"] = self.sample_weight         
+		
         if bagging_sequential and bagging_n > 0:
             # Tune the base classifier first with no bagging, then apply sequential
             # bootstrapping post-HPO. Exclude bagging params so clf_hyper_fit returns
             # the plain tuned pipeline rather than a standard BaggingClassifier.
-            excluded |= {"bagging_n_estimators", "bagging_max_samples", "bagging_max_features"}
-            params = {k: v for k, v in self.model_params.items() if k not in excluded}
-            params["bagging_n_estimators"] = 0
-
+           params["bagging_n_estimators"] = 0
             tuned_pipeline, self.cv_results = clf_hyper_fit(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
                 t1=self.events["t1"],
-                pipe_clf=pipe,
-                sample_weight=self.sample_weight,
                 **params,
             )
             self.best_model = self._apply_sequential_bagging(
@@ -944,13 +936,10 @@ class ModelDevelopmentPipeline:
                 tuned_pipeline, sample_weight=self.sample_weight,
             )
         else:
-            params = {k: v for k, v in self.model_params.items() if k not in excluded}
-            self.best_model, self.cv_results = clf_hyper_fit(
+			self.best_model, self.cv_results = clf_hyper_fit(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
-                t1=self.events["t1"],
-                pipe_clf=pipe,
-                sample_weight=self.sample_weight,
+                t1=self.events["t1"],				 
                 **params,
             )
 
@@ -1004,12 +993,12 @@ class ModelDevelopmentPipeline:
         # classifier and re-wrap in MyPipeline for downstream compatibility.
         best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
 
-        bagging_sequential   = self.model_params.get('bagging_sequential', False)
+        bagging_sequential = self.model_params.get('bagging_sequential', False)
         bagging_n_estimators = self.model_params.get('bagging_n_estimators', 0)
-        bagging_max_samples  = self.model_params.get('bagging_max_samples', 1.0)
+        bagging_max_samples = self.model_params.get('bagging_max_samples', 1.0)
         bagging_max_features = self.model_params.get('bagging_max_features', 1.0)
-        n_jobs               = self.model_params.get('n_jobs', -1)
-        random_state         = self.model_params.get('random_state', None)
+        n_jobs = self.model_params.get('n_jobs', -1)
+        random_state = self.model_params.get('random_state', None)
 
         if bagging_sequential and bagging_n_estimators > 0:
             # Sequential bootstrapping with the winning trial's weights.
@@ -1086,10 +1075,10 @@ class ModelDevelopmentPipeline:
             sklearn Pipeline whose single step is the fitted
             SequentiallyBootstrappedBaggingClassifier.
         """
-        bagging_n       = self.model_params.get('bagging_n_estimators', 0)
+        bagging_n = self.model_params.get('bagging_n_estimators', 0)
         bagging_samples = self.model_params.get('bagging_max_samples', 1.0)
-        bagging_feats   = self.model_params.get('bagging_max_features', 1.0)
-        random_state    = self.model_params.get('random_state', None)
+        bagging_feats = self.model_params.get('bagging_max_features', 1.0)
+        random_state = self.model_params.get('random_state', 1)
 
         # n_jobs=1 on the base estimator avoids nested parallelism;
         # the outer SequentiallyBootstrappedBaggingClassifier parallelises across bags.
@@ -1405,7 +1394,8 @@ def get_model_type(model):
         "RandomForestClassifier": "rf",
         "SequentiallyBootstrappedBaggingClassifier": "seq_rf",
         }
-    return types.get(type(model).__name__, "model")
+    name = type(model).__name__
+    return types.get(name, name.replace("Classifier", ""))
 
 
 def is_tree(estimator):
