@@ -435,12 +435,12 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cv_cacheable
+@cv_cacheable()
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
     features: pd.DataFrame,
-    cv_splits: int = 5,
+    n_splits: int = 5,
     linear: bool = None,
     decay_factors: Union[list, np.ndarray] = np.arange(0.1, 1, 0.1), 
 ) -> pd.Series:
@@ -467,7 +467,7 @@ def get_optimal_sample_weight(
         Event labels with uniqueness weights.
     features: pd.DataFrame
         Training features
-    cv_splits : int, optional
+    n_splits : int, optional
         Number of cross-validation splits (default: 5).
     linear : bool, optional
         Default is None, which seraches both linear and exponential time-decay.
@@ -497,7 +497,7 @@ def get_optimal_sample_weight(
         n_jobs=-1
     )
 
-    cv_gen = PurgedKFold(n_splits=cv_splits, t1=cont["t1"], pct_embargo=0.01)
+    cv_gen = PurgedKFold(n_splits=n_splits, t1=cont["t1"], pct_embargo=0.01)
 
     weights = {
         "return": cont["w"],
@@ -626,7 +626,7 @@ class ModelDevelopmentPipeline:
                 - param_grid : dict or list of dicts
                     Hyperparameter grid for search. Keys should include pipeline step
                     names as prefixes (e.g., 'classifier__max_depth').
-                - cv : int, default=5
+                - n_splits : int, default=5
                     Number of folds for purged k-fold cross-validation.
                 - bagging_n_estimators : int, default=0
                     Number of base estimators in bagging ensemble. If 0, no bagging
@@ -719,7 +719,7 @@ class ModelDevelopmentPipeline:
 
         self.log_file = self.file_paths["logs"] / "pipeline.log"
         self._setup_logging()
-        self.cv_splits = model_params["cv_splits"]
+        self.n_splits = model_params["n_splits"]
 
     def _setup_logging(self):
         logger.remove()
@@ -814,7 +814,7 @@ class ModelDevelopmentPipeline:
             self.sample_weight = pd.read_parquet(self.file_paths["weights"])
         else:
             self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
-                self.bar_data.index, self.events, self.features, self.cv_splits, None, self.decay_factors
+                self.bar_data.index, self.events, self.features, self.n_splits, None, self.decay_factors
             )
             self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
             if self.sample_weight is not None:
@@ -979,7 +979,7 @@ class ModelDevelopmentPipeline:
         self.study, cv_results_df = optimize_trading_model(
             classifier=base_clf, X=X, y=y, events=self.events,
             data_index=self.bar_data.index,
-            n_splits=self.cv_splits,
+            n_splits=self.n_splits,
             refit=True,
             callbacks=callbacks,
             **opt_params,
