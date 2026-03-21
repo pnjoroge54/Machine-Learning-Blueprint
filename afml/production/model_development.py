@@ -897,9 +897,9 @@ class ModelDevelopmentPipeline:
         self.model_params['pipe_clf'] = pipe
 
         if self.model_params.get('use_optuna', False):
-            self._train_model_optuna(pipe)
+            self._train_model_optuna()
         else:
-            self._train_model_sklearn(pipe)
+            self._train_model_sklearn()
 
         # Prepend the fitted preprocessor so the saved model is fully self-contained.
         # best_model.predict(raw_features) now applies DropConstant + DropDuplicate
