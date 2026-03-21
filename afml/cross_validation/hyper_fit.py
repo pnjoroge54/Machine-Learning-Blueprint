@@ -19,7 +19,7 @@ def clf_hyper_fit(
     t1,
     pipe_clf,
     param_grid,
-    cv=5,
+    n_splits=5,
     bagging_n_estimators=0,
     bagging_max_samples=1.0,
     bagging_max_features=1.0,
@@ -52,7 +52,7 @@ def clf_hyper_fit(
     param_grid : dict or list of dicts
         Hyperparameter grid for search. Keys should include pipeline step
         names as prefixes (e.g., 'classifier__max_depth').
-    cv : int, default=5
+    n_splits : int, default=5
         Number of folds for purged k-fold cross-validation.
     bagging_n_estimators : int, default=0
         Number of base estimators in bagging ensemble. If 0, no bagging
@@ -108,7 +108,7 @@ def clf_hyper_fit(
         scoring = "neg_log_loss"
 
     # Create purged K-Fold
-    inner_cv = PurgedKFold(n_splits=cv, t1=t1, pct_embargo=pct_embargo)
+    inner_cv = PurgedKFold(n_splits, t1, pct_embargo)
 
     # Perform hyperparameter search
     if rnd_search_iter == 0:
