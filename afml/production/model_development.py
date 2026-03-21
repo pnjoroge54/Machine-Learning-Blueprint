@@ -1,4 +1,3 @@
-```python
 """
 model_development.py
 --------------------
@@ -1401,4 +1400,3 @@ def get_model_type(model):
 
 def is_tree(estimator):
     return isinstance(estimator, (RandomForestClassifier, DecisionTreeClassifier))
-```
