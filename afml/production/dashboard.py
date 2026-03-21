@@ -33,6 +33,8 @@ def launch_optuna_dashboard(
         subprocess.SubprocessError: If the subprocess fails to start.
         TimeoutError: If waiting for the server times out.
     """
+    kill_existing_dashboard(port)
+    
     cmd = [
         "optuna",
         "dashboard",
@@ -90,6 +92,22 @@ def launch_optuna_dashboard(
 
     return proc
 
+
+def kill_existing_dashboard(port: int):
+    """Terminate any process listening on the given port."""
+    for conn in psutil.net_connections():
+        if conn.laddr.port == port and conn.status == "LISTEN":
+            try:
+                proc = psutil.Process(conn.pid)
+                proc.terminate()
+                proc.wait(timeout=3)
+                logger.info(f"Terminated existing process on port {port} (PID {conn.pid})")
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.TimeoutExpired:
+                proc.kill()
+                logger.warning(f"Force-killed process on port {port} (PID {conn.pid})")
+                
 
 if __name__ == "__main__":
     # Example usage
