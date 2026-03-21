@@ -943,7 +943,7 @@ class ModelDevelopmentPipeline:
                 **params,
             )
 
-    def _train_model_optuna(self, pipe):
+    def _train_model_optuna(self):
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = pipe.steps[-1][1]
 
