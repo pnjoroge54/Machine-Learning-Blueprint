@@ -13,6 +13,7 @@ def launch_optuna_dashboard(
     port: int = 8080,
     wait_for_server: bool = True,
     timeout: float = 10.0,
+    force_restart: bool = False,
 ) -> Optional[psutil.Process]:
     """
     Launch the Optuna dashboard as a background process and return its psutil.Process.
@@ -23,6 +24,8 @@ def launch_optuna_dashboard(
         port: Port for the dashboard (default: 8080).
         wait_for_server: If True, wait until the dashboard is ready to accept connections.
         timeout: Maximum seconds to wait for the dashboard to become ready.
+        force_restart: If True, kill any existing process listening on (host, port)
+                      before launching a new dashboard.
 
     Returns:
         psutil.Process object if the dashboard was successfully launched,
@@ -32,9 +35,19 @@ def launch_optuna_dashboard(
         FileNotFoundError: If the 'optuna' command is not found in PATH.
         subprocess.SubprocessError: If the subprocess fails to start.
         TimeoutError: If waiting for the server times out.
+        RuntimeError: If force_restart is False and a dashboard is already running.
     """
-    kill_existing_dashboard(port)
-    
+    # If force_restart is enabled, kill any existing process on the port
+    if force_restart:
+        kill_process_on_port(port, host)
+    else:
+        # Check if something is already listening on the port
+        if is_port_in_use(port, host):
+            raise RuntimeError(
+                f"Port {port} is already in use. Use force_restart=True to replace the existing dashboard."
+            )
+
+    # Build the command
     cmd = [
         "optuna",
         "dashboard",
@@ -81,8 +94,7 @@ def launch_optuna_dashboard(
                         logger.info(f"Dashboard ready at http://{host}:{port}")
                         return proc
             except (psutil.AccessDenied, psutil.Error):
-                # Fallback: just sleep and retry
-                pass
+                pass  # Fallback: just sleep and retry
 
             time.sleep(0.2)
 
@@ -93,25 +105,66 @@ def launch_optuna_dashboard(
     return proc
 
 
-def kill_existing_dashboard(port: int):
-    """Terminate any process listening on the given port."""
-    for conn in psutil.net_connections():
-        if conn.laddr.port == port and conn.status == "LISTEN":
+def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """
+    Check if a specific port is currently listening on the given host.
+    Note: This only checks for IPv4 connections on the exact host address.
+    """
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.laddr.port == port and conn.laddr.ip == host:
+                if conn.status == "LISTEN":
+                    return True
+    except psutil.AccessDenied:
+        # If we lack permissions, assume port is not in use (but log warning)
+        logger.warning("Insufficient permissions to inspect network connections.")
+    except Exception as e:
+        logger.warning(f"Error while checking port: {e}")
+    return False
+
+
+def kill_process_on_port(port: int, host: str = "127.0.0.1"):
+    """
+    Terminate any process listening on the given (host, port).
+    It first checks if the process is an Optuna dashboard by inspecting its command line.
+    """
+    for conn in psutil.net_connections(kind="inet"):
+        if conn.laddr.port == port and conn.laddr.ip == host and conn.status == "LISTEN":
             try:
                 proc = psutil.Process(conn.pid)
-                proc.terminate()
-                proc.wait(timeout=3)
-                logger.info(f"Terminated existing process on port {port} (PID {conn.pid})")
+                # Avoid killing ourselves
+                if proc.pid == psutil.Process().pid:
+                    logger.warning("The process listening on port is this script itself – skipping.")
+                    continue
+
+                # Check if it's likely an Optuna dashboard (optional safety)
+                cmdline = " ".join(proc.cmdline())
+                if "optuna" in cmdline and "dashboard" in cmdline:
+                    logger.info(f"Killing existing Optuna dashboard (PID {conn.pid}) on port {port}...")
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                    logger.info("Existing dashboard terminated.")
+                else:
+                    logger.warning(
+                        f"A non-Optuna process (PID {conn.pid}) is using port {port}. "
+                        "Skipping termination to avoid affecting unrelated services."
+                    )
             except psutil.NoSuchProcess:
                 pass
             except psutil.TimeoutExpired:
+                logger.warning(f"Process {conn.pid} did not terminate, force killing.")
                 proc.kill()
-                logger.warning(f"Force-killed process on port {port} (PID {conn.pid})")
-                
+            except Exception as e:
+                logger.error(f"Error while terminating process on port {port}: {e}")
+
 
 if __name__ == "__main__":
-    # Example usage
-    proc = launch_optuna_dashboard("sqlite:///example.db", port=8080)
+    # Example with force_restart=True
+    proc = launch_optuna_dashboard(
+        "sqlite:///example.db",
+        port=8080,
+        force_restart=True,  # will kill any existing dashboard on port 8080
+    )
     if proc:
         logger.info(f"Optuna dashboard running (PID: {proc.pid})")
         logger.info("Open http://127.0.0.1:8080 in your browser.")
