@@ -160,9 +160,15 @@ class FinancialModelSuggester:
         spaces = {
             "random_forest": {
                 "n_estimators": range(100, 1000),
-                "max_depth": range(3, 7),
-                "min_weight_fraction_leaf": stats.uniform(0.025, 0.1),
-                "max_features": ["sqrt", "log2", 0.5, 1.0],
+                "max_depth": range(3, 12),
+                "min_weight_fraction_leaf": stats.uniform(0.025, 0.475),
+                "max_features": ["sqrt", "log2", 0.5, 0.7, 1.0],
+                "ccp_alpha": stats.loguniform(1e-5, 1e-2),
+            },
+            "decision_tree": {
+                "max_depth": range(3, 12),
+                "min_weight_fraction_leaf": stats.uniform(0.025, 0.475),
+                "max_features": ["sqrt", "log2", 0.5, 0.7, 1.0],
                 "ccp_alpha": stats.loguniform(1e-5, 1e-2),
             },
             "xgboost": {
@@ -196,16 +202,16 @@ def optimize_trading_model_with_pruning(
     )
         
     # Setup Cross-Validation
-    t1 = events['t1']
-    cv = PurgedKFold(n_splits=n_splits, t1=t1, pct_embargo=0.01)
+    cv = PurgedKFold(n_splits=n_splits, t1=events['t1'], pct_embargo=0.01)
+    X_, y_ = X.to_numpy(), y.to_numpy()
     # Extract return-attribution weights from to evaluate validation set with respect to PnL
     w_score = events['w'].to_numpy()
         
     fold_scores = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+        X_train, X_val = X_[train_idx], X_[val_idx]
+        y_train, y_val = y_[train_idx], y_[val_idx]
 
         fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator       
         w_val = w_score[val_idx]
