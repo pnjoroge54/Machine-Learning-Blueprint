@@ -1,3 +1,4 @@
+```python
 """
 model_development.py
 --------------------
@@ -917,14 +918,14 @@ class ModelDevelopmentPipeline:
 
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
         excluded = {"use_optuna", "n_trials", "timeout", "bagging_sequential", "pruner_type"}
-		params = {k: v for k, v in self.model_params.items() if k not in excluded}
-		params["sample_weight"] = self.sample_weight         
-		
+        params = {k: v for k, v in self.model_params.items() if k not in excluded}
+        params["sample_weight"] = self.sample_weight         
+
         if bagging_sequential and bagging_n > 0:
             # Tune the base classifier first with no bagging, then apply sequential
             # bootstrapping post-HPO. Exclude bagging params so clf_hyper_fit returns
             # the plain tuned pipeline rather than a standard BaggingClassifier.
-           params["bagging_n_estimators"] = 0
+            params["bagging_n_estimators"] = 0
             tuned_pipeline, self.cv_results = clf_hyper_fit(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
@@ -936,10 +937,10 @@ class ModelDevelopmentPipeline:
                 tuned_pipeline, sample_weight=self.sample_weight,
             )
         else:
-			self.best_model, self.cv_results = clf_hyper_fit(
+            self.best_model, self.cv_results = clf_hyper_fit(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
-                t1=self.events["t1"],				 
+                t1=self.events["t1"],                 
                 **params,
             )
 
@@ -1400,3 +1401,4 @@ def get_model_type(model):
 
 def is_tree(estimator):
     return isinstance(estimator, (RandomForestClassifier, DecisionTreeClassifier))
+```
