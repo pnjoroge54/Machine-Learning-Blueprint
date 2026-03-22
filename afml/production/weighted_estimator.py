@@ -62,7 +62,7 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
             weights *= decay_vec
 
         self.sample_weight_ = weights
-        self.base_estimator.fit(X, y, sample_weight=weights.loc[valid])
+        self.base_estimator.fit(X.to_numpy(), y.to_numpy(), sample_weight=weights.loc[valid].to_numpy())
         return self
 
     def predict(self, X):
