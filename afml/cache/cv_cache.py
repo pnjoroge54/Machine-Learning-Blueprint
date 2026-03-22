@@ -15,6 +15,10 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from sklearn.base import BaseEstimator
+from scipy.stats._distn_infrastructure import (
+    rv_continuous_frozen,
+    rv_discrete_frozen,
+)
 
 
 def _hash_classifier(clf: BaseEstimator) -> str:
@@ -125,9 +129,6 @@ def _hash_series_fast(series: pd.Series) -> str:
 
 def _hash_scipy_dist(dist) -> str:
     """Deterministic hash for scipy frozen distributions."""
-    from scipy.stats._distn_infrastructure import (
-        rv_continuous_frozen, rv_discrete_frozen
-    )
     dist_type = type(dist.dist).__name__   # e.g. 'randint', 'uniform'
     args = dist.args if hasattr(dist, "args") else ()
     kwds = dist.kwds if hasattr(dist, "kwds") else {}
