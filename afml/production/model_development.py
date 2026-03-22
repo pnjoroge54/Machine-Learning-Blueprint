@@ -376,7 +376,7 @@ def _rolling_metrics_numba(y_true, y_pred, weights, window):
     return accuracy, precision, recall, f1
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     """
     Generates self-referential 'Meta-Features' for the model.
@@ -913,6 +913,8 @@ class ModelDevelopmentPipeline:
     def _train_model_sklearn(self):
         bagging_sequential = self.model_params.get('bagging_sequential', False)
         bagging_n = self.model_params.get('bagging_n_estimators', 0)
+        sample_weight = self.sample_weight.loc[self.events.index]  # meta_features change indexing
+        sample_weight *= sample_weight.shape[0] / sample_weight.sum()
 
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
         included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
@@ -928,11 +930,11 @@ class ModelDevelopmentPipeline:
                 labels=self.events["bin"],
                 t1=self.events["t1"],
                 **params,
-                sample_weight=self.sample_weight
+                sample_weight=sample_weight
             )
             self.best_model = self._apply_sequential_bagging(
                 self.preprocessed_features, self.events["bin"],
-                tuned_pipeline, sample_weight=self.sample_weight,
+                tuned_pipeline, sample_weight=sample_weight,
             )
         else:
             self.best_model, self.cv_results = clf_hyper_fit_cached(
@@ -940,7 +942,7 @@ class ModelDevelopmentPipeline:
                 labels=self.events["bin"],
                 t1=self.events["t1"],                 
                 **params,
-                sample_weight=self.sample_weight
+                sample_weight=sample_weight
             )
 
     def _train_model_optuna(self):
