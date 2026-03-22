@@ -4,8 +4,8 @@ from sklearn.ensemble import BaggingClassifier
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 
+from ..cache.cv_cache import cv_cacheable
 from ..cache.unified_cache_system import (
-    cv_cacheable,
     create_cacheable_param_grid,
     reconstruct_param_grid,
 )
