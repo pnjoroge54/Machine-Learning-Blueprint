@@ -123,6 +123,21 @@ def _hash_series_fast(series: pd.Series) -> str:
     return "_".join(parts)
 
 
+def _hash_scipy_dist(dist) -> str:
+    """Deterministic hash for scipy frozen distributions."""
+    from scipy.stats._distn_infrastructure import (
+        rv_continuous_frozen, rv_discrete_frozen
+    )
+    dist_type = type(dist.dist).__name__   # e.g. 'randint', 'uniform'
+    args = dist.args if hasattr(dist, "args") else ()
+    kwds = dist.kwds if hasattr(dist, "kwds") else {}
+    combined = json.dumps(
+        {"type": dist_type, "args": list(args), "kwds": kwds},
+        sort_keys=True
+    )
+    return hashlib.md5(combined.encode()).hexdigest()[:8]
+
+
 def _generate_cv_cache_key(func: Callable, args: tuple, kwargs: dict) -> str:
     """
     Generate specialized cache key for CV functions.
@@ -140,6 +155,22 @@ def _generate_cv_cache_key(func: Callable, args: tuple, kwargs: dict) -> str:
             # Handle different parameter types
             if param_value is None:
                 key_parts.append(f"{param_name}_None")
+
+            elif isinstance(param_value, dict):
+                # Handle param_distributions — may contain scipy distributions
+                dict_parts = []
+                for k, v in sorted(param_value.items()):
+                    if isinstance(v, (rv_discrete_frozen, rv_continuous_frozen)):
+                        dist_hash = _hash_scipy_dist(v)
+                        dict_parts.append(f"{k}_dist_{dist_hash}")
+                    elif isinstance(v, (list, tuple)):
+                        dict_parts.append(f"{k}_{hash(str(sorted(str(i) for i in v)))}")
+                    else:
+                        dict_parts.append(f"{k}_{v}")
+                key_parts.append(
+                    f"{param_name}_dict_"
+                    f"{hashlib.md5('_'.join(dict_parts).encode()).hexdigest()[:8]}"
+                )
 
             elif isinstance(param_value, BaseEstimator):
                 # Sklearn classifier/estimator
