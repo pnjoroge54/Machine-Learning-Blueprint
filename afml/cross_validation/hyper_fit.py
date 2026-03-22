@@ -175,7 +175,7 @@ def clf_hyper_fit(
         return Pipeline(best_estimator.steps), cv_results
 
 
-@cv_cacheable(track_data_access=True)
+@cv_cacheable
 def clf_hyper_fit_internal(
     features,
     labels,
