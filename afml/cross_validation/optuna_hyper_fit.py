@@ -367,7 +367,7 @@ def optimize_trading_model(
 
         logger.info(
             f"📊 Live dashboard available. In a separate terminal run:\n"
-            f"   optuna-dashboard {storage_url}\n"
+            f"   optuna-dashboard {db_path}\n"
             f"   Study: {study_name}"
         )
         
