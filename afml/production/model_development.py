@@ -889,7 +889,10 @@ class ModelDevelopmentPipeline:
             # max_samples is a bootstrap parameter specific to RandomForestClassifier.
             # DecisionTreeClassifier has no bootstrap step and no max_samples parameter.
             av_uniqueness = self.events['tW'].mean().round(2)
-            pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
+            try:
+                pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
+            except:
+                pass
             if self.model_params.get("use_optuna", False) or self.model_params.get("rnd_search_iter", 0) > 0:
                 self.model_params["param_grid"]["max_samples"] = uniform(av_uniqueness, 1 - av_uniqueness)
 
