@@ -96,8 +96,8 @@ from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
 from ..cache import cacheable, cv_cacheable, get_cache_monitor, log_data_access, print_contamination_report
-from ..cross_validation import PurgedKFold, clf_hyper_fit
-from ..cross_validation.cross_validation import ml_cross_val_score
+from ..cross_validation.hyper_fit import clf_hyper_fit, clf_hyper_fit_cached
+from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
 from ..cross_validation.optuna_hyper_fit import (
     optimize_trading_model,
@@ -107,7 +107,6 @@ from ..cross_validation.optuna_hyper_fit import (
 )
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
-from ..ensemble.utils import train_bagging_ensemble
 from ..features.trading_session import get_time_features
 from ..labeling.triple_barrier import add_vertical_barrier, get_event_weights, triple_barrier_labels
 from ..mt5.tick_data_loader import tick_data_loader as loader
@@ -122,7 +121,7 @@ from .file_manager import ModelFileManager
 # Cached data helpers
 # ============================================================================
 
-@cacheable()
+@cacheable(time_aware=True)
 def get_bar_size(tick_df, bar_size):
     """
     Compute tick-based bar size.
@@ -239,7 +238,7 @@ def create_feature_engineering_pipeline(
     return features.join(time_feat, how="left")
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: BaseStrategy,
