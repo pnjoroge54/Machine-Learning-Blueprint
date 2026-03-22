@@ -11,8 +11,6 @@ import pandas as pd
 import statsmodels.api as sm
 from numba import njit, prange
 
-from ..cache import robust_cacheable
-
 
 @njit(parallel=True, cache=True)
 def _window_stats_numba(y, window_length):
@@ -66,7 +64,6 @@ def _window_stats_numba(y, window_length):
     return t_values, slopes, r_squared
 
 
-@robust_cacheable
 def trend_scanning_labels(
     close: pd.Series,
     span: Union[List[int], Tuple[int, int]] = (5, 20),
