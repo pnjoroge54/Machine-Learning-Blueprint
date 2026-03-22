@@ -962,15 +962,18 @@ class ModelDevelopmentPipeline:
         # The config_hash is the last path segment of base_dir — a deterministic
         # MD5 of the full config dict. The same experiment always maps to the same
         # study, so a crashed run resumes exactly where it left off.
-        config_hash = self.file_paths["base_dir"].name   # 8-char md5 suffix
+        config_hash = self.file_paths["base_dir"].name
+        bagging_hash = self._get_bagging_hash()
+
         opt_params["study_name"] = (
             f"{self.strategy.get_strategy_name()}"
             f"_{self.symbol}"
             f"_{self.data_config.get('bar_type', 'unk')}"
             f"_{self.data_config.get('bar_size', 'unk')}"
             f"_{config_hash}"
+            f"_bag{bagging_hash}"     # ← new
         )
-
+        
         # Build the SQLite URI with an absolute path so it is correct regardless
         # of the working directory at runtime.
         db_path: Path = self.file_paths["db_path"]
@@ -1048,6 +1051,23 @@ class ModelDevelopmentPipeline:
                                      if t.state.name == 'PRUNED']),
         }
 
+    def _get_bagging_hash(self) -> str:
+        """
+        Produce a short deterministic hash of all bagging-related parameters.
+        Any change to the bagging configuration produces a new study name,
+        preventing Optuna from resuming a study with incompatible structure.
+        """
+        import hashlib, json
+        bagging_config = {
+            "sequential":    self.model_params.get("bagging_sequential", False),
+            "n_estimators":  self.model_params.get("bagging_n_estimators", 0),
+            "max_samples":   self.model_params.get("bagging_max_samples", 1.0),
+            "max_features":  self.model_params.get("bagging_max_features", 1.0),
+        }
+        return hashlib.md5(
+            json.dumps(bagging_config, sort_keys=True).encode()
+        ).hexdigest()[:6]
+    
     def _apply_sequential_bagging(
         self,
         X: pd.DataFrame,
