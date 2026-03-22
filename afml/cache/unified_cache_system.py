@@ -3,7 +3,6 @@ Unified cache system for AFML - eliminates all duplication.
 
 This module replaces:
 - robust_cache_keys.py (most functionality)
-- cv_cache.py (CV-specific caching)
 - Parts of cache_monitoring.py integration
 
 One unified system with consistent behavior across all decorators.
@@ -822,10 +821,13 @@ def _track_data_access(args, kwargs, dataset_name, purpose):
 # =============================================================================
 
 # Old names → new unified decorator (with auto_versioning enabled by default)
-robust_cacheable = cacheable()  # auto_versioning=True by default
-time_aware_cacheable = cacheable(time_aware=True)  # auto_versioning=True by default
-cv_cacheable = cacheable()  # auto_versioning=True by default
+def robust_cacheable(**kwargs):
+    return cacheable(**kwargs)
 
+
+def time_aware_cacheable(**kwargs):
+    return cacheable(time_aware=True, **kwargs)
+  
 
 def data_tracking_cacheable(dataset_name: str, purpose: str):
     """Backward compatible data tracking decorator."""
