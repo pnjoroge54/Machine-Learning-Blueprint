@@ -916,20 +916,20 @@ class ModelDevelopmentPipeline:
         bagging_n = self.model_params.get('bagging_n_estimators', 0)
 
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
-        excluded = {"use_optuna", "n_trials", "timeout", "bagging_sequential", "pruner_type"}
-        params = {k: v for k, v in self.model_params.items() if k not in excluded}
-        params["sample_weight"] = self.sample_weight         
+        included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
+        params = {k: v for k, v in self.model_params.items() if k in included}        
 
         if bagging_sequential and bagging_n > 0:
             # Tune the base classifier first with no bagging, then apply sequential
             # bootstrapping post-HPO. Exclude bagging params so clf_hyper_fit returns
             # the plain tuned pipeline rather than a standard BaggingClassifier.
             params["bagging_n_estimators"] = 0
-            tuned_pipeline, self.cv_results = clf_hyper_fit(
+            tuned_pipeline, self.cv_results = clf_hyper_fit_cached(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
                 t1=self.events["t1"],
                 **params,
+                sample_weight=self.sample_weight
             )
             self.best_model = self._apply_sequential_bagging(
                 self.preprocessed_features, self.events["bin"],
@@ -941,17 +941,19 @@ class ModelDevelopmentPipeline:
                 labels=self.events["bin"],
                 t1=self.events["t1"],                 
                 **params,
+                sample_weight=self.sample_weight
             )
 
     def _train_model_optuna(self):
         X, y = self.preprocessed_features, self.events["bin"]
-        base_clf = pipe.steps[-1][1]
-
+        base_clf = self.model_params['pipe_clf'].steps[-1][1]
+        
+        included = inspect.signature(optimize_trading_model).parameters.keys()
         opt_params = {}
         for k, v in self.model_params.items():
             if k == "param_grid":
                 opt_params["param_distributions"] = v
-            elif k in ("n_trials", "pruner_type", "timeout"):
+            elif k in included:
                 opt_params[k] = v
 
         # study_name encodes every experiment dimension 
@@ -975,11 +977,16 @@ class ModelDevelopmentPipeline:
         opt_params["reports_path"] = self.file_paths["reports"]
         callbacks = [check_for_overfitting, print_best_trial]
 
+        try:
+            from .dashboard import launch_optuna_dashboard
+            launch_optuna_dashboard(storage=opt_params["db_path"], timeout=90)
+        except Exception as e:
+            logger.error(e)
+
         # ── Run the study (refit=True: handled internally) ───────────────────
         self.study, cv_results_df = optimize_trading_model(
             classifier=base_clf, X=X, y=y, events=self.events,
             data_index=self.bar_data.index,
-            n_splits=self.n_splits,
             refit=True,
             callbacks=callbacks,
             **opt_params,
