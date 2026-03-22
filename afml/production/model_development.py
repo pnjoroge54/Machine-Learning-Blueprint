@@ -935,7 +935,7 @@ class ModelDevelopmentPipeline:
                 tuned_pipeline, sample_weight=self.sample_weight,
             )
         else:
-            self.best_model, self.cv_results = clf_hyper_fit(
+            self.best_model, self.cv_results = clf_hyper_fit_cached(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
                 t1=self.events["t1"],                 
