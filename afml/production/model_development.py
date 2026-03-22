@@ -238,7 +238,7 @@ def create_feature_engineering_pipeline(
     return features.join(time_feat, how="left")
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: BaseStrategy,
@@ -376,7 +376,7 @@ def _rolling_metrics_numba(y_true, y_pred, weights, window):
     return accuracy, precision, recall, f1
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     """
     Generates self-referential 'Meta-Features' for the model.
@@ -434,7 +434,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
