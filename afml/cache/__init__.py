@@ -284,10 +284,10 @@ from .selective_cleaner import (  # noqa: E402
 )
 
 # Add to imports
+from .cv_cache import cv_cacheable
 from .unified_cache_system import (
     cacheable,  # noqa: E402
     create_cacheable_param_grid,
-    cv_cacheable,
     data_tracking_cacheable,
     print_cache_report,
     reconstruct_param_grid,
