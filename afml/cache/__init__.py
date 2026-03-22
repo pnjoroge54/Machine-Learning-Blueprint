@@ -284,7 +284,7 @@ from .selective_cleaner import (  # noqa: E402
 )
 
 # Add to imports
-from .cv_cache import cv_cacheable
+from .cv_cache import cv_cacheable, cv_cacheable_with_classifier_state
 from .unified_cache_system import (
     cacheable,  # noqa: E402
     create_cacheable_param_grid,
@@ -627,7 +627,6 @@ __all__ = [
     # - clear_changed_* functions (replaced by clean_orphaned_* functions)
     # - selective_cache_clear (replaced by clean_orphaned_caches)
     # Robust cache keys
-    "CacheKeyGenerator",
     "clear_data_access_log",
     "DataAccessTracker",
     "get_data_tracker",
@@ -665,7 +664,8 @@ __all__ = [
     "optimize_cache_system",
     "setup_production_cache",
     # Cache cross-validation
-    "cv_cacheable",  # Alias for cacheable()
+    "cv_cacheable",
+    "cv_cacheable_with_classifier_state",
     # Additional utility functions
     "get_cache_size_info",
     "clear_cache_by_pattern",
@@ -687,6 +687,5 @@ logger.debug("  - Robust cache keys for NumPy/Pandas")
 logger.debug("  - MLflow integration: {}", "✓" if MLFLOW_INTEGRATION_AVAILABLE else "✗")
 logger.debug("  - Backtest caching: ✓")
 logger.debug("  - Cache monitoring: ✓")
-logger.debug("  - Orphaned cache cleanup: ✓")
 logger.debug("  - Orphaned cache cleanup: ✓")
 logger.debug("  - Cache size info and selective clearing: ✓")
