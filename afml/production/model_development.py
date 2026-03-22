@@ -889,11 +889,9 @@ class ModelDevelopmentPipeline:
             # max_samples is a bootstrap parameter specific to RandomForestClassifier.
             # DecisionTreeClassifier has no bootstrap step and no max_samples parameter.
             av_uniqueness = self.events['tW'].mean().round(2)
-            try:
+            if pipe.steps[-1][-1].bootstrap:
                 pipe = set_pipeline_params(pipe, max_samples=av_uniqueness)
-            except:
-                pass
-            if self.model_params.get("use_optuna", False) or self.model_params.get("rnd_search_iter", 0) > 0:
+            else:
                 self.model_params["param_grid"]["max_samples"] = uniform(av_uniqueness, 1 - av_uniqueness)
 
         self.model_params['pipe_clf'] = pipe
@@ -987,7 +985,7 @@ class ModelDevelopmentPipeline:
 
         try:
             from .dashboard import launch_optuna_dashboard
-            launch_optuna_dashboard(storage=opt_params["db_path"], timeout=90)
+            launch_optuna_dashboard(storage=opt_params["db_path"], timeout=60)
         except Exception as e:
             logger.error(e)
 
@@ -1164,7 +1162,7 @@ class ModelDevelopmentPipeline:
         base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
 
         seq_bag = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=MyPipeline(base_est.steps),
+            estimator=MyPipeline(base_est.steps),
             n_estimators=int(bagging_n),
             max_samples=bagging_samples,
             max_features=bagging_feats,
