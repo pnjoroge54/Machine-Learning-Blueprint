@@ -284,7 +284,7 @@ from .selective_cleaner import (  # noqa: E402
 )
 
 # Add to imports
-from .cv_cache import cv_cacheable, cv_cacheable_with_classifier_state
+from .cv_cache import cv_cacheable, cv_cache_with_classifier_state
 from .unified_cache_system import (
     cacheable,  # noqa: E402
     create_cacheable_param_grid,
@@ -665,7 +665,7 @@ __all__ = [
     "setup_production_cache",
     # Cache cross-validation
     "cv_cacheable",
-    "cv_cacheable_with_classifier_state",
+    "cv_cache_with_classifier_state",
     # Additional utility functions
     "get_cache_size_info",
     "clear_cache_by_pattern",
