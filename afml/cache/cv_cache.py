@@ -441,22 +441,17 @@ def _log_cv_metrics_to_mlflow(result, func_name, cache_key):
 
 
 def clear_cv_cache():
-    """Clear all CV cache files."""
-    from . import CACHE_DIRS
-
-    cache_dir = CACHE_DIRS["base"] / "cv_cache"
-    model_cache_dir = CACHE_DIRS["base"] / "cv_cache_models"
-
+    from . import CACHE_DIRS, memory
     count = 0
-    for cache_dir in [cache_dir, model_cache_dir]:
-        if cache_dir.exists():
-            for cache_file in cache_dir.glob("*.pkl"):
-                cache_file.unlink()
-                count += 1
-
-    logger.info(f"Cleared {count} CV cache files")
+    # Clear legacy directories
+    for dir_name in ['cv_cache', 'cv_cache_models', 'cv_cache_enhanced']:
+        d = CACHE_DIRS['base'] / dir_name
+        if d.exists():
+            for f in d.glob('*.pkl'):
+                f.unlink(); count += 1
+    logger.info(f'Cleared {count} CV cache files')
     return count
-
+    
 
 def cv_cache_with_classifier_state(func: Callable) -> Callable:
     """
