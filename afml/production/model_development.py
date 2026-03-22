@@ -963,16 +963,16 @@ class ModelDevelopmentPipeline:
         # MD5 of the full config dict. The same experiment always maps to the same
         # study, so a crashed run resumes exactly where it left off.
         config_hash = self.file_paths["base_dir"].name
-        bagging_hash = self._get_bagging_hash()
-
+        study_config_hash = self._get_study_config_hash()
+        
         opt_params["study_name"] = (
             f"{self.strategy.get_strategy_name()}"
             f"_{self.symbol}"
             f"_{self.data_config.get('bar_type', 'unk')}"
             f"_{self.data_config.get('bar_size', 'unk')}"
             f"_{config_hash}"
-            f"_bag{bagging_hash}"     # ← new
-        )
+            f"_s{study_config_hash}"
+        )      
         
         # Build the SQLite URI with an absolute path so it is correct regardless
         # of the working directory at runtime.
@@ -1051,23 +1051,70 @@ class ModelDevelopmentPipeline:
                                      if t.state.name == 'PRUNED']),
         }
 
-    def _get_bagging_hash(self) -> str:
+    def _get_study_config_hash(self) -> str:
         """
-        Produce a short deterministic hash of all bagging-related parameters.
-        Any change to the bagging configuration produces a new study name,
-        preventing Optuna from resuming a study with incompatible structure.
+        Produce a short deterministic hash covering everything that defines
+        the structure of an Optuna study:
+    
+          - Bagging configuration (changes ensemble architecture)
+          - Base model type and fixed parameters (changes what is being tuned)
+          - param_grid keys (changes the search space dimensionality)
+    
+        Any change to these produces a new study name, preventing Optuna from
+        loading trials whose parameter space is incompatible with the current run.
+    
+        Note: av_uniqueness resolution (bagging_max_samples=None) happens before
+        this is called, so the hash reflects the actual value used, not None.
+        A shift in av_uniqueness therefore correctly starts a new study, since
+        the bootstrap sample size is part of the experiment definition.
         """
         import hashlib, json
-        bagging_config = {
-            "sequential":    self.model_params.get("bagging_sequential", False),
-            "n_estimators":  self.model_params.get("bagging_n_estimators", 0),
-            "max_samples":   self.model_params.get("bagging_max_samples", 1.0),
-            "max_features":  self.model_params.get("bagging_max_features", 1.0),
-        }
-        return hashlib.md5(
-            json.dumps(bagging_config, sort_keys=True).encode()
-        ).hexdigest()[:6]
     
+        # ── Bagging config ───────────────────────────────────────────────────────
+        bagging_config = {
+            "sequential":   self.model_params.get("bagging_sequential", False),
+            "n_estimators": self.model_params.get("bagging_n_estimators", 0),
+            "max_samples":  self.model_params.get("bagging_max_samples", 1.0),
+            "max_features": self.model_params.get("bagging_max_features", 1.0),
+        }
+    
+        # ── Base model ───────────────────────────────────────────────────────────
+        # Extract the classifier from the pipeline. At this point pipe_clf has
+        # already been passed through make_custom_pipeline() in train_model(),
+        # so steps[-1][1] is the actual estimator being tuned.
+        pipe = self.model_params["pipe_clf"]
+        base_clf = pipe.steps[-1][1] if hasattr(pipe, "steps") else pipe
+    
+        model_config = {
+            "type": type(base_clf).__name__,
+            # Fixed params only — deep=False avoids hashing nested estimators
+            # that may have non-deterministic repr (e.g. warm_start state).
+            # We only care about the model's structural identity, not trained state.
+            "params": {
+                k: str(v)
+                for k, v in base_clf.get_params(deep=False).items()
+            },
+        }
+    
+        # ── Search space structure ───────────────────────────────────────────────
+        # Hash the keys only, not the distribution objects themselves.
+        # Changing which hyperparameters are searched changes the trial structure
+        # and makes old trials incompatible. Changing distribution bounds does not
+        # change structure, so we deliberately exclude the values here —
+        # Optuna handles bound changes gracefully within the same study.
+        param_grid = self.model_params.get("param_grid", {})
+        search_space = sorted(param_grid.keys())
+    
+        combined = {
+            "bagging": bagging_config,
+            "model":   model_config,
+            "search":  search_space,
+        }
+    
+        return hashlib.md5(
+            json.dumps(combined, sort_keys=True).encode()
+        ).hexdigest()[:6] 
+        
     def _apply_sequential_bagging(
         self,
         X: pd.DataFrame,
