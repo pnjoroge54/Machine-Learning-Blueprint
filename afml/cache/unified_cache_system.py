@@ -110,6 +110,49 @@ def _get_function_file_mtime(func: Callable) -> Optional[float]:
         return None
 
 
+class FunctionVersionStore:
+    """Persists function source hashes across sessions for auto-invalidation."""
+
+    def __init__(self):
+        from . import CACHE_DIRS
+        self._file = CACHE_DIRS["base"] / "function_versions.json"
+        self._versions = self._load()
+
+    def _load(self) -> dict:
+        if self._file.exists():
+            try:
+                with open(self._file) as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    def _save(self):
+        try:
+            with open(self._file, "w") as f:
+                json.dump(self._versions, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save function versions: {e}")
+
+    def has_changed(self, func_name: str, current_hash: str) -> bool:
+        """Returns True if function is new or its hash differs from stored."""
+        return self._versions.get(func_name) != current_hash
+
+    def update(self, func_name: str, current_hash: str):
+        self._versions[func_name] = current_hash
+        self._save()
+
+
+_version_store: Optional[FunctionVersionStore] = None
+
+
+def get_version_store() -> FunctionVersionStore:
+    global _version_store
+    if _version_store is None:
+        _version_store = FunctionVersionStore()
+    return _version_store
+
+
 # =============================================================================
 # Core: Unified Cache Key Generator (with versioning support)
 # =============================================================================
@@ -686,23 +729,35 @@ def cacheable(
         @cacheable()
         def ml_cross_val_score(clf, X, y, cv_gen): ...
     """
-
     def decorator(func: Callable) -> Callable:
-        import pickle
-
         func_name = f"{func.__module__}.{func.__qualname__}"
-
-        # Warn if function is already cached
-        if hasattr(func, "_afml_cacheable") and func._afml_cacheable:
-            logger.warning(
-                f"Function {func_name} already has @cacheable decorator. "
-                f"Nested @cacheable is redundant."
-            )
-
         cached_func = memory.cache(func)
-        monitor = get_unified_monitor()
 
-        # Track seen cache keys for this session
+        # ── Auto-invalidation (runs at import time) ──────────────────────────
+        if auto_versioning:
+            current_hash = _get_function_source_hash(func)
+            if current_hash:
+                store = get_version_store()
+                if store.has_changed(func_name, current_hash):
+                    logger.info(
+                        f"Function '{func.__qualname__}' has changed "
+                        f"— clearing stale cache"
+                    )
+                    try:
+                        cached_func.clear()
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not clear stale cache for {func_name}: {e}"
+                        )
+                    store.update(func_name, current_hash)
+            else:
+                # Source unavailable (built-in/dynamic) — skip auto-invalidation
+                logger.debug(
+                    f"Cannot get source for {func.__qualname__} "
+                    f"— auto-invalidation skipped"
+                )
+        # ── Rest of decorator unchanged ──────────────────────────────────────
+        monitor = get_unified_monitor()
         seen_signatures = set()
 
         @wraps(func)
