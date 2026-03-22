@@ -745,7 +745,7 @@ class ModelDevelopmentPipeline:
             Display cache performance reports (default: False).
         save : bool, optional
             Save model and artifacts (default: True).
-        export_onxx : bool, optional
+        export_onnx : bool, optional
             Export model to ONNX format (default: False).
         verbose : bool, optional
             Print progress information (default: True).
@@ -782,14 +782,14 @@ class ModelDevelopmentPipeline:
             if self.best_model is not None:
                 if save:
                     self._save_all_artifacts()
-                if self.export_onxx:
+                if self.export_onnx:
                     metadata = {
                         "strategy": self.strategy,
                         "feature_names": self._get_feature_names(),
                         "use_optuna": self.model_params.get("use_optuna", False),
                         "pipeline_version": self.pipeline_version
                     }
-                    self.file_manager.save_model_as_onxx(
+                    self.file_manager.save_model_as_onnx(
                         self.best_model, self._get_feature_names(), metadata
                     )
 
