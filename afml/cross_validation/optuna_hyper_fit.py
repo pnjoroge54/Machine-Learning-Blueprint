@@ -203,15 +203,15 @@ def optimize_trading_model_with_pruning(
         
     # Setup Cross-Validation
     cv = PurgedKFold(n_splits=n_splits, t1=events['t1'], pct_embargo=0.01)
-    X_, y_ = X.to_numpy(), y.to_numpy()
+    
     # Extract return-attribution weights from to evaluate validation set with respect to PnL
     w_score = events['w'].to_numpy()
         
     fold_scores = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
-        X_train, X_val = X_[train_idx], X_[val_idx]
-        y_train, y_val = y_[train_idx], y_[val_idx]
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
         fit = clone(model).fit(X_train, y_train) # No need for weights due to _WeightedEstimator       
         w_val = w_score[val_idx]
@@ -349,14 +349,9 @@ def optimize_trading_model(
 
     sampler = TPESampler(seed=random_state)
 
-    # Add a 30-second timeout for parallel workers
-    if str(db_path).startswith("sqlite:///") and str(db_path).endswith("db"):
-        storage_url = f"{db_path}"
-    else:
-        storage_url = f"sqlite:///{db_path}"
-    
+    # Add a 30-second timeout for parallel workers 
     storage = RDBStorage(
-        url=storage_url,
+        url=db_path,
         engine_kwargs={"connect_args": {"timeout": 30}, "pool_pre_ping": True},
     )
 
