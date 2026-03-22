@@ -948,9 +948,10 @@ class ModelDevelopmentPipeline:
     def _train_model_optuna(self):
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = self.model_params['pipe_clf'].steps[-1][1]
+        metric = 'f1' if set(y.unique()) == {0, 1} else 'neg_log_loss'
         
         included = inspect.signature(optimize_trading_model).parameters.keys()
-        opt_params = {}
+        opt_params = {"metric": metric}
         for k, v in self.model_params.items():
             if k == "param_grid":
                 opt_params["param_distributions"] = v
@@ -1007,7 +1008,7 @@ class ModelDevelopmentPipeline:
         bagging_max_features = self.model_params.get('bagging_max_features', 1.0)
         n_jobs = self.model_params.get('n_jobs', -1)
         random_state = self.model_params.get('random_state', None)
-
+        
         if bagging_sequential and bagging_n_estimators > 0:
             # Sequential bootstrapping with the winning trial's weights.
             # Weights are passed explicitly because SequentiallyBootstrappedBaggingClassifier
@@ -1038,7 +1039,7 @@ class ModelDevelopmentPipeline:
             'best_params': self.study.best_params,
             'best_score': self.study.best_value,
             'cv_results': cv_results_df,
-            'scoring': 'f1' if set(y.unique()) == {0, 1} else 'neg_log_loss',
+            'scoring': metric,
             'search_method': 'optuna',
             'pruner_type': pruner_type,
             'n_trials_completed': len([t for t in self.study.trials
