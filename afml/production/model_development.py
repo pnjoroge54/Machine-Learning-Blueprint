@@ -779,8 +779,25 @@ class ModelDevelopmentPipeline:
                 self._generate_analysis_reports()
             if cache_reports:
                 self._display_cache_reports()
-            if save and self.best_model is not None:
-                self._save_all_artifacts()
+            if self.best_model is not None:
+                if save:
+                    self._save_all_artifacts()
+                if self.export_onxx:
+                    metadata = {
+                        "strategy": self.strategy,
+                        "feature_names": self._get_feature_names(),
+                        "use_optuna": self.model_params.get("use_optuna", False),
+                        "pipeline_version": self.pipeline_version
+                    }
+                    self.file_manager.save_model_as_onxx(
+                        self.best_model, self._get_feature_names(), metadata
+                    )
+
+            logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
+
+        except Exception as e:
+            logger.error(f"Failed to save artifacts: {e}")
+            raise
 
             if verbose:
                 print(f"\n✓ Completed in {pd.Timedelta(seconds=time.time()-time0).round('1s')}")
