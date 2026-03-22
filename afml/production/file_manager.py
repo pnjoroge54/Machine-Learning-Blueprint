@@ -416,7 +416,7 @@ class ConfigPathGenerator:
 
         # Generate filenames
         model_filename = self.create_model_filename(config, model_type)
-        model_filename_onxx = model_filename.replace(".joblib", ".onnx")
+        model_filename_onnx = model_filename.replace(".joblib", ".onnx")
         config_filename = self.generate_filename(
             config, "config", include_timestamp=False
         )
@@ -443,7 +443,7 @@ class ConfigPathGenerator:
         return {
             "base_dir": base_dir,
             "model": base_dir / model_filename,
-            "model_onxx": base_dir / model_filename_onxx,
+            "model_onnx": base_dir / model_filename_onnx,
             "config": base_dir / config_filename,
             "metrics": base_dir / metrics_filename,
             "events": base_dir / events_filename,
@@ -594,10 +594,10 @@ class ModelFileManager:
 
             joblib.dump(save_data, self.current_paths["model"])
 
-    def save_model_as_onxx(self, model, feature_names: List[str], metadata: dict = None):
+    def save_model_as_onnx(self, model, feature_names: List[str], metadata: dict = None):
         """Export model to ONNX format."""
         if self.current_paths:
-            export_model_to_onnx(model, feature_names, self.current_paths["model_onxx"], metadata)
+            export_model_to_onnx(model, feature_names, self.current_paths["model_onnx"], metadata)
 
     def save_object(self, object, name: str):
         """Save objects to file."""
