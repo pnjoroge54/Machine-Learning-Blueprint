@@ -28,10 +28,10 @@ def clf_hyper_fit(
     pct_embargo=0.02,
     random_state=None,
     verbose=0,
-    **fit_params,
+    sample_weight=None,
 ):
     """
-    Hyper-Parameter Fitting with Purged K-Fold Cross-Validation
+    Hyper-Parameter Fitting with Purged K-Fold Cross-Validation.
 
     Performs hyperparameter optimization using purged k-fold cross-validation
     to prevent leakage in time-series data, then optionally fits a bagged
@@ -48,7 +48,8 @@ def clf_hyper_fit(
         Index: Time when information extraction started.
         Values: Time when information extraction ended.
     pipe_clf : BaseEstimator or sklearn.pipeline.Pipeline or MyPipeline
-        A BaseEstimator or Pipeline containing preprocessing and classification steps.
+        A BaseEstimator or Pipeline containing preprocessing and
+        classification steps.
     param_grid : dict or list of dicts
         Hyperparameter grid for search. Keys should include pipeline step
         names as prefixes (e.g., 'classifier__max_depth').
@@ -76,17 +77,26 @@ def clf_hyper_fit(
         Random state for reproducibility.
     verbose : int, default=0
         Controls verbosity of output.
-    **fit_params : dict
-        Additional parameters passed to the fit method.
+    sample_weight : pd.Series or None, default=None
+        Per-sample weights indexed by DatetimeIndex. When provided:
+        - Passed to the estimator's fit() method on every CV fold and
+          on the final refit, so the model learns with weighted samples.
+        - Used to construct a weighted scorer via make_weighted_scorer(),
+          ensuring that test-fold evaluation reflects the same weighting
+          scheme as training.
+        When None, standard unweighted fitting and scoring are used.
 
     Returns
     -------
     estimator : Pipeline
         The trained model.
-    cv_results : Dict
-        Cross-validation results including best parameters and scores.
+    cv_results : dict
+        Cross-validation results with keys:
+        - best_params  : dict of best hyperparameters found.
+        - best_score   : float, best CV score achieved.
+        - cv_results   : pd.DataFrame of full grid/random search results.
+        - scoring      : str, scoring metric used ('f1' or 'neg_log_loss').
     """
-
     # Clone the pipeline to avoid modifying the original
     pipe_clf = make_custom_pipeline(clone(pipe_clf))
     name_of_clf, estimator = pipe_clf.steps[-1]
@@ -101,15 +111,13 @@ def clf_hyper_fit(
         elif not k.startswith(f"{name_of_clf}__"):
             param_grid[f"{name_of_clf}__{k}"] = param_grid.pop(k)
 
-    # Determine scoring metric
+    # Determine scoring metric and construct weighted scorer if weights provided
     scoring_name = "f1" if set(labels.unique()) == {0, 1} else "neg_log_loss"
-    sample_weight = fit_params.get("sample_weight", None)
-
-    if sample_weight is not None and isinstance(sample_weight, pd.Series):
-        # Weighted scoring: each test fold uses only its own weights
-        scoring = make_weighted_scorer(scoring_name, sample_weight)
-    else:
-        scoring = scoring_name  # fall back to unweighted string scorer
+    scoring = (
+        make_weighted_scorer(scoring_name, sample_weight)
+        if sample_weight is not None
+        else scoring_name
+    )
 
     # Create purged K-Fold
     inner_cv = PurgedKFold(n_splits, t1, pct_embargo)
@@ -138,25 +146,22 @@ def clf_hyper_fit(
             refit=True,
         )
 
-    # Fit the grid search
-    gs.fit(features, labels, **fit_params)
+    gs.fit(features, labels, sample_weight=sample_weight)
 
-    # Extract results
     cv_results = {
         "best_params": gs.best_params_,
         "best_score": gs.best_score_,
         "cv_results": pd.DataFrame(gs.cv_results_),
-        "scoring": scoring,
+        "scoring": scoring_name,
     }
 
     best_estimator = gs.best_estimator_
 
     # Handle bagging if requested
     if bagging_n_estimators > 0:
-        # For bagging, set n_jobs=1 for base estimator to avoid nested parallelism
+        # Set n_jobs=1 on the base estimator to avoid nested parallelism
         base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
 
-        # Create and fit bagging classifier
         bag = BaggingClassifier(
             estimator=MyPipeline(base_estimator.steps),
             n_estimators=int(bagging_n_estimators),
@@ -166,17 +171,11 @@ def clf_hyper_fit(
             random_state=random_state,
         )
 
-        # Fit bagging classifier with sample_weight if provided
-        if "sample_weight" in fit_params:
-            bag.fit(features, labels, sample_weight=fit_params["sample_weight"])
-        else:
-            bag.fit(features, labels)
-        
+        bag.fit(features, labels, sample_weight=sample_weight)
         bag.estimator = Pipeline(bag.estimator.steps)
-        bag = Pipeline([("bag", bag)])
-        return bag, cv_results
-    else:
-        return Pipeline(best_estimator.steps), cv_results
+        return Pipeline([("bag", bag)]), cv_results
+
+    return Pipeline(best_estimator.steps), cv_results
 
 
 @cv_cacheable
@@ -195,12 +194,44 @@ def clf_hyper_fit_internal(
     pct_embargo,
     random_state,
     verbose,
-    **fit_params,
+    sample_weight=None,
 ):
     """
-    Cached version of clf_hyper_fit that properly handles scipy distributions.
+    Cached internal dispatch for clf_hyper_fit.
+
+    Receives a pre-converted param_grid (scipy distributions replaced with
+    stable tuples via create_cacheable_param_grid) and reconstructs it
+    before calling clf_hyper_fit. This layer exists solely to make the
+    function signature fully serialisable for cv_cacheable.
+
+    sample_weight is declared explicitly (not absorbed into **fit_params)
+    so that _generate_cv_cache_key routes it to _hash_series_fast, producing
+    a stable deterministic cache key across Python sessions.
+
+    Parameters
+    ----------
+    features : pd.DataFrame
+    labels : pd.Series
+    t1 : pd.Series
+    pipe_clf : BaseEstimator or Pipeline or MyPipeline
+    param_grid_cacheable : dict
+        param_grid with scipy distributions converted to serialisable tuples
+        by create_cacheable_param_grid().
+    n_splits : int
+    bagging_n_estimators : int
+    bagging_max_samples : float or int
+    bagging_max_features : float or int
+    rnd_search_iter : int
+    n_jobs : int
+    pct_embargo : float
+    random_state : int or None
+    verbose : int
+    sample_weight : pd.Series or None, default=None
+
+    Returns
+    -------
+    Same as clf_hyper_fit.
     """
-    # Reconstruct param_grid from cacheable version
     param_grid = reconstruct_param_grid(param_grid_cacheable)
 
     return clf_hyper_fit(
@@ -218,12 +249,12 @@ def clf_hyper_fit_internal(
         pct_embargo=pct_embargo,
         random_state=random_state,
         verbose=verbose,
-        **fit_params,
+        sample_weight=sample_weight,
     )
 
 
 # ============================================================================
-# Convenience wrapper that handles conversion automatically
+# Public convenience wrapper
 # ============================================================================
 
 
@@ -242,28 +273,62 @@ def clf_hyper_fit_cached(
     pct_embargo,
     random_state,
     verbose,
-    **fit_params,
+    sample_weight=None,
 ):
     """
-    Wrapper that automatically converts param_grid for caching.
+    Public entry point for cached hyperparameter fitting.
 
-    Usage:
-        from scipy.stats import randint, uniform
+    Converts param_grid to a cache-safe representation (replacing scipy
+    distributions with stable tuples) before delegating to
+    clf_hyper_fit_internal, which is decorated with @cv_cacheable.
 
-        param_grid = {
-            'clf__n_estimators': randint(100, 500),
-            'clf__max_depth': randint(3, 20),
-        }
+    Use this function in place of clf_hyper_fit whenever caching is desired.
+    The conversion and reconstruction of scipy distributions is handled
+    automatically — pass param_grid exactly as you would to clf_hyper_fit.
 
-        # Just call this instead of clf_hyper_fit
-        model, results = clf_hyper_fit_auto_cache(
-            features, labels, t1, pipe_clf, param_grid
-        )
+    Parameters
+    ----------
+    features : pd.DataFrame
+    labels : pd.Series
+    t1 : pd.Series
+    pipe_clf : BaseEstimator or Pipeline or MyPipeline
+    param_grid : dict
+        Hyperparameter grid. May contain scipy frozen distributions
+        (e.g. randint, uniform) — these are converted automatically.
+    n_splits : int
+    bagging_n_estimators : int
+    bagging_max_samples : float or int
+    bagging_max_features : float or int
+    rnd_search_iter : int
+    n_jobs : int
+    pct_embargo : float
+    random_state : int or None
+    verbose : int
+    sample_weight : pd.Series or None, default=None
+        Per-sample weights. See clf_hyper_fit for full description.
+
+    Returns
+    -------
+    Same as clf_hyper_fit.
+
+    Example
+    -------
+    >>> from scipy.stats import randint, uniform
+    >>> param_grid = {
+    ...     'clf__n_estimators': randint(100, 500),
+    ...     'clf__max_depth': randint(3, 20),
+    ... }
+    >>> model, results = clf_hyper_fit_cached(
+    ...     features, labels, t1, pipe_clf, param_grid,
+    ...     n_splits=5, bagging_n_estimators=0,
+    ...     bagging_max_samples=1.0, bagging_max_features=1.0,
+    ...     rnd_search_iter=25, n_jobs=-1, pct_embargo=0.02,
+    ...     random_state=42, verbose=0,
+    ...     sample_weight=sample_weight,
+    ... )
     """
-    # Convert to cacheable format
     param_grid_cacheable = create_cacheable_param_grid(param_grid)
 
-    # Call cached version
     return clf_hyper_fit_internal(
         features=features,
         labels=labels,
@@ -279,5 +344,5 @@ def clf_hyper_fit_cached(
         pct_embargo=pct_embargo,
         random_state=random_state,
         verbose=verbose,
-        **fit_params,
-    )
+        sample_weight=sample_weight,
+)
