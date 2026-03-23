@@ -1,6 +1,43 @@
 from loguru import logger
 from sklearn.pipeline import Pipeline
+from sklearn.metrics import f1_score, log_loss
 
+
+def make_weighted_scorer(scoring: str, sample_weight: pd.Series):
+    """
+    Create a CV scorer that applies sample weights to the test fold.
+
+    Uses DatetimeIndex alignment to extract the correct subset of weights
+    for each test fold, rather than passing the full weight array. This is
+    necessary because the scorer only receives the test fold's X and y,
+    not the fold indices directly.
+
+    Parameters
+    ----------
+    scoring : str
+        'f1' for meta-labeling (binary), 'neg_log_loss' for primary model.
+    sample_weight : pd.Series
+        Full-dataset weights indexed by DatetimeIndex.
+
+    Returns
+    -------
+    callable
+        A scorer compatible with GridSearchCV / RandomizedSearchCV.
+    """
+    if scoring == "f1":
+        def _scorer(estimator, X, y):
+            # Align weights to this fold's index
+            w = sample_weight.reindex(X.index)
+            y_pred = estimator.predict(X)
+            return f1_score(y, y_pred, sample_weight=w.to_numpy(), zero_division=0)
+    else:  # neg_log_loss
+        def _scorer(estimator, X, y):
+            w = sample_weight.reindex(X.index)
+            y_proba = estimator.predict_proba(X)
+            return -log_loss(y, y_proba, sample_weight=w.to_numpy())
+
+    return _scorer
+    
 
 class MyPipeline(Pipeline):
     """Allows for a sample_weight in fit method"""
@@ -84,3 +121,4 @@ def set_pipeline_params(pipeline, **kwargs):
                     str(e),
                 )
     return pipeline
+
