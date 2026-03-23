@@ -1178,7 +1178,7 @@ class ModelDevelopmentPipeline:
         # the outer SequentiallyBootstrappedBaggingClassifier parallelises across bags.
         base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
 
-        seq_bag = SequentiallyBootstrappedBaggingClassifier(
+        bag = SequentiallyBootstrappedBaggingClassifier(
             estimator=MyPipeline(base_est.steps),
             n_estimators=int(bagging_n),
             max_samples=bagging_samples,
@@ -1189,11 +1189,40 @@ class ModelDevelopmentPipeline:
         )
 
         if sample_weight is not None:
-            seq_bag.fit(X, y, sample_weight=sample_weight)
+            bag.fit(X, y, sample_weight=sample_weight)
         else:
-            seq_bag.fit(X, y)
+            bag.fit(X, y)
 
-        return Pipeline([('seq_bag', seq_bag)])
+        # --- Convert to standard BaggingClassifier for ONNX compatibility ---
+        standard_bag = BaggingClassifier(
+            estimator=MyPipeline(base_est.steps),
+            n_estimators=len(bag.estimators_),
+            max_samples=1.0,          # not used after fitting
+            max_features=bag.max_features,
+            bootstrap=bag.bootstrap,   # should be True
+            bootstrap_features=bag.bootstrap_features,
+            random_state=random_state,
+            n_jobs=bag.n_jobs,
+        )
+        # Attach the fitted components
+        standard_bag.estimators_ = bag.estimators_
+        standard_bag.estimators_features_ = bag.estimators_features_
+
+        # Copy essential metadata required for prediction
+        if hasattr(bag, "classes_"):
+            standard_bag.classes_ = bag.classes_
+            standard_bag.n_classes_ = bag.n_classes_
+        standard_bag.n_features_in_ = bag.n_features_in_
+
+        # Optionally copy OOB attributes (if needed later)
+        if hasattr(bag, "oob_score_"):
+            standard_bag.oob_score_ = bag.oob_score_
+        if hasattr(bag, "oob_decision_function_"):
+            standard_bag.oob_decision_function_ = bag.oob_decision_function_
+        if hasattr(bag, "oob_prediction_"):
+            standard_bag.oob_prediction_ = bag.oob_prediction_
+
+        return Pipeline([('seq_bag', standard_bag)])
 
     def analyze_features(self):
         from .weighted_estimator import _WeightedEstimator
