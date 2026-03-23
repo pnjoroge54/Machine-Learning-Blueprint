@@ -28,7 +28,8 @@ def clf_hyper_fit(
     pct_embargo=0.02,
     random_state=None,
     verbose=0,
-    sample_weight=None,
+    sample_weight_train=None,
+    sample_weight_score=None,
 ):
     """
     Hyper-Parameter Fitting with Purged K-Fold Cross-Validation.
@@ -77,14 +78,20 @@ def clf_hyper_fit(
         Random state for reproducibility.
     verbose : int, default=0
         Controls verbosity of output.
-    sample_weight : pd.Series or None, default=None
-        Per-sample weights indexed by DatetimeIndex. When provided:
-        - Passed to the estimator's fit() method on every CV fold and
-          on the final refit, so the model learns with weighted samples.
-        - Used to construct a weighted scorer via make_weighted_scorer(),
-          ensuring that test-fold evaluation reflects the same weighting
-          scheme as training.
-        When None, standard unweighted fitting and scoring are used.
+    sample_weight_train : pd.Series or None, default=None
+        Per-sample weights used during fitting on each CV fold and on the
+        final refit. Recommended: uniqueness weights (tW) or a time-decay
+        variant thereof, reflecting how much information each label
+        contributes independently of overlapping labels.
+        When None, uniform weights are used for fitting.
+    sample_weight_score : pd.Series or None, default=None
+        Per-sample weights used when evaluating the scorer on each CV test
+        fold. Recommended: return-attribution weights (w), so that the
+        hyperparameter selection criterion favours parameter combinations
+        that perform well on high-magnitude price moves rather than
+        treating all outcomes equally.
+        When None, falls back to sample_weight_train if provided, otherwise
+        uniform weights are used for scoring.
 
     Returns
     -------
@@ -96,6 +103,14 @@ def clf_hyper_fit(
         - best_score   : float, best CV score achieved.
         - cv_results   : pd.DataFrame of full grid/random search results.
         - scoring      : str, scoring metric used ('f1' or 'neg_log_loss').
+
+    Notes
+    -----
+    Separating sample_weight_train from sample_weight_score mirrors the
+    approach in ml_cross_val_score and reflects the AFML rationale that
+    the weighting scheme appropriate for reducing label redundancy during
+    training (uniqueness-based) is not necessarily the same as the scheme
+    appropriate for evaluating predictive quality (return-based).
     """
     # Clone the pipeline to avoid modifying the original
     pipe_clf = make_custom_pipeline(clone(pipe_clf))
@@ -111,11 +126,17 @@ def clf_hyper_fit(
         elif not k.startswith(f"{name_of_clf}__"):
             param_grid[f"{name_of_clf}__{k}"] = param_grid.pop(k)
 
-    # Determine scoring metric and construct weighted scorer if weights provided
+    # Determine scoring metric.
+    # Scoring weights fall back to training weights if score weights not provided.
     scoring_name = "f1" if set(labels.unique()) == {0, 1} else "neg_log_loss"
+    effective_score_weight = (
+        sample_weight_score
+        if sample_weight_score is not None
+        else sample_weight_train
+    )
     scoring = (
-        make_weighted_scorer(scoring_name, sample_weight)
-        if sample_weight is not None
+        make_weighted_scorer(scoring_name, effective_score_weight)
+        if effective_score_weight is not None
         else scoring_name
     )
 
@@ -146,7 +167,10 @@ def clf_hyper_fit(
             refit=True,
         )
 
-    gs.fit(features, labels, sample_weight=sample_weight)
+    # Training weights are passed to fit(). Scoring weights are handled
+    # inside the closure created by make_weighted_scorer() via index
+    # alignment and do not need to be passed here.
+    gs.fit(features, labels, sample_weight=sample_weight_train)
 
     cv_results = {
         "best_params": gs.best_params_,
@@ -171,7 +195,9 @@ def clf_hyper_fit(
             random_state=random_state,
         )
 
-        bag.fit(features, labels, sample_weight=sample_weight)
+        # Final bagging fit uses training weights only — there is no scoring
+        # step here so sample_weight_score is not relevant.
+        bag.fit(features, labels, sample_weight=sample_weight_train)
         bag.estimator = Pipeline(bag.estimator.steps)
         return Pipeline([("bag", bag)]), cv_results
 
@@ -194,7 +220,8 @@ def clf_hyper_fit_internal(
     pct_embargo,
     random_state,
     verbose,
-    sample_weight=None,
+    sample_weight_train=None,
+    sample_weight_score=None,
 ):
     """
     Cached internal dispatch for clf_hyper_fit.
@@ -204,9 +231,10 @@ def clf_hyper_fit_internal(
     before calling clf_hyper_fit. This layer exists solely to make the
     function signature fully serialisable for cv_cacheable.
 
-    sample_weight is declared explicitly (not absorbed into **fit_params)
-    so that _generate_cv_cache_key routes it to _hash_series_fast, producing
-    a stable deterministic cache key across Python sessions.
+    Both sample_weight_train and sample_weight_score are declared explicitly
+    so that _generate_cv_cache_key routes each to _hash_series_fast,
+    producing stable deterministic cache keys across Python sessions.
+    A change to either weight series correctly invalidates the cache.
 
     Parameters
     ----------
@@ -226,7 +254,8 @@ def clf_hyper_fit_internal(
     pct_embargo : float
     random_state : int or None
     verbose : int
-    sample_weight : pd.Series or None, default=None
+    sample_weight_train : pd.Series or None, default=None
+    sample_weight_score : pd.Series or None, default=None
 
     Returns
     -------
@@ -249,7 +278,8 @@ def clf_hyper_fit_internal(
         pct_embargo=pct_embargo,
         random_state=random_state,
         verbose=verbose,
-        sample_weight=sample_weight,
+        sample_weight_train=sample_weight_train,
+        sample_weight_score=sample_weight_score,
     )
 
 
@@ -273,7 +303,8 @@ def clf_hyper_fit_cached(
     pct_embargo,
     random_state,
     verbose,
-    sample_weight=None,
+    sample_weight_train=None,
+    sample_weight_score=None,
 ):
     """
     Public entry point for cached hyperparameter fitting.
@@ -304,8 +335,14 @@ def clf_hyper_fit_cached(
     pct_embargo : float
     random_state : int or None
     verbose : int
-    sample_weight : pd.Series or None, default=None
-        Per-sample weights. See clf_hyper_fit for full description.
+    sample_weight_train : pd.Series or None, default=None
+        Weights used during fitting. Recommended: uniqueness weights (tW)
+        or a time-decay variant. See clf_hyper_fit for full description.
+    sample_weight_score : pd.Series or None, default=None
+        Weights used during test-fold scoring. Recommended: return-
+        attribution weights (w) so that HPO selects parameters that
+        perform well on high-magnitude price moves. Falls back to
+        sample_weight_train when None.
 
     Returns
     -------
@@ -313,7 +350,7 @@ def clf_hyper_fit_cached(
 
     Example
     -------
-    >>> from scipy.stats import randint, uniform
+    >>> from scipy.stats import randint
     >>> param_grid = {
     ...     'clf__n_estimators': randint(100, 500),
     ...     'clf__max_depth': randint(3, 20),
@@ -324,7 +361,8 @@ def clf_hyper_fit_cached(
     ...     bagging_max_samples=1.0, bagging_max_features=1.0,
     ...     rnd_search_iter=25, n_jobs=-1, pct_embargo=0.02,
     ...     random_state=42, verbose=0,
-    ...     sample_weight=sample_weight,
+    ...     sample_weight_train=events['tW'],
+    ...     sample_weight_score=events['w'],
     ... )
     """
     param_grid_cacheable = create_cacheable_param_grid(param_grid)
@@ -344,5 +382,6 @@ def clf_hyper_fit_cached(
         pct_embargo=pct_embargo,
         random_state=random_state,
         verbose=verbose,
-        sample_weight=sample_weight,
-)
+        sample_weight_train=sample_weight_train,
+        sample_weight_score=sample_weight_score,
+    )
