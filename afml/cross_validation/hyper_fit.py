@@ -9,7 +9,7 @@ from ..cache.unified_cache_system import (
     create_cacheable_param_grid,
     reconstruct_param_grid,
 )
-from ..util.pipelines import MyPipeline, make_custom_pipeline, set_pipeline_params
+from ..util.pipelines import MyPipeline, make_custom_pipeline, make_weighted_scorer, set_pipeline_params
 from .cross_validation import PurgedKFold
 
 
@@ -102,10 +102,14 @@ def clf_hyper_fit(
             param_grid[f"{name_of_clf}__{k}"] = param_grid.pop(k)
 
     # Determine scoring metric
-    if set(labels.unique()) == {0, 1}:
-        scoring = "f1"  # for meta-labeling
+    scoring_name = "f1" if set(labels.unique()) == {0, 1} else "neg_log_loss"
+    sample_weight = fit_params.get("sample_weight", None)
+
+    if sample_weight is not None and isinstance(sample_weight, pd.Series):
+        # Weighted scoring: each test fold uses only its own weights
+        scoring = make_weighted_scorer(scoring_name, sample_weight)
     else:
-        scoring = "neg_log_loss"
+        scoring = scoring_name  # fall back to unweighted string scorer
 
     # Create purged K-Fold
     inner_cv = PurgedKFold(n_splits, t1, pct_embargo)
