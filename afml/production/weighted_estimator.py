@@ -49,7 +49,7 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
             weights = pd.Series(np.ones(len(y)), index=y.index)
 
         valid = X.index.intersection(y.index)
-        X, y = X.loc[valid], y.loc[valid]
+        X, y = X.loc[valid].to_numpy(), y.loc[valid].to_numpy()
 
         if self.decay != 1.0:
             decay_vec = get_weights_by_time_decay_optimized(
@@ -62,7 +62,7 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
             weights *= decay_vec
 
         self.sample_weight_ = weights
-        self.base_estimator.fit(X.to_numpy(), y.to_numpy(), sample_weight=weights.loc[valid].to_numpy())
+        self.base_estimator.fit(X, y, sample_weight=weights.loc[valid].to_numpy())
         return self
 
     def predict(self, X):
