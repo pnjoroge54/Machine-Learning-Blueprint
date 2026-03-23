@@ -1,3 +1,5 @@
+import pandas as pd
+
 from loguru import logger
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import f1_score, log_loss
