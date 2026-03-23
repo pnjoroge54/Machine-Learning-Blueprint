@@ -944,9 +944,10 @@ class ModelDevelopmentPipeline:
             self.best_model, self.cv_results = clf_hyper_fit_cached(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
-                t1=self.events["t1"],                 
+                t1=self.events["t1"],
                 **params,
-                sample_weight=sample_weight
+                sample_weight_train=sample_weight,
+                sample_weight_score=self.events["w"].loc[sample_weight.index],
             )
 
     def _train_model_optuna(self):
