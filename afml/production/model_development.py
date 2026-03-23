@@ -1198,7 +1198,7 @@ class ModelDevelopmentPipeline:
         if hasattr(bag, "classes_"):
             standard_bag.classes_ = bag.classes_
             standard_bag.n_classes_ = bag.n_classes_
-        standard_bag.n_features_in_ = bag.n_features_in_
+        #standard_bag.n_features_in_ = bag.n_features_in_
 
         # Optionally copy OOB attributes (if needed later)
         if hasattr(bag, "oob_score_"):
