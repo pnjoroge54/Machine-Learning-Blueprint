@@ -779,26 +779,13 @@ class ModelDevelopmentPipeline:
                 self._generate_analysis_reports()
             if cache_reports:
                 self._display_cache_reports()
-            if self.best_model is not None:
-                if save:
+            if (save or self.export_onnx) and self.best_model is not None:
+                try:   
                     self._save_all_artifacts()
-                if self.export_onnx:
-                    metadata = {
-                        "strategy": self.strategy,
-                        "feature_names": self._get_feature_names(),
-                        "use_optuna": self.model_params.get("use_optuna", False),
-                        "pipeline_version": self.pipeline_version
-                    }
-                    self.file_manager.save_model_as_onnx(
-                        self.best_model, self._get_feature_names(), metadata
-                    )
-
-            logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
-
-        except Exception as e:
-            logger.error(f"Failed to save artifacts: {e}")
-            raise
-
+                except Exception as e:
+                    logger.error(f"Failed to save artifacts: {e}")
+                    raise
+                
             if verbose:
                 print(f"\n✓ Completed in {pd.Timedelta(seconds=time.time()-time0).round('1s')}")
             return self.best_model, self._get_feature_names(), self.metrics, self.config
@@ -1287,6 +1274,13 @@ class ModelDevelopmentPipeline:
         if self.sample_weight is not None:
             self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
         self.file_manager.save_object(self.metrics, "metrics")
+        
+        if self.export_onnx:
+            self.file_manager.save_model_as_onnx(
+                self.best_model, self._get_feature_names(), metadata
+            )
+
+            logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
 
     def _generate_analysis_reports(self):
         """Generates hyperparameter analysis, importance plots, and HTML summary."""
