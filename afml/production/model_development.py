@@ -919,8 +919,7 @@ class ModelDevelopmentPipeline:
         bagging_sequential = self.model_params.get('bagging_sequential', False)
         bagging_n = self.model_params.get('bagging_n_estimators', 0)
         sample_weight = self.sample_weight.loc[self.events.index]  # meta_features change indexing
-        sample_weight *= sample_weight.shape[0] / sample_weight.sum()
-
+        
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
         included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
         params = {k: v for k, v in self.model_params.items() if k in included}        
