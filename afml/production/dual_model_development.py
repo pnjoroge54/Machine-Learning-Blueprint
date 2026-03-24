@@ -86,6 +86,8 @@ class BidAskLongShortPipeline:
         """
         Run bid/ask-aware long/short model development pipeline.
         """
+        self.export_onnx = export_onnx
+        
         if verbose:
             print("\n" + "=" * 80)
             print("BID/ASK-AWARE LONG/SHORT MODEL DEVELOPMENT PIPELINE")
@@ -244,6 +246,7 @@ class BidAskLongShortPipeline:
         pipeline.train_model()
         pipeline.analyze_features()
         pipeline._compile_metrics()
+        pipeline.export_onnx = self.export_onnx
         
         if generate_reports:
             pipeline._generate_analysis_reports()
