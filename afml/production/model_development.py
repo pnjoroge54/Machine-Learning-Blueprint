@@ -1273,7 +1273,7 @@ class ModelDevelopmentPipeline:
 
     def _save_all_artifacts(self):
         metadata = {
-            "strategy": self.strategy,
+            "strategy": self.strategy.get_strategy_name(),
             "feature_names": self._get_feature_names(),
             "use_optuna": self.model_params.get("use_optuna", False),
             "pipeline_version": self.pipeline_version
@@ -1284,6 +1284,7 @@ class ModelDevelopmentPipeline:
         if self.sample_weight is not None:
             self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
         self.file_manager.save_object(self.metrics, "metrics")
+        self.file_manager.save_object(self.strategy, "strategy")
         
         if self.export_onnx:
             # Strip the preprocessor step before ONNX conversion.
