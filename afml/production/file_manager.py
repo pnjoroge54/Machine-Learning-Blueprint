@@ -595,9 +595,19 @@ class ModelFileManager:
             joblib.dump(save_data, self.current_paths["model"])
 
     def save_model_as_onnx(self, model, feature_names: List[str], metadata: dict = None):
-        """Export model to ONNX format."""
+        """Export model to ONNX format.
+
+        The strategy object is excluded from the ONNX metadata because it is
+        not JSON-serialisable. It is saved separately via save_object('strategy').
+        All other metadata values are cast to str for safe JSON serialisation.
+        """
         if self.current_paths:
-            export_model_to_onnx(model, feature_names, self.current_paths["model_onnx"], metadata)
+            safe_metadata = {
+                k: str(v)
+                for k, v in (metadata or {}).items()
+                if k != "strategy"
+            }
+            export_model_to_onnx(model, feature_names, self.current_paths["model_onnx"], safe_metadata)
 
     def save_object(self, object, name: str):
         """Save objects to file."""
