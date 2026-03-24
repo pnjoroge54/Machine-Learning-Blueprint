@@ -1038,7 +1038,7 @@ class ModelDevelopmentPipeline:
         elif bagging_n_estimators > 0:
             base_est = set_pipeline_params(best_estimator, n_jobs=1)
             bag = BaggingClassifier(
-                estimator=MyPipeline(base_est.steps),
+                estimator=base_est.steps[-1][1],
                 n_estimators=int(bagging_n_estimators),
                 max_samples=bagging_max_samples,
                 max_features=bagging_max_features,
@@ -1175,7 +1175,7 @@ class ModelDevelopmentPipeline:
         base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
 
         bag = SequentiallyBootstrappedBaggingClassifier(
-            estimator=MyPipeline(base_est.steps),
+            estimator=base_est.steps[-1][1],
             n_estimators=int(bagging_n),
             max_samples=bagging_samples,
             max_features=bagging_feats,
@@ -1191,7 +1191,7 @@ class ModelDevelopmentPipeline:
 
         # --- Convert to standard BaggingClassifier for ONNX compatibility ---
         standard_bag = BaggingClassifier(
-            estimator=MyPipeline(base_est.steps),
+            estimator=bag.estimator,
             n_estimators=len(bag.estimators_),
             max_samples=1.0,          # not used after fitting
             max_features=bag.max_features,
