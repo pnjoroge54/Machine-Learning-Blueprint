@@ -42,7 +42,7 @@ def export_model_to_onnx(
         {
             "feature_names": feature_names,
             "feature_count": len(feature_names),
-            "model_type": type(model).__name__,
+            "model_type": get_model_name(model),
             "version": "1.0",
             "created_date": dt.now().isoformat(),
             "created_by": "AFML Production Pipeline",
@@ -108,30 +108,152 @@ def export_model_to_onnx(
         return False
 
 
+def get_model_name(model: BaseEstimator) -> str:
+    """
+    Extract the name of the underlying estimator from a pipeline or ensemble.
+    Works for:
+        - Pipeline: returns name of the final estimator.
+        - BaggingClassifier: returns name of its base estimator.
+        - RandomForest, GradientBoosting: returns their own name (they are the model).
+        - Voting/Stacking: returns the combined name (e.g., 'VotingClassifier').
+        - Simple estimators: returns the class name.
+    """
+    # Unwrap pipeline
+    if isinstance(model, Pipeline):
+        # Get the last step estimator
+        last_estimator = model.steps[-1][1]
+        return get_model_name(last_estimator)
+
+    # Handle bagging ensemble
+    if isinstance(model, BaggingClassifier):
+        # After fitting, base_estimator_ is the fitted base estimator
+        # Before fitting, base_estimator is the estimator (e.g., DecisionTreeClassifier)
+        if hasattr(model, 'base_estimator_'):
+            base = model.base_estimator_
+        elif hasattr(model, 'base_estimator'):
+            base = model.base_estimator
+        else:
+            # fallback (unlikely)
+            return type(model).__name__
+        return get_model_name(base)
+
+    # For other ensembles like RandomForest, they are themselves the model
+    # But you could also dive deeper if needed (e.g., RandomForest uses DecisionTree)
+    if isinstance(model, (RandomForestClassifier,)):
+        return type(model).__name__
+
+    # For voting/stacking, you might want to return a combined name
+    if isinstance(model, (VotingClassifier, StackingClassifier)):
+        return type(model).__name__
+
+    # Default: return class name
+    return type(model).__name__
+
+
 def validate_onnx_predictions(
-    python_model, onnx_path: Path, feature_names: List[str], n_test_samples: int = 1000
+    python_model, onnx_path: str, feature_names: List[str], n_test_samples: int = 1000
 ) -> bool:
     """
     Validate that ONNX model produces identical predictions to Python.
+
+    This is CRITICAL - we must ensure production model behavior
+    matches our backtested results exactly.
     """
     print("\nGenerating test data...")
+
+    # Generate random test data that matches training distribution
     np.random.seed(42)
     X_test = np.random.randn(n_test_samples, len(feature_names)).astype(np.float32)
 
+    # Python predictions
     print("Computing Python predictions...")
     if hasattr(python_model, "predict_proba"):
         python_preds = python_model.predict_proba(X_test)[:, 1]
     else:
         python_preds = python_model.predict(X_test)
 
+    # ONNX predictions
     print("Computing ONNX predictions...")
-    session = onnxruntime.InferenceSession(str(onnx_path))
+    session = onnxruntime.InferenceSession(onnx_path)
     input_name = session.get_inputs()[0].name
+
+    # Get ALL outputs from ONNX model
     onnx_outputs = session.run(None, {input_name: X_test})
 
-    # ... (rest of the function unchanged)
-    # (Same code for handling outputs and comparison)
-    return ...  # keep existing logic
+    # Debug: print what we got
+    print(f"\n✓ ONNX returned {len(onnx_outputs)} output(s)")
+    for i, output in enumerate(onnx_outputs):
+        print(f"  Output {i}: shape={output.shape}, dtype={output.dtype}")
+        if len(output) > 0:
+            print(f"    Sample values: {output[0]}")
+
+    # Extract probabilities (usually the second output for classifiers)
+    if len(onnx_outputs) > 1:
+        # Second output contains probabilities
+        onnx_probs = onnx_outputs[1]
+        print("\n✓ Using output 1 (probabilities)")
+    else:
+        # Only one output - assume it's probabilities
+        onnx_probs = onnx_outputs[0]
+        print("\n✓ Using output 0")
+
+    # If probabilities are 2D [n_samples, n_classes], extract positive class
+    if onnx_probs.ndim > 1 and onnx_probs.shape[1] == 2:
+        onnx_preds = onnx_probs[:, 1]
+        print(f"✓ Extracted positive class probabilities from shape {onnx_probs.shape}")
+    elif onnx_probs.ndim > 1:
+        # Multiple classes, take the last column
+        onnx_preds = onnx_probs[:, -1]
+        print(f"✓ Extracted last column from shape {onnx_probs.shape}")
+    else:
+        onnx_preds = onnx_probs
+        print(f"✓ Using 1D predictions of shape {onnx_probs.shape}")
+
+    # Compare predictions
+    max_diff = np.max(np.abs(python_preds - onnx_preds))
+    mean_diff = np.mean(np.abs(python_preds - onnx_preds))
+
+    print(f"\nPrediction Comparison ({n_test_samples} samples):")
+    print(f"  • Max difference:  {max_diff:.2e}")
+    print(f"  • Mean difference: {mean_diff:.2e}")
+    print(f"  • Std difference:  {np.std(np.abs(python_preds - onnx_preds)):.2e}")
+
+    # Define tolerance (should be very small for production)
+    tolerance = 1e-5
+
+    if max_diff < tolerance:
+        print(
+            f"\n✅ VALIDATION PASSED - Predictions match within tolerance ({tolerance:.2e})"
+        )
+
+        # Show some example predictions
+        print("\nSample Predictions (first 5):")
+        print(f"{'Index':<8} {'Python':<12} {'ONNX':<12} {'Diff':<12}")
+        print("-" * 50)
+        for i in range(5):
+            diff = abs(python_preds[i] - onnx_preds[i])
+            print(
+                f"{i:<8} {python_preds[i]:<12.6f} {onnx_preds[i]:<12.6f} {diff:<12.2e}"
+            )
+
+        return True
+    else:
+        print(
+            f"\n❌ VALIDATION FAILED - Max difference {max_diff:.2e} exceeds tolerance {tolerance:.2e}"
+        )
+
+        # Find and report worst mismatches
+        worst_indices = np.argsort(np.abs(python_preds - onnx_preds))[-5:]
+        print("\nWorst 5 Mismatches:")
+        print(f"{'Index':<8} {'Python':<12} {'ONNX':<12} {'Diff':<12}")
+        print("-" * 50)
+        for idx in worst_indices:
+            diff = abs(python_preds[idx] - onnx_preds[idx])
+            print(
+                f"{idx:<8} {python_preds[idx]:<12.6f} {onnx_preds[idx]:<12.6f} {diff:<12.2e}"
+            )
+
+        return False
 
 
 def extract_onnx_metadata(onnx_path: Path) -> Dict[str, Any]:
