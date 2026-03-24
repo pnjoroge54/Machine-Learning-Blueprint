@@ -1204,9 +1204,9 @@ class ModelDevelopmentPipeline:
         standard_bag.estimators_features_ = bag.estimators_features_
 
         # Copy essential metadata required for prediction
-        if hasattr(bag, "classes_"):
-            standard_bag.classes_ = bag.classes_
-            standard_bag.n_classes_ = bag.n_classes_
+        standard_bag.classes_ = getattr(bag, "classes_", np.array(sorted(y.unique())))
+        standard_bag.n_classes_ = len(standard_bag.classes_)
+        
         # n_features_in_ is not exposed by SequentiallyBootstrappedBaggingClassifier,
         # so derive it from the training data shape used in this call.
         standard_bag.n_features_in_ = X.shape[1]
