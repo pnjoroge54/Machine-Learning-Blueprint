@@ -379,22 +379,22 @@ def ml_cross_val_score(
                 samples_info_sets=t1.iloc[train], oob_score=False
             )  # Create new instance
         fit = classifier.fit(
-            X=X.iloc[train, :],
-            y=y.iloc[train],
-            sample_weight=sample_weight_train.iloc[train],
+            X=X.iloc[train, :].to_numpy(),
+            y=y.iloc[train].to_numpy(),
+            sample_weight=sample_weight_train.iloc[train].to_numpy()
         )
         params = dict(
-            y_true=y.iloc[test],
+            y_true=y.iloc[test].to_numpy(),
             labels=classifier.classes_,
-            sample_weight=sample_weight_score.iloc[test],
+            sample_weight=sample_weight_score.iloc[test].to_numpy(),
         )
         if scoring == (log_loss or probability_weighted_accuracy):
-            params["y_pred"] = fit.predict_proba(X.iloc[test, :])
+            params["y_pred"] = fit.predict_proba(X.iloc[test, :].to_numpy())
             score = scoring(**params)
             if scoring == log_loss:
                 score *= -1
         elif scoring == (f1_score or accuracy_score):
-            params["y_pred"] = fit.predict(X.iloc[test, :])
+            params["y_pred"] = fit.predict(X.iloc[test, :].to_numpy())
             try:
                 score = scoring(**params)
             except Exception:
@@ -482,17 +482,17 @@ def analyze_cross_val_scores(
                 samples_info_sets=t1.iloc[train], oob_score=False
             )  # Create new instance
         fit = classifier.fit(
-            X=X.iloc[train, :],
-            y=y.iloc[train],
-            sample_weight=sample_weight_train.iloc[train],
+            X=X.iloc[train, :].to_numpy(),
+            y=y.iloc[train].to_numpy(),
+            sample_weight=sample_weight_train.iloc[train].to_numpy()
         )
-        prob = fit.predict_proba(X.iloc[test, :])
+        prob = fit.predict_proba(X.iloc[test, :].to_numpy())
         pred = (prob[:, 1] > 0.5).astype(int)
         params = dict(
             y_true=y.iloc[test],
             y_pred=pred,
             labels=classifier.classes_,
-            sample_weight=sample_weight_score.iloc[test],
+            sample_weight=sample_weight_score.iloc[test].to_numpy(),
         )
 
         for method, scoring in zip(ret_scores.keys(), scoring_methods):
