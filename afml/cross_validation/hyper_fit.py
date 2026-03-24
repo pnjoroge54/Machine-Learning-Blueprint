@@ -187,7 +187,7 @@ def clf_hyper_fit(
         base_estimator = set_pipeline_params(best_estimator, n_jobs=1)
 
         bag = BaggingClassifier(
-            estimator=Pipeline(base_estimator.steps),
+            estimator=MyPipeline(base_estimator.steps),
             n_estimators=int(bagging_n_estimators),
             max_samples=bagging_max_samples,
             max_features=bagging_max_features,
@@ -197,8 +197,7 @@ def clf_hyper_fit(
 
         # Final bagging fit uses training weights only — there is no scoring
         # step here so sample_weight_score is not relevant.
-        bag.fit(features, labels, sample_weight=sample_weight_train)
-        
+        bag.fit(features, labels, sample_weight=sample_weight_train)        
         return Pipeline([("bag", bag)]), cv_results
 
     return Pipeline(best_estimator.steps), cv_results
