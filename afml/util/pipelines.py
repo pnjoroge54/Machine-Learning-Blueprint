@@ -87,8 +87,6 @@ def make_custom_pipeline(pipe_clf):
         return MyPipeline([("clf", pipe_clf)])
     elif isinstance(pipe_clf, Pipeline):
         return MyPipeline(pipe_clf.steps)
-    else:
-        return pipe_clf
     
 
 def set_pipeline_params(pipeline, **kwargs):
