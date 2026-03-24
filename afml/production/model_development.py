@@ -877,7 +877,12 @@ class ModelDevelopmentPipeline:
 
         Post-dispatch (both paths):
             - The fitted preprocessor (DropConstant + DropDuplicate) is prepended
-              to best_model so that inference is fully self-contained.
+              to best_model so that sklearn inference is fully self-contained.
+            - NOTE: for ONNX export, the preprocessor step is stripped from
+              best_model before conversion — DropConstantFeatures and
+              DropDuplicateFeatures have no ONNX operator mapping. Apply
+              self.preprocessor.transform() as a standalone step before
+              passing data to the deployed ONNX model. See _save_all_artifacts.
         """
         self.model_params['pipe_clf'] = make_custom_pipeline(self.model_params['pipe_clf'])
         pipe = clone(self.model_params['pipe_clf'])
@@ -920,11 +925,11 @@ class ModelDevelopmentPipeline:
         bagging_sequential = self.model_params.get('bagging_sequential', False)
         bagging_n = self.model_params.get('bagging_n_estimators', 0)
         sample_weight_train = self.sample_weight.loc[self.events.index]  # meta_features change indexing
-        sample_weight_score=self.events["w"].loc[sample_weight_train.index],
-        
+        sample_weight_score = self.events["w"].loc[sample_weight_train.index]
+
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
         included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
-        params = {k: v for k, v in self.model_params.items() if k in included}        
+        params = {k: v for k, v in self.model_params.items() if k in included}
 
         if bagging_sequential and bagging_n > 0:
             # Tune the base classifier first with no bagging, then apply sequential
@@ -937,11 +942,11 @@ class ModelDevelopmentPipeline:
                 t1=self.events["t1"],
                 **params,
                 sample_weight_train=sample_weight_train,
-                sample_weight_score=sample_weight_score
+                sample_weight_score=sample_weight_score,
             )
             self.best_model = self._apply_sequential_bagging(
                 self.preprocessed_features, self.events["bin"],
-                tuned_pipeline, sample_weight=sample_weight,
+                tuned_pipeline, sample_weight=sample_weight_train,
             )
         else:
             self.best_model, self.cv_results = clf_hyper_fit_cached(
@@ -949,8 +954,8 @@ class ModelDevelopmentPipeline:
                 labels=self.events["bin"],
                 t1=self.events["t1"],
                 **params,
-                sample_weight_train=sample_weight,
-                sample_weight_score=sample_weight_score
+                sample_weight_train=sample_weight_train,
+                sample_weight_score=sample_weight_score,
             )
 
     def _train_model_optuna(self):
@@ -1202,7 +1207,9 @@ class ModelDevelopmentPipeline:
         if hasattr(bag, "classes_"):
             standard_bag.classes_ = bag.classes_
             standard_bag.n_classes_ = bag.n_classes_
-        #standard_bag.n_features_in_ = bag.n_features_in_
+        # n_features_in_ is not exposed by SequentiallyBootstrappedBaggingClassifier,
+        # so derive it from the training data shape used in this call.
+        standard_bag.n_features_in_ = X.shape[1]
 
         # Optionally copy OOB attributes (if needed later)
         if hasattr(bag, "oob_score_"):
@@ -1279,11 +1286,16 @@ class ModelDevelopmentPipeline:
         self.file_manager.save_object(self.metrics, "metrics")
         
         if self.export_onnx:
+            # Strip the preprocessor step before ONNX conversion.
+            # DropConstantFeatures and DropDuplicateFeatures have no ONNX operator
+            # mapping. self.preprocessor must be applied as a standalone
+            # transform step before passing data to the deployed ONNX model.
+            onnx_pipeline = Pipeline(self.best_model.steps[1:])
             self.file_manager.save_model_as_onnx(
-                self.best_model, self._get_feature_names(), metadata
+                onnx_pipeline, self._get_feature_names(), metadata
             )
 
-            logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
+        logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
 
     def _generate_analysis_reports(self):
         """Generates hyperparameter analysis, importance plots, and HTML summary."""
