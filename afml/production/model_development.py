@@ -409,7 +409,8 @@ def best_weighting_scheme(
     y,
     cv_gen,
     scoring,
-    sample_weight,
+    sample_weight_train,
+    sample_weight_score,
     scheme=None,
     best_score=0,
     best_scheme=None,
@@ -420,8 +421,8 @@ def best_weighting_scheme(
         X,
         y,
         cv_gen,
-        sample_weight_train=sample_weight,
-        sample_weight_score=sample_weight,
+        sample_weight_train=sample_weight_train,
+        sample_weight_score=sample_weight_score,
         scoring=scoring,
     )
     score = scores.mean()
@@ -510,7 +511,7 @@ def get_optimal_sample_weight(
 
     for scheme, weight in tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights)):
         best_score, best_scheme, cv_results = best_weighting_scheme(
-            clone(classifier), X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
+            clone(classifier), X, y, cv_gen, scoring, weight, weights["return"], scheme, best_score, best_scheme, cv_results
         )
 
     best_weight = weights[best_scheme]
@@ -531,7 +532,7 @@ def get_optimal_sample_weight(
 
     for scheme, weight in tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay for {best_scheme}"):
         best_score, best_scheme, cv_results = best_weighting_scheme(
-            clone(classifier), X, y, cv_gen, scoring, weight, scheme, best_score, best_scheme, cv_results
+            clone(classifier), X, y, cv_gen, scoring, weight, weights["return"], scheme, best_score, best_scheme, cv_results
         )
 
     weights.update(time_decay_weights)
