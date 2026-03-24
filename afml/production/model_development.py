@@ -810,7 +810,7 @@ class ModelDevelopmentPipeline:
         # This flag gates meta-feature computation and artifact naming.
         self.is_primary = 'side' not in self.events.columns
         self.config['model_role'] = 'primary' if self.is_primary else 'secondary'
-        logger.info(f"Model role: {self.config['model_role']} | Label space: {sorted(self.events['bin'].unique().astype("int8"))}")
+        logger.info(f"Model role: {self.config['model_role']} | Label space: {sorted(self.events['bin'].unique())}")
         logger.info(f"Average uniqueness: ({self.events["tW"].mean():.4f})")
         self.completed_steps["label_generation"] = True
 
