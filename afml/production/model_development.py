@@ -1272,25 +1272,32 @@ class ModelDevelopmentPipeline:
         return self.preprocessed_features.columns.tolist()
 
     def _save_all_artifacts(self):
+        # strategy is saved as a standalone cloudpickle artifact so it can be
+        # reloaded independently (e.g. to reconstruct a LearnedStrategy without
+        # loading the full model). It is kept in metadata for joblib save_model
+        # (cloudpickle-backed, handles arbitrary objects) but stripped from the
+        # ONNX metadata path where only JSON-serialisable values are permitted.
         metadata = {
-            "strategy": self.strategy.get_strategy_name(),
+            "strategy": self.strategy,
             "feature_names": self._get_feature_names(),
             "use_optuna": self.model_params.get("use_optuna", False),
-            "pipeline_version": self.pipeline_version
+            "pipeline_version": self.pipeline_version,
         }
         self.file_manager.save_model(self.best_model, metadata)
+        self.file_manager.save_object(self.strategy, "strategy")
         self.file_manager.save_dataframe(self.preprocessed_features, "features")
         self.file_manager.save_dataframe(self.events, "events")
         if self.sample_weight is not None:
             self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
         self.file_manager.save_object(self.metrics, "metrics")
-        self.file_manager.save_object(self.strategy, "strategy")
-        
+
         if self.export_onnx:
             # Strip the preprocessor step before ONNX conversion.
             # DropConstantFeatures and DropDuplicateFeatures have no ONNX operator
             # mapping. self.preprocessor must be applied as a standalone
             # transform step before passing data to the deployed ONNX model.
+            # save_model_as_onnx further strips the strategy object from metadata
+            # since it is not JSON-serialisable.
             onnx_pipeline = Pipeline(self.best_model.steps[1:])
             self.file_manager.save_model_as_onnx(
                 onnx_pipeline, self._get_feature_names(), metadata
