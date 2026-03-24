@@ -444,73 +444,85 @@ def check_for_overfitting(study, trial):
     score_std = trial.user_attrs.get("score_std", 0.0)
     if len(scores) >= 3 and score_std > 0.3:
         print(f"⚠️ High variance detected in Trial {trial.number}")
-        
 
-def plot_model_vs_baseline(study, y, events):
+
+def plot_model_vs_baseline(study, y, events, metric=None):
     """
-    Visualizes the best model's performance relative to the naive baseline
-    and market volatility across CV folds. Handles both log-loss and f1 scores.
+    Visualizes the best model's performance relative to a naive baseline
+    across CV folds.  Supports both neg_log_loss and f1 metrics.
+
+    Parameters
+    ----------
+    study : optuna.study.Study
+        Completed Optuna study.
+    y : pd.Series
+        Target labels.
+    events : pd.DataFrame
+        Event metadata with 'w' column (return-attribution weights).
+    metric : str, optional
+        'neg_log_loss' or 'f1'.  Auto-detected from the label space
+        when None: {0, 1} → 'f1', otherwise → 'neg_log_loss'.
     """
-    # 1. Re-calculate baseline probabilities for the whole period
-    weighted_counts = events['w'].groupby(y.values).sum()
+    # Auto-detect metric from label space if not specified
+    if metric is None:
+        metric = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+
+    # 1. Calculate naive baseline using return-attribution weights
+    w = events.loc[y.index, 'w']
+    weighted_counts = w.groupby(y.values).sum()
     probs = weighted_counts / weighted_counts.sum()
-    
-    # 2. Determine the mathematical baseline and labels based on the metric
-    metric = "f1" if set(np.unique(y)) == {1,0} else "neg_log_loss"
+
     if metric == "neg_log_loss":
-        # Log-loss naive baseline is the entropy of the prior distribution
-        entropy = -np.sum(probs * np.log(probs))
-        plot_baseline = -entropy
-        baseline_label = 'Naive Baseline (-Entropy)'
-        y_label = 'Weighted Negative Log-Loss (Higher is Better)'
-        model_label = 'Best Model (Weighted Log-Loss)'
-    elif metric == "f1":
-        # F1/Accuracy naive baseline proxy is predicting the majority class
-        plot_baseline = probs.max()
-        baseline_label = 'Naive Baseline (Majority Ratio)'
-        y_label = 'Weighted F1 Score (Higher is Better)'
-        model_label = 'Best Model (Weighted F1 Score)'
+        baseline_entropy = -np.sum(probs * np.log(probs))
+        baseline_score = -baseline_entropy          # higher is better
+        baseline_label = "Naive Baseline (Weighted Entropy)"
+        score_label = "Weighted Log-Loss Score (Higher is Better)"
+        metric_display = "Log-Loss"
     else:
-        raise ValueError(f"Unsupported metric: {metric}")
-    
-    # 3. Extract best trial data
+        # F1 baseline: majority-class predictor evaluated with sample weights.
+        # If majority is class 0 the baseline F1 for the positive class is 0.
+        majority_class = probs.idxmax()
+        y_naive = np.full(len(y), fill_value=majority_class)
+        baseline_score = f1_score(y, y_naive, sample_weight=w, zero_division=0)
+        baseline_label = f"Majority-Class Baseline (F1 = {baseline_score:.3f})"
+        score_label = "Weighted F1 Score (Higher is Better)"
+        metric_display = "F1"
+
+    # 2. Extract best trial data
     best_trial = study.best_trial
     fold_scores = best_trial.user_attrs.get("fold_scores", [])
-    
+
     if not fold_scores:
-        print(f"⚠️ No fold scores found in Best Trial #{best_trial.number}")
+        logger.warning("No fold scores found in best trial user attributes.")
         return
-        
-    # 4. Create the plot
+
+    # 3. Create the plot
     plt.figure(figsize=(12, 6))
-    
-    # Plot the scores
     folds = range(len(fold_scores))
-    plt.plot(folds, fold_scores, marker='o', label=model_label, color='#1f77b4', lw=2)
-    
-    # Plot the baseline
-    plt.axhline(y=plot_baseline, color='red', linestyle='--', label=baseline_label, alpha=0.7)
-    
-    # Fill the 'Economic Edge' area where the model beats the baseline
+
+    plt.plot(
+        folds, fold_scores, marker='o',
+        label=f'Best Model (Weighted {metric_display})',
+        color='#1f77b4', lw=2,
+    )
+    plt.axhline(
+        y=baseline_score, color='red', linestyle='--',
+        label=baseline_label, alpha=0.7,
+    )
     plt.fill_between(
-        folds, 
-        fold_scores, 
-        plot_baseline, 
-        where=(np.array(fold_scores) > plot_baseline), 
-        color='green', alpha=0.1, label='Economic Edge'
+        folds, fold_scores, baseline_score,
+        where=(np.array(fold_scores) > baseline_score),
+        color='green', alpha=0.1, label='Economic Edge',
     )
 
-    plt.title(f"Best Trial #{best_trial.number}: Performance vs. Information Baseline", fontsize=14)
+    plt.title(
+        f"Best Trial #{best_trial.number}: Performance vs. Naive Baseline",
+        fontsize=14,
+    )
     plt.xlabel("Cross-Validation Fold", fontsize=12)
-    plt.ylabel(y_label, fontsize=12)
-    
-    # Force y-axis limits to make F1 scores easier to read if desired
-    if metric == "f1":
-        plt.ylim(max(0, min(fold_scores) - 0.1), min(1.0, max(fold_scores) + 0.1))
-        
+    plt.ylabel(score_label, fontsize=12)
     plt.legend()
     plt.grid(alpha=0.3)
-    plt.tight_layout()
     plt.show()
 
 
