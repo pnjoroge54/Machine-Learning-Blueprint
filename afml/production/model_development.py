@@ -95,7 +95,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
+from ..cache import cacheable, cv_cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
@@ -238,7 +238,7 @@ def create_feature_engineering_pipeline(
     return features.join(time_feat, how="left")
 
 
-@cacheable(time_aware=True)
+@cacheable()
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: BaseStrategy,
@@ -403,6 +403,7 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     return metrics.dropna()
 
 
+@cv_cacheable
 def best_weighting_scheme(
     classifier,
     X,
@@ -434,7 +435,6 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable(time_aware=True)
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
@@ -535,6 +535,8 @@ def get_optimal_sample_weight(
         )
 
     weights.update(time_decay_weights)
+    logger.info(f"best weighting scheme: {best_scheme}")
+            
     cv_results_dict = {
         "best_score": best_score,
         "cv_results": cv_results,
@@ -820,7 +822,6 @@ class ModelDevelopmentPipeline:
                 self.bar_data.index, self.events, self.features, self.n_splits, None, self.decay_factors
             )
             self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
-            logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
             if self.sample_weight is not None:
                 self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
         self.completed_steps["weight_computation"] = True
