@@ -11,6 +11,7 @@ import sklearn
 from loguru import logger
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
+from sklearn.base import BaseEstimator
 
 
 def export_model_to_onnx(
