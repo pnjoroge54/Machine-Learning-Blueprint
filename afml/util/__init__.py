@@ -47,7 +47,7 @@ from .multiprocess import (
     process_jobs_,
     report_progress,
 )
-from .pipelines import make_custom_pipeline, set_pipeline_params
+from .pipelines import make_custom_pipeline, make_weighted_scorer, set_pipeline_params
 from .volatility import (
     get_daily_vol,
     get_garman_klass_vol,
@@ -98,6 +98,7 @@ __all__ = [
     "process_jobs_",
     "report_progress",
     "make_custom_pipeline",
+    "make_weighted_scorer",
     "set_pipeline_params",
     "get_daily_vol",
     "get_garman_klass_vol",
