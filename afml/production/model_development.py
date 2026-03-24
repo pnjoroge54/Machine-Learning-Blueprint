@@ -992,10 +992,7 @@ class ModelDevelopmentPipeline:
         db_path: Path = self.file_paths["db_path"]
         db_path.parent.mkdir(parents=True, exist_ok=True)
         opt_params["db_path"] = f"sqlite:///{db_path.resolve()}"
-        
-        reports_path = self.file_paths["reports"] / "trials"
-        reports_path.mkdir(exist_ok=True)
-        opt_params["reports_path"] = reports_path 
+        opt_params["reports_path"] = self.file_paths["reports"] / "trials"
         callbacks = [check_for_overfitting, print_best_trial]
 
         try:
