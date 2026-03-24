@@ -11,6 +11,7 @@ One unified system with consistent behavior across all decorators.
 import hashlib
 import inspect
 import json
+import pickle
 import time
 from functools import wraps
 from typing import Any, Callable, Dict, Optional, Tuple
