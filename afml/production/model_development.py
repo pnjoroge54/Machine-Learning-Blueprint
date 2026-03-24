@@ -1185,6 +1185,8 @@ class ModelDevelopmentPipeline:
         else:
             bag.fit(X, y)
 
+        logger.info("Sequential bootstrap fitted")
+
         # --- Convert to standard BaggingClassifier for ONNX compatibility ---
         standard_bag = BaggingClassifier(
             estimator=MyPipeline(base_est.steps),
