@@ -7,7 +7,6 @@ model performance in production trading.
 
 import pandas as pd
 import numpy as np
-import pickle
 from typing import Dict, Tuple
 from loguru import logger
 
