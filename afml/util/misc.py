@@ -1,6 +1,4 @@
-"""
-Various useful functions
-"""
+"""Various useful functions."""
 
 import functools
 import io
@@ -239,7 +237,6 @@ def log_column_changes(func):
     return wrapper
 
 
-@log_column_changes
 def flatten_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """
     Returns a copy of the DataFrame with flattened column names.
