@@ -95,7 +95,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from ..cache import cacheable, cv_cacheable, get_cache_monitor, log_data_access, print_contamination_report
+from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
@@ -238,7 +238,7 @@ def create_feature_engineering_pipeline(
     return features.join(time_feat, how="left")
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: BaseStrategy,
@@ -403,7 +403,6 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     return metrics.dropna()
 
 
-@cv_cacheable
 def best_weighting_scheme(
     classifier,
     X,
@@ -435,6 +434,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
+@cacheable(time_aware=True)
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
@@ -535,8 +535,6 @@ def get_optimal_sample_weight(
         )
 
     weights.update(time_decay_weights)
-    logger.info(f"best weighting scheme: {best_scheme}")
-            
     cv_results_dict = {
         "best_score": best_score,
         "cv_results": cv_results,
@@ -822,6 +820,7 @@ class ModelDevelopmentPipeline:
                 self.bar_data.index, self.events, self.features, self.n_splits, None, self.decay_factors
             )
             self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
+            logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
             if self.sample_weight is not None:
                 self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
         self.completed_steps["weight_computation"] = True
@@ -1038,7 +1037,7 @@ class ModelDevelopmentPipeline:
         elif bagging_n_estimators > 0:
             base_est = set_pipeline_params(best_estimator, n_jobs=1)
             bag = BaggingClassifier(
-                estimator=base_est.steps[-1][1],
+                estimator=MyPipeline(base_est.steps),
                 n_estimators=int(bagging_n_estimators),
                 max_samples=bagging_max_samples,
                 max_features=bagging_max_features,
@@ -1175,7 +1174,7 @@ class ModelDevelopmentPipeline:
         base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
 
         bag = SequentiallyBootstrappedBaggingClassifier(
-            estimator=base_est.steps[-1][1],
+            estimator=MyPipeline(base_est.steps),
             n_estimators=int(bagging_n),
             max_samples=bagging_samples,
             max_features=bagging_feats,
@@ -1191,7 +1190,7 @@ class ModelDevelopmentPipeline:
 
         # --- Convert to standard BaggingClassifier for ONNX compatibility ---
         standard_bag = BaggingClassifier(
-            estimator=bag.estimator,
+            estimator=MyPipeline(base_est.steps),
             n_estimators=len(bag.estimators_),
             max_samples=1.0,          # not used after fitting
             max_features=bag.max_features,
@@ -1272,6 +1271,37 @@ class ModelDevelopmentPipeline:
             return []
         return self.preprocessed_features.columns.tolist()
 
+    @staticmethod
+    def _convert_mypipeline_for_onnx(pipeline: Pipeline) -> None:
+        """
+        Recursively replace every MyPipeline instance inside a fitted sklearn
+        Pipeline with a standard sklearn Pipeline in-place.
+
+        skl2onnx only recognises sklearn.pipeline.Pipeline. MyPipeline is a
+        subclass that adds sample-weight passthrough — a training-time concern
+        with no ONNX representation. Swapping it for a plain Pipeline preserves
+        all fitted state (steps, fitted attributes) while making the object
+        graph fully recognisable by the ONNX converter.
+
+        Handles three nesting patterns:
+          - pipeline step is directly a MyPipeline
+          - pipeline step is a BaggingClassifier whose estimator template or
+            fitted estimators_ contain MyPipeline instances
+        """
+        for i, (name, step) in enumerate(pipeline.steps):
+            if isinstance(step, MyPipeline):
+                pipeline.steps[i] = (name, Pipeline(step.steps))
+            elif isinstance(step, (BaggingClassifier, SequentiallyBootstrappedBaggingClassifier)):
+                # Replace the unfitted template
+                if isinstance(step.estimator, MyPipeline):
+                    step.estimator = Pipeline(step.estimator.steps)
+                # Replace every fitted bag
+                if hasattr(step, "estimators_"):
+                    step.estimators_ = [
+                        Pipeline(e.steps) if isinstance(e, MyPipeline) else e
+                        for e in step.estimators_
+                    ]
+
     def _save_all_artifacts(self):
         # strategy is saved as a standalone cloudpickle artifact so it can be
         # reloaded independently (e.g. to reconstruct a LearnedStrategy without
@@ -1300,6 +1330,7 @@ class ModelDevelopmentPipeline:
             # save_model_as_onnx further strips the strategy object from metadata
             # since it is not JSON-serialisable.
             onnx_pipeline = Pipeline(self.best_model.steps[1:])
+            self._convert_mypipeline_for_onnx(onnx_pipeline)
             self.file_manager.save_model_as_onnx(
                 onnx_pipeline, self._get_feature_names(), metadata
             )
