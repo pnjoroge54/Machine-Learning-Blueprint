@@ -820,6 +820,7 @@ class ModelDevelopmentPipeline:
                 self.bar_data.index, self.events, self.features, self.n_splits, None, self.decay_factors
             )
             self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
+            logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
             if self.sample_weight is not None:
                 self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
         self.completed_steps["weight_computation"] = True
@@ -918,7 +919,8 @@ class ModelDevelopmentPipeline:
     def _train_model_sklearn(self):
         bagging_sequential = self.model_params.get('bagging_sequential', False)
         bagging_n = self.model_params.get('bagging_n_estimators', 0)
-        sample_weight = self.sample_weight.loc[self.events.index]  # meta_features change indexing
+        sample_weight_train = self.sample_weight.loc[self.events.index]  # meta_features change indexing
+        sample_weight_score=self.events["w"].loc[sample_weight_train.index],
         
         # Keys that belong to the Optuna path or are handled outside clf_hyper_fit
         included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
@@ -934,7 +936,8 @@ class ModelDevelopmentPipeline:
                 labels=self.events["bin"],
                 t1=self.events["t1"],
                 **params,
-                sample_weight=sample_weight
+                sample_weight_train=sample_weight_train,
+                sample_weight_score=sample_weight_score
             )
             self.best_model = self._apply_sequential_bagging(
                 self.preprocessed_features, self.events["bin"],
@@ -947,7 +950,7 @@ class ModelDevelopmentPipeline:
                 t1=self.events["t1"],
                 **params,
                 sample_weight_train=sample_weight,
-                sample_weight_score=self.events["w"].loc[sample_weight.index],
+                sample_weight_score=sample_weight_score
             )
 
     def _train_model_optuna(self):
