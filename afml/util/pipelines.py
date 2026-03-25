@@ -31,12 +31,14 @@ def make_weighted_scorer(scoring: str, sample_weight: pd.Series):
             # Align weights to this fold's index
             w = sample_weight.reindex(X.index)
             y_pred = estimator.predict(X)
-            return f1_score(y, y_pred, sample_weight=w.to_numpy(), zero_division=0)
+            y_ = y.to_numpy(np.int8) # reduce internal overhead
+            return f1_score(y_, y_pred, sample_weight=w.to_numpy(), zero_division=0)
     else:  # neg_log_loss
         def _scorer(estimator, X, y):
             w = sample_weight.reindex(X.index)
             y_proba = estimator.predict_proba(X)
-            return -log_loss(y, y_proba, sample_weight=w.to_numpy())
+            y_ = y.to_numpy()
+            return -log_loss(y_, y_proba, sample_weight=w.to_numpy())
 
     return _scorer
     
@@ -115,10 +117,7 @@ def set_pipeline_params(pipeline, **kwargs):
                     pipeline.set_params(**{param_key: value})
             except Exception as e:
                 logger.error(
-                    "Failed to set %s for step %s: %s",
-                    param_name,
-                    step_name,
-                    str(e),
+                    f"Failed to set {param_name} for step {step_name}: {e}"
                 )
     return pipeline
 
