@@ -157,9 +157,9 @@ def bet_size_reserve(
     strategy results in a sigmoid-shaped bet sizing response aligned to the expected number of concurrent long
     and short bets in the dataset.
 
-    Note that this function creates a <mlfinlab.bet_sizing.ef3m.M2N> object and makes use of the parallel fitting
+    Note that this function creates a <afml.bet_sizing.ef3m.M2N> object and makes use of the parallel fitting
     functionality. As such, this function accepts and passes fitting parameters to the
-    mlfinlab.bet_sizing.ef3m.M2N.mp_fit() method.
+    afml.bet_sizing.ef3m.M2N.mp_fit() method.
 
     :param events_t1: (pandas.Series) The end datetime of the position with the start datetime as the index.
     :param sides: (pandas.Series) The side of the bet with the start datetime as index. Index must match the
@@ -227,7 +227,7 @@ def confirm_and_cast_to_df(d_vars):
     any_series = False  # Are any variables a pandas.Series?
     all_series = True  # Are all variables a pandas.Series?
     ser_len = 0
-    for var in d_vars.values():
+    for var in d_vars.to_numpy()():
         any_series = any_series or isinstance(var, pd.Series)
         all_series = all_series and isinstance(var, pd.Series)
 
@@ -249,7 +249,7 @@ def confirm_and_cast_to_df(d_vars):
                 )
 
     # Combine Series to form a DataFrame.
-    events = pd.concat(list(d_vars.values()), axis=1)
+    events = pd.concat(list(d_vars.to_numpy()()), axis=1)
     events.columns = list(d_vars.keys())
 
     return events
@@ -286,7 +286,7 @@ def get_concurrent_sides(events_t1, sides):
     """
     events_0 = pd.DataFrame({"t1": events_t1, "side": sides})
     active_long, active_short = _get_concurrent_sides_numba(
-        events_t1.index.view(np.int64), events_t1.view(np.int64).values, sides.values
+        events_t1.index.view(np.int64), events_t1.to_numpy(np.int64), sides.to_numpy()
     )
     events_0["active_long"] = active_long
     events_0["active_short"] = active_short
@@ -325,3 +325,4 @@ def single_bet_size_mixed(c_t, parameters):
             cdf_mixture(c_t, parameters) - cdf_mixture(0, parameters)
         ) / cdf_mixture(0, parameters)
     return single_bet_size
+
