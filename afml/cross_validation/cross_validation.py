@@ -7,7 +7,7 @@ from typing import Callable, Optional, Union
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, ClassifierMixin, clone
+from sklearn.base import BaseEstimator, clone
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
@@ -18,8 +18,6 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection._split import _BaseKFold
-from sklearn.isotonic import IsotonicRegression
-from sklearn.utils.validation import check_is_fitted
 
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from .scoring import probability_weighted_accuracy
@@ -273,7 +271,7 @@ class PurgedWalkForwardCV(_BaseKFold):
 
 # noinspection PyPep8Naming
 def ml_cross_val_score(
-    classifier: ClassifierMixin,
+    classifier: BaseEstimator,
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
@@ -301,7 +299,7 @@ def ml_cross_val_score(
 
     Parameters
     ----------
-    classifier : ClassifierMixin
+    classifier : BaseEstimator
         A scikit-learn compatible classifier instance (must implement fit/predict and optionally
         predict_proba).
     X : pd.DataFrame
@@ -409,7 +407,7 @@ def ml_cross_val_score(
 
 
 def analyze_cross_val_scores(
-    classifier: ClassifierMixin,
+    classifier: BaseEstimator,
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
@@ -536,117 +534,3 @@ def analyze_cross_val_scores(
             confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
 
     return ret_scores, scores_df, confusion_matrix_breakdown
-
-
-class CVIsotonicCalibrator(BaseEstimator, ClassifierMixin):
-    """
-    Probability calibrator using Isotonic Regression fitted on
-    out-of-fold (OOF) predictions from PurgedKFold CV.
-
-    This correctly handles:
-    - Sample weights (uniqueness/time-decay from AFML Ch. 4)
-    - Temporal leakage prevention (via PurgedKFold, AFML Ch. 7)
-    - Monotone probability mapping
-
-    Parameters
-    ----------
-    estimator : sklearn classifier
-        Unfitted base classifier with predict_proba support.
-    cv : PurgedKFold or int
-        Cross-validation strategy. Strongly prefer PurgedKFold
-        for financial time series data.
-    """
-
-    def __init__(self, estimator, cv=None):
-        self.estimator = estimator
-        self.cv = cv if cv is not None else PurgedKFold(n_splits=5)
-
-    def fit(self, X, y, sample_weight=None):
-        """
-        1. Generate OOF probability predictions via PurgedKFold.
-        2. Fit IsotonicRegression on OOF probs + true labels + weights.
-        3. Refit the base estimator on the full dataset.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-        y : array-like of shape (n_samples,)
-        sample_weight : array-like of shape (n_samples,), optional
-            AFML-style uniqueness/time-decay weights.
-        """
-        X = np.array(X)
-        y = np.array(y)
-        n_samples = X.shape[0]
-
-        if sample_weight is None:
-            sample_weight = np.ones(n_samples)
-        sample_weight = np.array(sample_weight)
-
-        # --- Phase 1: Collect OOF predictions ---
-        oof_probs = np.full(n_samples, np.nan)
-
-        for fold_idx, (train_idx, test_idx) in enumerate(
-            self.cv.split(X, y)
-        ):
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train = y[train_idx]
-            sw_train = sample_weight[train_idx]
-
-            # Clone to avoid state leakage between folds
-            fold_clf = clone(self.estimator)
-
-            # Pass sample weights to the base estimator if supported
-            try:
-                fold_clf.fit(X_train, y_train, sample_weight=sw_train)
-            except TypeError:
-                fold_clf.fit(X_train, y_train)
-
-            oof_probs[test_idx] = fold_clf.predict_proba(X_test)[:, 1]
-
-        # Handle any folds with no coverage (edge cases with heavy purging)
-        valid_mask = ~np.isnan(oof_probs)
-        if valid_mask.sum() < 10:
-            raise ValueError(
-                "Too few valid OOF predictions. "
-                "Check your PurgedKFold embargo size or fold count."
-            )
-
-        # --- Phase 2: Fit the isotonic calibrator on OOF predictions ---
-        self.calibrator_ = IsotonicRegression(
-            out_of_bounds='clip',
-            increasing=True
-        )
-        self.calibrator_.fit(
-            oof_probs[valid_mask],
-            y[valid_mask],
-            sample_weight=sample_weight[valid_mask]  # <-- weighted calibration
-        )
-
-        # --- Phase 3: Refit base estimator on ALL data ---
-        self.estimator_ = clone(self.estimator)
-        try:
-            self.estimator_.fit(X, y, sample_weight=sample_weight)
-        except TypeError:
-            self.estimator_.fit(X, y)
-
-        # Store OOF probs for diagnostics
-        self.oof_probs_ = oof_probs
-        self.classes_ = np.unique(y)
-
-        return self
-
-    def predict_proba(self, X):
-        check_is_fitted(self, ['calibrator_', 'estimator_'])
-        raw_probs = self.estimator_.predict_proba(X)[:, 1]
-        calibrated = np.clip(self.calibrator_.predict(raw_probs), 0, 1)
-        return np.column_stack([1 - calibrated, calibrated])
-
-    def predict(self, X):
-        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
-
-    def score(self, X, y, sample_weight=None):
-        """Weighted accuracy score."""
-        preds = self.predict(X)
-        if sample_weight is not None:
-            return np.average(preds == y, weights=sample_weight)
-        return np.mean(preds == y)
