@@ -156,5 +156,4 @@ This module is provided under the **MIT License**.
 ---
 
 For questions or contributions, please refer to the project repository.
-```
 
