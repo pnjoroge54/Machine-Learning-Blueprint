@@ -20,10 +20,10 @@ When use_optuna=True the following changes apply:
   - self.study is populated with the completed Optuna study for visualization.
 
 When calibrate=True (run() parameter):
-  - CVIsotonicCalibrator is fitted after train_model(), wrapping best_model.
+  - CalibratorCV is fitted after train_model(), wrapping best_model.
   - The calibrator uses PurgedKFold with the same n_splits and pct_embargo
     as the HPO step to prevent temporal leakage.
-  - self.calibrator_ is populated with the fitted CVIsotonicCalibrator.
+  - self.calibrator_ is populated with the fitted CalibratorCV.
   - At inference time, best_model.predict_proba() returns calibrated
     probabilities directly — no additional step required.
   - ONNX export unwraps the calibrator and exports the inner estimator only.
@@ -81,7 +81,7 @@ Pipeline Workflow:
 5. Meta-Feature Integration: Joins rolling performance metrics to the feature set.
 6. Training/HPO: Executes either Scikit-learn or Optuna-based hyperparameter
    optimization with Purged-KFold validation.
-7. Calibration (optional): Wraps best_model in CVIsotonicCalibrator to correct
+7. Calibration (optional): Wraps best_model in CalibratorCV to correct
    systematic overconfidence before position sizing.
 8. Reporting: Generates HTML summaries and hyperparameter importance reports.
 """
@@ -109,7 +109,7 @@ from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
 from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
-from ..calibration.calibration import CVIsotonicCalibrator   # ← NEW
+from ..calibration.calibration import CalibratorCV   # ← NEW
 from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
@@ -577,7 +577,7 @@ class ModelDevelopmentPipeline:
       and Optuna (Bayesian) optimization based on 'use_optuna' config.
     - Artifact Management: Automatically organizes models, parquet data,
       and HTML reports into a versioned directory structure.
-    - Calibration (optional): Wraps the trained model in CVIsotonicCalibrator
+    - Calibration (optional): Wraps the trained model in CalibratorCV
       to correct systematic overconfidence before downstream bet sizing.
     - Analysis: Triggers feature importance calculation and automated
       contamination reports after every successful run.
@@ -709,7 +709,7 @@ class ModelDevelopmentPipeline:
         self.preprocessed_features  = None
         self.preprocessor           = None   # fitted DropConstant+DropDuplicate
         self.best_model             = None
-        self.calibrator_            = None   # ← NEW: CVIsotonicCalibrator (if calibrate=True)
+        self.calibrator_            = None   # ← NEW: CalibratorCV (if calibrate=True)
         self.cv_results             = None
         self.weight_cv_results      = None
         self.feature_importance     = None
@@ -778,7 +778,7 @@ class ModelDevelopmentPipeline:
         export_onnx : bool, optional
             Export model to ONNX format (default: False).
         calibrate : bool, optional
-            Fit CVIsotonicCalibrator on OOF predictions after training.
+            Fit CalibratorCV on OOF predictions after training.
             When True, self.best_model is replaced with the fitted calibrator,
             so predict_proba() returns calibrated probabilities directly.
             self.calibrator_ is populated for post-hoc diagnostics.
@@ -956,23 +956,23 @@ class ModelDevelopmentPipeline:
 
     def calibrate_model(self) -> None:
         """
-        Fit CVIsotonicCalibrator wrapping best_model on the full training data.
+        Fit CalibratorCV wrapping best_model on the full training data.
 
         The calibrator uses PurgedKFold with the same n_splits and pct_embargo
         as the HPO step, ensuring that the OOF predictions used to fit the
         isotonic map are generated without temporal leakage.
 
         After this method returns:
-        - self.best_model is replaced with the fitted CVIsotonicCalibrator,
+        - self.best_model is replaced with the fitted CalibratorCV,
           so all downstream calls to best_model.predict_proba() return
           calibrated probabilities.
-        - self.calibrator_ holds the CVIsotonicCalibrator instance for
+        - self.calibrator_ holds the CalibratorCV instance for
           post-hoc diagnostics (e.g. reliability diagram, Brier score
           comparison, access to calibrator_.oof_probs_).
 
         Notes
         -----
-        ONNX export: CVIsotonicCalibrator is not ONNX-compatible. When
+        ONNX export: CalibratorCV is not ONNX-compatible. When
         export_onnx=True, _save_all_artifacts() unwraps the calibrator and
         exports the inner estimator (self.calibrator_.estimator_). At
         deployment time, apply calibrator_.calibrator_.predict() as a
@@ -989,7 +989,7 @@ class ModelDevelopmentPipeline:
             pct_embargo=pct_embargo,
         )
 
-        self.calibrator_ = CVIsotonicCalibrator(
+        self.calibrator_ = CalibratorCV(
             estimator=self.best_model,
             cv=cv,
         )
@@ -1000,7 +1000,7 @@ class ModelDevelopmentPipeline:
              - y.values[~np.isnan(self.calibrator_.oof_probs_)]) ** 2
         ))
         logger.info(
-            f"CVIsotonicCalibrator fitted. "
+            f"CalibratorCV fitted. "
             f"OOF Brier score: {oof_brier:.4f}"
         )
 
@@ -1224,10 +1224,10 @@ class ModelDevelopmentPipeline:
     def analyze_features(self):
         from .weighted_estimator import _WeightedEstimator
 
-        # Unwrap CVIsotonicCalibrator if calibration was applied —
+        # Unwrap CalibratorCV if calibration was applied —
         # feature importance lives in the inner estimator, not the calibrator.
         clf = self.best_model
-        if isinstance(clf, CVIsotonicCalibrator):
+        if isinstance(clf, CalibratorCV):
             clf = clf.estimator_
 
         # best_model (or its inner estimator) is preprocessor → clf/bag.
@@ -1315,8 +1315,8 @@ class ModelDevelopmentPipeline:
             self.file_manager.save_object(self.calibrator_.calibrator_, "isotonic_calibrator")
 
         if self.export_onnx:
-            # Unwrap CVIsotonicCalibrator before ONNX conversion.
-            # CVIsotonicCalibrator has no ONNX operator mapping.
+            # Unwrap CalibratorCV before ONNX conversion.
+            # CalibratorCV has no ONNX operator mapping.
             # The inner estimator_ is the full-data-refitted sklearn model.
             if self.calibrator_ is not None:
                 onnx_source = Pipeline(self.calibrator_.estimator_.steps[1:])
@@ -1498,7 +1498,7 @@ class ModelDevelopmentPipeline:
                             <tr>
                                 <td><span class="label">Calibrated</span><br>
                                     <span class="badge {'badge-on' if calibrated else 'badge-off'}">
-                                        {'CVIsotonicCalibrator ✓' if calibrated else 'No calibration'}
+                                        {'CalibratorCV ✓' if calibrated else 'No calibration'}
                                     </span>
                                 </td>
                                 <td></td>
