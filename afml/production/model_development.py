@@ -1054,16 +1054,31 @@ class ModelDevelopmentPipeline:
             elif k in included:
                 opt_params[k] = v
 
-        config_hash       = self.file_paths["base_dir"].name
-        study_config_hash = self._get_study_config_hash()
+        # ── Study name ───────────────────────────────────────────────────
+        # Human-readable prefix identifies the study in the dashboard.
+        # The 8-char config hash makes the key unique when any parameter
+        # that affects the optimization surface changes.
+        _bagging_sequential   = self.model_params.get("bagging_sequential", False)
+        _bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
+
+        if _bagging_sequential and _bagging_n_estimators > 0:
+            _wrapper = "sbag"
+        elif _bagging_n_estimators > 0:
+            _wrapper = "bag"
+        else:
+            _wrapper = "plain"
+
+        _role        = "pri" if self.is_primary else "sec"
+        _config_hash = self._get_study_config_hash(metric=metric)
 
         opt_params["study_name"] = (
             f"{self.strategy.get_strategy_name()}"
             f"_{self.symbol}"
             f"_{self.data_config.get('bar_type', 'unk')}"
-            f"_{self.data_config.get('bar_size', 'unk')}"
-            f"_{config_hash}"
-            f"_s{study_config_hash}"
+            f"{self.data_config.get('bar_size', 'unk')}"
+            f"_{_wrapper}"
+            f"_{_role}"
+            f"_s{_config_hash}"
         )
 
         db_path: Path = self.file_paths["db_path"]
@@ -1131,16 +1146,90 @@ class ModelDevelopmentPipeline:
             'n_trials_pruned':     len([t for t in self.study.trials if t.state.name == 'PRUNED']),
         }
 
-    def _get_study_config_hash(self) -> str:
-        import hashlib, json
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PATCH 2 — Replace _get_study_config_hash entirely
+    # ═══════════════════════════════════════════════════════════════════════════
 
+    def _get_study_config_hash(self, metric: str = "") -> str:
+        """
+        Return an 8-character SHA-256 prefix that uniquely identifies the
+        combination of parameters that determines the Optuna study's
+        optimization surface.
+
+        Every dimension that, if changed, should produce a fresh study is
+        included. Resuming an existing study is correct only when the
+        optimization surface is identical to the one those trials explored.
+
+        Covered dimensions
+        ------------------
+        bagging
+            Wrapper type (sequential / standard / none) and its parameters.
+            A SequentiallyBootstrappedBaggingClassifier uses a different
+            sampling distribution from BaggingClassifier; HPO results from
+            one are not valid priors for the other.
+
+        model
+            Base classifier type and its constructor parameters. Changing
+            the estimator class or a structural hyperparameter (e.g.
+            criterion) changes the response surface.
+
+        search
+            Sorted list of search space keys. Adding or removing a
+            hyperparameter from the grid changes the dimensionality of the
+            space; existing trials become incomplete records and corrupt
+            the TPE surrogate.
+
+        cv
+            n_splits and pct_embargo. Different fold counts or embargo
+            fractions produce systematically different CV scores for the
+            same hyperparameter configuration.
+
+        metric
+            'f1' (binary label space) or 'neg_log_loss' (ternary).
+            Different objectives are not comparable; mixing trials from
+            both corrupts the study direction.
+
+        role
+            'primary' vs 'secondary'. Primary and secondary models
+            optimize on different label spaces (ternary vs binary {0, 1})
+            and different training sets (all events vs meta-labeled events).
+
+        label
+            All label_config fields serialized by value. pt_sl, min_ret,
+            max_holding_period, and any other barrier parameters change the
+            label distribution and therefore the optimization surface.
+            Callable values (e.g. function references) are recorded by
+            their __name__ so the hash remains deterministic.
+
+        target
+            Volatility target function name and parameters. These affect
+            the barrier distance computation and therefore the label
+            distribution.
+
+        Parameters
+        ----------
+        metric : str
+            Scoring metric passed to optimize_trading_model. Computed in
+            _train_model_optuna before this method is called and passed
+            explicitly to avoid re-derivation.
+
+        Returns
+        -------
+        str
+            8-character lowercase hex string (SHA-256 prefix).
+        """
+        import hashlib
+        import json
+
+        # ── 1. Bagging wrapper ────────────────────────────────────────────
         bagging_config = {
             "sequential":   self.model_params.get("bagging_sequential", False),
             "n_estimators": self.model_params.get("bagging_n_estimators", 0),
-            "max_samples":  self.model_params.get("bagging_max_samples", 1.0),
+            "max_samples":  self.model_params.get("bagging_max_samples",  1.0),
             "max_features": self.model_params.get("bagging_max_features", 1.0),
         }
 
+        # ── 2. Base classifier ────────────────────────────────────────────
         pipe     = self.model_params["pipe_clf"]
         base_clf = pipe.steps[-1][1] if hasattr(pipe, "steps") else pipe
 
@@ -1149,18 +1238,57 @@ class ModelDevelopmentPipeline:
             "params": {k: str(v) for k, v in base_clf.get_params(deep=False).items()},
         }
 
+        # ── 3. Search space shape ─────────────────────────────────────────
         param_grid   = self.model_params.get("param_grid", {})
         search_space = sorted(param_grid.keys())
 
+        # ── 4. CV protocol ────────────────────────────────────────────────
+        cv_config = {
+            "n_splits":    self.model_params.get("n_splits",    5),
+            "pct_embargo": self.model_params.get("pct_embargo", 0.02),
+        }
+
+        # ── 5. label_config ───────────────────────────────────────────────
+        # Serialize field by field. Skip callables (function references
+        # occasionally stored alongside barrier params) by recording their
+        # __name__ so the hash stays deterministic across interpreter sessions.
+        label_cfg_serial: dict = {}
+        for k, v in self.label_config.items():
+            if callable(v):
+                label_cfg_serial[k] = f"<fn:{getattr(v, '__name__', repr(v))}>"
+            elif isinstance(v, (list, tuple)):
+                label_cfg_serial[k] = [str(x) for x in v]
+            else:
+                label_cfg_serial[k] = str(v)
+
+        # ── 6. target_config ──────────────────────────────────────────────
+        _tgt_func = self.target_config.get("func")
+        target_cfg_serial = {
+            "func": getattr(_tgt_func, "__name__", str(_tgt_func))
+                    if _tgt_func is not None else "",
+            "params": {
+                k: str(v)
+                for k, v in self.target_config.get("params", {}).items()
+            },
+        }
+
+        # ── 7. Combine and hash ───────────────────────────────────────────
         combined = {
             "bagging": bagging_config,
             "model":   model_config,
             "search":  search_space,
+            "cv":      cv_config,
+            "metric":  metric,
+            "role":    "primary" if self.is_primary else "secondary",
+            "label":   label_cfg_serial,
+            "target":  target_cfg_serial,
         }
 
-        return hashlib.md5(
+        digest = hashlib.sha256(
             json.dumps(combined, sort_keys=True).encode()
-        ).hexdigest()[:6]
+        ).hexdigest()
+
+        return digest[:8]
 
     def _apply_sequential_bagging(
         self,
