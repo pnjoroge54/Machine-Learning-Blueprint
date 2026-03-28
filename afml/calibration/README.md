@@ -1,20 +1,21 @@
-Probability Calibration Toolkit for Financial Machine Learning
+```markdown
+# Probability Calibration Toolkit for Financial Machine Learning
 
-This module provides a comprehensive set of tools for calibrating classifier probabilities and evaluating calibration quality, with special attention to the challenges of financial time series data. It integrates seamlessly with purged cross‑validation techniques described in Advances in Financial Machine Learning (López de Prado, 2018) and includes both standard calibration methods and custom‑designed cross‑validated isotonic regression.
+This module provides a comprehensive set of tools for calibrating classifier probabilities and evaluating calibration quality, with special attention to the challenges of financial time series data. It integrates seamlessly with purged cross‑validation techniques described in *Advances in Financial Machine Learning* (López de Prado, 2018) and includes both standard calibration methods and custom‑designed cross‑validated isotonic regression.
 
-Key Features
+## Key Features
 
-· Calibration Metrics – Brier score, Expected Calibration Error (ECE), Maximum Calibration Error (MCE).
-· Reliability Diagrams – Plot calibration curves with optional probability distribution histograms.
-· Bootstrap Confidence Intervals – Add confidence bands to reliability curves.
-· Calibration Methods – Platt scaling (logistic regression) and isotonic regression.
-· Cross‑Validation Integration – CVIsotonicCalibrator fits isotonic regression on out‑of‑fold predictions using purged cross‑validation, avoiding temporal leakage.
-· Comprehensive Cross‑Validation Analysis – Compare raw vs. calibrated performance (PWA, Brier, accuracy, etc.) across folds.
-· Designed for Financial Time Series – Respects temporal order and embargo periods.
+- **Calibration Metrics** – Brier score, Expected Calibration Error (ECE), Maximum Calibration Error (MCE).
+- **Reliability Diagrams** – Plot calibration curves with optional probability distribution histograms.
+- **Bootstrap Confidence Intervals** – Add confidence bands to reliability curves.
+- **Calibration Methods** – Platt scaling (logistic regression) and isotonic regression.
+- **Cross‑Validation Integration** – `CVIsotonicCalibrator` fits isotonic regression on out‑of‑fold predictions using purged cross‑validation, avoiding temporal leakage.
+- **Comprehensive Cross‑Validation Analysis** – Compare raw vs. calibrated performance (PWA, Brier, accuracy, etc.) across folds.
+- **Designed for Financial Time Series** – Respects temporal order and embargo periods.
 
-Installation
+## Installation
 
-If you are using this module as part of a larger project, simply place the calibration.py file in your project directory. To install the required dependencies:
+If you are using this module as part of a larger project, simply place the `calibration.py` file in your project directory. To install the required dependencies:
 
 ```bash
 pip install numpy pandas scikit-learn matplotlib
@@ -149,3 +150,5 @@ This module is provided under the MIT License. See the LICENSE file for details.
 ---
 
 For questions or contributions, please refer to the project repository.
+
+```
