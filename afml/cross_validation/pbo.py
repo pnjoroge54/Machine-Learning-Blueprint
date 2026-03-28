@@ -4,14 +4,13 @@ Probability of Backtest Overfitting (PBO) — Bailey & Lopez de Prado (2014).
 Uses CombinatorialPurgedCV with pct_embargo=0.0 and n_test_folds=n_folds//2
 to generate the C(S, S/2) symmetric IS/OOS splits required by CSCV.
 """
+
 from math import comb
 from typing import Callable, Dict, List
 
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-
-from combinatorial import CombinatorialPurgedCV
 
 
 def compute_pbo(
@@ -54,6 +53,8 @@ def compute_pbo(
                        (0 = best OOS, 1 = worst OOS)
         logit_sr     – logit-transformed OOS score (if in (0,1)) for best-IS strategy per split
     """
+    from .combinatorial import CombinatorialPurgedCV
+
     if n_folds % 2 != 0:
         raise ValueError(f"n_folds must be even for symmetric CSCV; got {n_folds}.")
 
@@ -109,7 +110,7 @@ def compute_pbo(
         logit_sr.append(np.log(oos_sr / (1 - oos_sr)) if 0 < oos_sr < 1 else np.nan)
 
     n_splits = cv.n_splits
-    pbo      = below_median / n_splits
+    pbo = below_median / n_splits
 
     return {
         "pbo":          pbo,
@@ -123,8 +124,8 @@ def compute_pbo(
 # ── Example usage ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Simulate 50 strategy return streams over 500 time steps
-    rng     = np.random.default_rng(42)
-    dates   = pd.date_range("2020-01-01", periods=500, freq="B")
+    rng = np.random.default_rng(42)
+    dates = pd.date_range("2020-01-01", periods=500, freq="B")
     returns = pd.DataFrame(
         rng.normal(0.0001, 0.01, size=(500, 50)),
         index=dates,
