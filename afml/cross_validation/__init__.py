@@ -46,5 +46,5 @@ __all__ = [
     "print_best_trial",
     "check_for_overfitting",
     "save_intermediate_results",
-  "compute_pbo",
+    "compute_pbo",
 ]
