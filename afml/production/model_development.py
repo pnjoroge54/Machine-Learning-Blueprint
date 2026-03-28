@@ -863,17 +863,24 @@ class ModelDevelopmentPipeline:
 
     def compute_sample_weights(self):
         if self.file_paths["weights"].exists():
-            self.sample_weight = pd.read_parquet(self.file_paths["weights"])
+            loaded = pd.read_parquet(self.file_paths["weights"])
+            # Normalize: parquet round-trip returns a DataFrame; restore Series.
+            self.sample_weight = (
+                loaded.iloc[:, 0] if isinstance(loaded, pd.DataFrame) else loaded
+            )
         else:
             self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
-                self.bar_data.index, self.events, self.features, self.n_splits, None, self.decay_factors
+                self.bar_data.index, self.events, self.features,
+                self.n_splits, None, self.decay_factors,
             )
             self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
             logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
             if self.sample_weight is not None:
-                self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
+                self.file_manager.save_dataframe(
+                    self.sample_weight.to_frame("weight"), "weights"
+                )
         self.completed_steps["weight_computation"] = True
-
+    
     def add_meta_features(self):
         if self.is_primary:
             self.meta_features = pd.DataFrame(index=self.events.index)
@@ -1536,23 +1543,26 @@ class ModelDevelopmentPipeline:
 
         for title, caption, plot_fn in plot_specs:
             try:
-                fig = plot_fn()
-                fig.update_layout(
-                    paper_bgcolor='#1e293b',
-                    plot_bgcolor='#1e293b',
-                    font=dict(color='#f1f5f9'),
-                )
-                plot_html = to_html(fig, include_plotlyjs='cdn', full_html=False)
-                html_parts.append(
-                    f'<div class="plot">'
-                    f'<h2>{title}</h2>'
-                    f'<p class="caption">{caption}</p>'
-                    f'{plot_html}'
-                    f'</div>'
-                )
+                from ..cross_validation.optuna_hyper_fit import plot_model_vs_baseline
+                original_backend = plt.get_backend()
+                plt.switch_backend("agg")
+                with plt.ioff():
+                    plot_model_vs_baseline(study, self.events["bin"], self.events)
+                    baseline_path = (
+                        self.file_paths["reports"] / "optuna_baseline_comparison.png"
+                    )
+                    plt.savefig(
+                        baseline_path, dpi=150, bbox_inches="tight",
+                        facecolor="#0f172a", edgecolor="none",
+                    )
+                    plt.close("all")   # â† FIX: was plt.close() â€” must close ALL figures
+                                       #   before plt.ioff() exits and plt.ion() fires,
+                                       #   otherwise stray open figures render as empty
+                                       #   cells in Jupyter.
+                plt.switch_backend(original_backend)
+                logger.info(f"Baseline comparison plot saved: {baseline_path}")
             except Exception as e:
-                logger.warning(f"Optuna plot '{title}' failed: {e}")
-
+                logger.warning(f"Baseline plot failed: {e}")
         html_parts.append('</body></html>')
 
         with open(report_path, 'w', encoding='utf-8') as f:
