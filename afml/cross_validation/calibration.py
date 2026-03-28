@@ -11,11 +11,8 @@ import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.isotonic import IsotonicRegression
 from sklearn.utils.validation import check_is_fitted, check_array
-from sklearn.metrics import brier_score_loss
-
-from .scoring import probability_weighted_accuracy   # your existing scoring module
-# If you also need the other metrics, you can import them here too
 from sklearn.metrics import (
+    brier_score_loss,
     accuracy_score,
     precision_score,
     recall_score,
@@ -25,10 +22,9 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import BaseCrossValidator
 
+from .scoring import probability_weighted_accuracy
 
-# ===================================================================
-# UPDATED CVIsotonicCalibrator (replace the old version at the bottom of your file)
-# ===================================================================
+
 class CVIsotonicCalibrator(BaseEstimator, ClassifierMixin):
     """
     Probability calibrator using Isotonic Regression fitted on
@@ -151,9 +147,6 @@ class CVIsotonicCalibrator(BaseEstimator, ClassifierMixin):
         return brier_score_loss(y, proba, sample_weight=sample_weight)
 
 
-# ===================================================================
-# NEW COMPREHENSIVE FUNCTION (add this at the end of the file)
-# ===================================================================
 def analyze_calibrated_cross_val_scores(
     base_estimator: BaseEstimator,
     X: pd.DataFrame,
