@@ -14,6 +14,7 @@ from .hyper_fit_analysis import generate_complete_hyperparameter_report
 from .optuna_hyper_fit import (FinancialModelSuggester, optimize_trading_model,
                                print_best_trial, check_for_overfitting, save_intermediate_results)
 from .scoring import probability_weighted_accuracy
+from .pbo import compute_pbo
 
 scoring_methods = {
     "accuracy": accuracy_score,
@@ -45,4 +46,5 @@ __all__ = [
     "print_best_trial",
     "check_for_overfitting",
     "save_intermediate_results",
+  "compute_pbo",
 ]
