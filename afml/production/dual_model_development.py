@@ -81,6 +81,7 @@ class BidAskLongShortPipeline:
         generate_reports: bool = True,
         save: bool = True,
         export_onnx: bool = False,
+        calibrate: bool = False,
         verbose: bool = True
     ) -> Dict:
         """
@@ -118,6 +119,7 @@ class BidAskLongShortPipeline:
                 generate_reports,
                 save,
                 export_onnx,
+                calibrate,
                 verbose
             )
             
@@ -130,6 +132,7 @@ class BidAskLongShortPipeline:
                 generate_reports,
                 save,
                 export_onnx,
+                calibrate,
                 verbose
             )
             
