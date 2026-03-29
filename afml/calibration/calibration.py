@@ -350,7 +350,7 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
             )
 
         X = check_array(X, ensure_min_samples=2)
-        y = check_array(y, ensure_min_samples=2, dtype="int").ravel()
+        y = check_array(y, ensure_min_samples=2, ensure_2d=False, dtype="int").ravel()
 
         n_samples = X.shape[0]
         self.n_features_in_ = X.shape[1]
@@ -1105,7 +1105,7 @@ def bootstrap_reliability_ci(
     Example:
         >>> df, lower, upper = bootstrap_reliability_ci(y_true, p_pred)
     """
-    rng = np.random.RandomState(random_state)
+    rng = np.random.default_rng(seed=random_state)
     n_samples = len(y_true)
     base_df = compute_reliability(y_true, p_pred, n_bins=n_bins, strategy=strategy)
 
