@@ -438,7 +438,7 @@ def best_weighting_scheme(
         sample_weight_score=sample_weight_score,
         scoring=scoring,
     )
-    score = scores.mean()
+    score = float(scores.mean())
     cv_results[scheme] = scores
 
     if not np.isinf(score) and score > best_score:
@@ -448,7 +448,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable(time_aware=True)
+@cacheable()
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
@@ -498,16 +498,14 @@ def get_optimal_sample_weight(
 
     valid_index = features.index.intersection(events.index)
     cont = events.loc[valid_index]
-    X    = features.loc[valid_index]
-    y    = cont["bin"]
+    X = features.loc[valid_index]
+    y = cont["bin"]
 
-    classifier = RandomForestClassifier(
-        criterion="entropy",
-        class_weight="balanced_subsample",
-        max_samples=float(cont["tW"].mean().round(4)),
-        max_depth=4,
-        min_weight_fraction_leaf=0.05,
-        n_jobs=-1
+    classifier = SequentiallyBootstrappedBaggingClassifier(
+        n_estimators=100,
+        samples_info_sets=cont['t1'],
+        price_bars_index=features.index,
+        n_jobs=-1,
     )
 
     cv_gen = PurgedKFold(n_splits=n_splits, t1=cont["t1"], pct_embargo=0.01)
@@ -908,7 +906,7 @@ class ModelDevelopmentPipeline:
 
         In both paths, when bagging_sequential=True:
             - HPO tunes the base classifier without any bagging wrapper.
-            - SequentiallyBootstrappedBaggingClassifier is applied post-HPO using
+            -  is applied post-HPO using
               the tuned base estimator, events['t1'], and bar_data.index.
 
         Post-dispatch (both paths):
