@@ -448,7 +448,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable()
+@cacheable(time_aware=True)
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
