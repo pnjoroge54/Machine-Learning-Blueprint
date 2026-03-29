@@ -862,23 +862,16 @@ class ModelDevelopmentPipeline:
         self.completed_steps["label_generation"] = True
 
     def compute_sample_weights(self):
-        if self.file_paths["weights"].exists():
-            loaded = pd.read_parquet(self.file_paths["weights"])
-            # Normalize: parquet round-trip returns a DataFrame; restore Series.
-            self.sample_weight = (
-                loaded.iloc[:, 0] if isinstance(loaded, pd.DataFrame) else loaded
+        self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
+            self.bar_data.index, self.events, self.features,
+            self.n_splits, None, self.decay_factors,
+        )
+        self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
+        logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
+        if self.sample_weight is not None:
+            self.file_manager.save_dataframe(
+                self.sample_weight.to_frame("weight"), "weights"
             )
-        else:
-            self.sample_weight, self.weight_cv_results = get_optimal_sample_weight(
-                self.bar_data.index, self.events, self.features,
-                self.n_splits, None, self.decay_factors,
-            )
-            self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
-            logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
-            if self.sample_weight is not None:
-                self.file_manager.save_dataframe(
-                    self.sample_weight.to_frame("weight"), "weights"
-                )
         self.completed_steps["weight_computation"] = True
     
     def add_meta_features(self):
@@ -1017,12 +1010,12 @@ class ModelDevelopmentPipeline:
 
     def _train_model_sklearn(self):
         bagging_sequential = self.model_params.get('bagging_sequential', False)
-        bagging_n          = self.model_params.get('bagging_n_estimators', 0)
-        sample_weight_train= self.sample_weight.loc[self.events.index]
-        sample_weight_score= self.events["w"].loc[sample_weight_train.index]
+        bagging_n = self.model_params.get('bagging_n_estimators', 0)
+        sample_weight_train = self.sample_weight.loc[self.events.index]
+        sample_weight_score = self.events["w"].loc[sample_weight_train.index]
 
         included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
-        params   = {k: v for k, v in self.model_params.items() if k in included}
+        params = {k: v for k, v in self.model_params.items() if k in included}
 
         if bagging_sequential and bagging_n > 0:
             params["bagging_n_estimators"] = 0
