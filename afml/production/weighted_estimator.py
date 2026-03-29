@@ -40,34 +40,38 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
         self.events = events
         self.data_index = data_index
 
-    def fit(self, X, y):
-        if self.scheme == "uniqueness":
-            weights = self.events["tW"]
-        elif self.scheme == "return":
-            weights = self.events["w"]
-        else:
-            weights = pd.Series(np.ones(len(y)), index=y.index)
+def fit(self, X, y):
+    if self.scheme == "uniqueness":
+        weights = self.events["tW"].copy()
+    elif self.scheme == "return":
+        weights = self.events["w"].copy()
+    else:
+        weights = pd.Series(np.ones(len(self.events)), index=self.events.index)
 
-        valid = X.index.intersection(y.index)
-        X, y = X.loc[valid].to_numpy(), y.loc[valid].to_numpy()
+    if self.decay != 1.0:
+        decay_vec = get_weights_by_time_decay_optimized(
+            triple_barrier_events=self.events,
+            close_index=self.data_index,
+            last_weight=self.decay,
+            linear=self.linear,
+            av_uniqueness=self.events["tW"],
+        )
+        weights *= decay_vec
 
-        if self.decay != 1.0:
-            decay_vec = get_weights_by_time_decay_optimized(
-                triple_barrier_events=self.events,
-                close_index=self.data_index,
-                last_weight=self.decay,
-                linear=self.linear,
-                av_uniqueness=self.events["tW"],
-            )
-            weights *= decay_vec
+    valid = X.index.intersection(y.index)
+    weights = weights.loc[valid]
 
-        # Noramlize weights to sum to N
-        if self.scheme in ("return", "uniqueness"):
-            weights *= weights.shape[0] / weights.mean()
-            
-        self.sample_weight_ = weights
-        self.base_estimator.fit(X, y, sample_weight=weights.loc[valid].to_numpy())
-        return self
+    # Normalize weights to sum to N (preserves relative structure,
+    # maintains effective sample size for regularization and loss scaling)
+    weights *= weights.shape[0] / weights.sum()
+
+    self.sample_weight_ = weights
+    self.base_estimator.fit(
+        X.loc[valid].to_numpy(),
+        y.loc[valid].to_numpy(),
+        sample_weight=weights.to_numpy(),
+    )
+    return self
 
     def predict(self, X):
         return self.base_estimator.predict(X)
