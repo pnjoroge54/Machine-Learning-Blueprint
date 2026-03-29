@@ -837,6 +837,8 @@ class ModelFileManager:
                         data[key] = pd.read_csv(file_path)
                     elif file_path.suffix == '.parquet':
                         data[key] = pd.read_parquet(file_path)
+                        if data[key].shape[1] == 1:
+                            data[key] = data[key].squeeze()
                     elif file_path.suffix == '.json':
                         with open(file_path, 'r') as f:
                             data[key] = json.load(f)
