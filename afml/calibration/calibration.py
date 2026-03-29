@@ -367,7 +367,7 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
                 "There is no financially sensible default because PurgedKFold requires "
                 "a t1 Series (label end times) specific to each dataset."
             )
-        self.cv_ = clone(self.cv) if hasattr(self.cv, "split") else self.cv
+        self.cv_ = self.cv
 
         # ── Phase 1: OOF predictions ──────────────────────────────────────
         oof_probs = np.full(n_samples, np.nan)
