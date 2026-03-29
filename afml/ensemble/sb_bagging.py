@@ -382,6 +382,8 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
         n_samples = X.shape[0]
+        self.n_features_in_ = X.shape[1]
+        self.classes_ = sorted(np.unique(y))   
 
         # Check sample weight
         if sample_weight is not None:
