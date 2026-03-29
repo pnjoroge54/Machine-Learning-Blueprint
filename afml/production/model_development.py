@@ -504,7 +504,7 @@ def get_optimal_sample_weight(
     classifier = RandomForestClassifier(
         criterion="entropy",
         class_weight="balanced_subsample",
-        max_samples=cont["tW"].mean(),
+        max_samples=float(cont["tW"].mean().round(4)),
         max_depth=4,
         min_weight_fraction_leaf=0.05,
         n_jobs=-1
@@ -550,7 +550,7 @@ def get_optimal_sample_weight(
 
     weights.update(time_decay_weights)
     cv_results_dict = {
-        "best_score":  best_score,
+        "best_score":  float(best_score),
         "cv_results":  cv_results,
         "scoring":     scoring,
         "best_scheme": best_scheme,
@@ -1429,7 +1429,7 @@ class ModelDevelopmentPipeline:
         self.file_manager.save_dataframe(self.preprocessed_features, "features")
         self.file_manager.save_dataframe(self.events, "events")
         if self.sample_weight is not None:
-            self.file_manager.save_dataframe(self.sample_weight, "weights")
+            self.file_manager.save_dataframe(self.sample_weight.to_frame("weights"), "weights")
         self.file_manager.save_object(self.metrics, "metrics")
 
         if self.calibrator_ is not None:
