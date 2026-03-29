@@ -61,6 +61,10 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
             )
             weights *= decay_vec
 
+        # Noramlize weights to sum to N
+        if self.scheme in ("return", "uniqueness"):
+            weights *= weights.shape[0] / weights.mean()
+            
         self.sample_weight_ = weights
         self.base_estimator.fit(X, y, sample_weight=weights.loc[valid].to_numpy())
         return self
