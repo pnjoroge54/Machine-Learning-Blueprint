@@ -368,7 +368,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         # Set classes_ and n_classes_ for classifier compatibility
         if is_classifier(self):
             # This is a classifier, set the required attributes
-            self.classes_ = sorted(np.unique(y))
+            self.classes_ = np.unique(y)
             self.n_classes_ = len(self.classes_)
           
         # Validate parameters
