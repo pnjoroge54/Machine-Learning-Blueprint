@@ -348,7 +348,9 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
                 f"method must be one of {sorted(self._VALID_METHODS)}, "
                 f"got '{self.method}'."
             )
+            
 
+        X_split, y_split = X, y
         X = check_array(X, ensure_min_samples=2)
         y = check_array(y, ensure_min_samples=2, ensure_2d=False, dtype="int").ravel()
 
@@ -372,7 +374,7 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
         # ── Phase 1: OOF predictions ──────────────────────────────────────
         oof_probs = np.full(n_samples, np.nan)
 
-        for _, (train_idx, test_idx) in enumerate(self.cv_.split(X, y)):
+        for _, (train_idx, test_idx) in enumerate(self.cv_.split(X_split, y_split)):
             X_train, X_test = X[train_idx], X[test_idx]
             y_train         = y[train_idx]
             sw_train        = sample_weight[train_idx]
