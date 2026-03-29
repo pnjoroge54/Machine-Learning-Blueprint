@@ -8,7 +8,7 @@ from warnings import warn
 
 import numpy as np
 from joblib import Parallel, delayed
-from sklearn.base import ClassifierMixin, RegressorMixin
+from sklearn.base import ClassifierMixin, RegressorMixin, is_classifier
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor
 from sklearn.ensemble._bagging import BaseBagging
 from sklearn.ensemble._base import _partition_estimators
@@ -366,10 +366,11 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         self : (object)
         """
         # Set classes_ and n_classes_ for classifier compatibility
-        if hasattr(self, "classes_") and not hasattr(self, "n_classes_"):
+        if is_classifier(self):
             # This is a classifier, set the required attributes
-            self.classes_ = np.unique(y)
+            self.classes_ = sorted(np.unique(y))
             self.n_classes_ = len(self.classes_)
+          
         # Validate parameters
         random_state = check_random_state(self.random_state)
 
@@ -382,8 +383,7 @@ class SequentiallyBootstrappedBaseBagging(BaseBagging, metaclass=ABCMeta):
         # Convert data and validate
         X, y = check_X_y(X, y, ["csr", "csc"])
         n_samples = X.shape[0]
-        self.n_features_in_ = X.shape[1]
-        self.classes_ = sorted(np.unique(y))   
+        self.n_features_in_ = X.shape[1]  
 
         # Check sample weight
         if sample_weight is not None:
