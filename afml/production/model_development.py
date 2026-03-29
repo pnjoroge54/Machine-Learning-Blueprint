@@ -868,10 +868,6 @@ class ModelDevelopmentPipeline:
         )
         self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
         logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
-        if self.sample_weight is not None:
-            self.file_manager.save_dataframe(
-                self.sample_weight.to_frame("weight"), "weights"
-            )
         self.completed_steps["weight_computation"] = True
     
     def add_meta_features(self):
@@ -1433,7 +1429,7 @@ class ModelDevelopmentPipeline:
         self.file_manager.save_dataframe(self.preprocessed_features, "features")
         self.file_manager.save_dataframe(self.events, "events")
         if self.sample_weight is not None:
-            self.file_manager.save_dataframe(self.sample_weight.to_frame("weight"), "weights")
+            self.file_manager.save_dataframe(self.sample_weight, "weights")
         self.file_manager.save_object(self.metrics, "metrics")
 
         if self.calibrator_ is not None:
