@@ -504,7 +504,7 @@ def get_optimal_sample_weight(
     classifier = SequentiallyBootstrappedBaggingClassifier(
         n_estimators=100,
         samples_info_sets=cont['t1'],
-        price_bars_index=features.index,
+        price_bars_index=features.loc[X.index[0]:],
         n_jobs=-1,
     )
 
@@ -525,7 +525,7 @@ def get_optimal_sample_weight(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"], scheme, best_score, best_scheme, cv_results
         )
 
-    best_weight   = weights[best_scheme]
+    best_weight = weights[best_scheme]
     linear_search = [1, 0] if linear is None else ([1] if linear else [0])
 
     time_decay_weights = {}
