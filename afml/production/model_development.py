@@ -1544,10 +1544,7 @@ class ModelDevelopmentPipeline:
                         baseline_path, dpi=150, bbox_inches="tight",
                         facecolor="#0f172a", edgecolor="none",
                     )
-                    plt.close("all")   # â† FIX: was plt.close() â€” must close ALL figures
-                                       #   before plt.ioff() exits and plt.ion() fires,
-                                       #   otherwise stray open figures render as empty
-                                       #   cells in Jupyter.
+                    plt.close("all")
                 plt.switch_backend(original_backend)
                 logger.info(f"Baseline comparison plot saved: {baseline_path}")
             except Exception as e:
@@ -1558,26 +1555,7 @@ class ModelDevelopmentPipeline:
             f.write('\n'.join(html_parts))
         logger.info(f"Optuna study report saved: {report_path}")
 
-        # ── Baseline comparison plot ─────────────────────────────────────────
-        # FIX: switch_backend('agg') correctly changes the backend after pyplot
-        # is already loaded, unlike matplotlib.use() which silently fails.
-        # plt.ioff() additionally disables the interactive display loop so
-        # no window or inline cell output is produced.
-        try:
-            from ..cross_validation.optuna_hyper_fit import plot_model_vs_baseline
-            original_backend = plt.get_backend()
-            plt.switch_backend('agg')          # ← FIX: was matplotlib.use('Agg')
-            with plt.ioff():                   # ← FIX: suppresses notebook display
-                plot_model_vs_baseline(study, self.events['bin'], self.events)
-                baseline_path = self.file_paths['reports'] / 'optuna_baseline_comparison.png'
-                plt.savefig(baseline_path, dpi=150, bbox_inches='tight',
-                            facecolor='#0f172a', edgecolor='none')
-                plt.close()
-            plt.switch_backend(original_backend)   # restore original backend
-            logger.info(f"Baseline comparison plot saved: {baseline_path}")
-        except Exception as e:
-            logger.warning(f"Baseline plot failed: {e}")
-
+        
     def _generate_training_summary_html(self):
         """Constructs a comprehensive HTML training report."""
         try:
