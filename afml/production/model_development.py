@@ -108,7 +108,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
+from ..cache import cacheable, cv_cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..calibration.calibration import CalibratorCV   # ← NEW
 from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
@@ -448,7 +448,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable(time_aware=True)
+@cv_cacheable
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
