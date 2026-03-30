@@ -77,7 +77,7 @@ from sklearn.utils.validation import check_array, check_is_fitted
 
 from ..cross_validation.scoring import probability_weighted_accuracy
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
-from ..utils.pipelines import MyPipeline
+from ..util.pipelines import MyPipeline
 
 
 # ---- Calibration Methods ----
