@@ -108,9 +108,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
-from ..cache import cacheable, cv_cacheable, get_cache_monitor, log_data_access, print_contamination_report
+from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..calibration.calibration import CalibratorCV   # ← NEW
-from ..cross_validation.hyper_fit import clf_hyper_fit_cached
+from ..cross_validation.hyper_fit import clf_hyper_fit
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
 from ..cross_validation.optuna_hyper_fit import (
@@ -446,7 +446,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cv_cacheable
+@cacheable(time_aware=True, auto_versioning=False)
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
@@ -1006,12 +1006,12 @@ class ModelDevelopmentPipeline:
         sample_weight_train = self.sample_weight.loc[self.events.index]
         sample_weight_score = self.events["w"].loc[sample_weight_train.index]
 
-        included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
+        included = inspect.signature(clf_hyper_fit).parameters.keys()
         params = {k: v for k, v in self.model_params.items() if k in included}
 
         if bagging_sequential and bagging_n > 0:
             params["bagging_n_estimators"] = 0
-            tuned_pipeline, self.cv_results = clf_hyper_fit_cached(
+            tuned_pipeline, self.cv_results = clf_hyper_fit(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
                 t1=self.events["t1"],
@@ -1024,7 +1024,7 @@ class ModelDevelopmentPipeline:
                 tuned_pipeline, sample_weight=sample_weight_train,
             )
         else:
-            self.best_model, self.cv_results = clf_hyper_fit_cached(
+            self.best_model, self.cv_results = clf_hyper_fit(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
                 t1=self.events["t1"],
