@@ -494,7 +494,7 @@ def get_optimal_sample_weight(
         Cross-validation results.
     """
 
-    valid_index = features.index.intersection(events.index)
+    valid_index = features.dropna().index.intersection(events.index)
     cont = events.loc[valid_index]
     X = features.loc[valid_index]
     y = cont["bin"]
