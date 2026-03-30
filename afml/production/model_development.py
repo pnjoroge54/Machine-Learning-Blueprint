@@ -542,8 +542,9 @@ def get_optimal_sample_weight(
             scheme = f"{best_scheme}_{'linear' if lin else 'exp'}_{decay}"
             time_decay_weights[scheme] = best_weight * decay_vec
 
-    for scheme, weight in tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay for "):
-        tqdm.set_postfix_str(f"{scheme}")
+    pbar = tqdm(time_decay_weights.items(), total=len(time_decay_weights))
+    for scheme, weight in pbar:
+        pbar.set_description(f"Analyzing time-decay {scheme}")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"], scheme, best_score, best_scheme, cv_results
         )
