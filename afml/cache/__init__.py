@@ -1,5 +1,3 @@
-### 4. `afml/cache/__init__.py`
-```python
 """
 AFML Unified Cache System
 Single production-ready caching solution.
