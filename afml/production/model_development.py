@@ -436,7 +436,7 @@ def best_weighting_scheme(
         sample_weight_score=sample_weight_score,
         scoring=scoring,
     )
-    score = float(scores.mean())
+    score = scores.mean()
     cv_results[scheme] = scores
 
     if not np.isinf(score) and score > best_score:
@@ -446,7 +446,7 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable(time_aware=True, auto_versioning=False)
+@cacheable(time_aware=True)
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
