@@ -937,7 +937,7 @@ class ModelDevelopmentPipeline:
         else:
             self._train_model_sklearn()
 
-        self.best_model = MyPipeline([
+        self.best_model = Pipeline([
             ("preprocessor", self.preprocessor),
             *self.best_model.steps,
         ])
@@ -982,7 +982,7 @@ class ModelDevelopmentPipeline:
         )
 
         self.calibrator_ = CalibratorCV(
-            estimator=self.best_model,
+            estimator=MyPipeline(self.best_model.steps),
             cv=cv,
         )
         self.calibrator_.fit(X, y, sample_weight=sample_weight)
