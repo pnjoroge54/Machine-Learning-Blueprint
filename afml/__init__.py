@@ -1,6 +1,12 @@
 """
-AFML helps portfolio managers and traders leverage machine learning with
-reproducible, interpretable, and easy to use tools.
+AFML - Advanced Financial Machine Learning
+==========================================
+
+Helps portfolio managers and traders leverage machine learning with
+reproducible, interpretable, and easy-to-use tools.
+
+This is the main package entry point with lazy loading for heavy modules
+and a unified, production-grade cache system.
 """
 
 import importlib
@@ -10,104 +16,82 @@ from typing import Dict, List
 
 from loguru import logger
 
+# =============================================================================
+# CORE CACHE SYSTEM IMPORTS (New Unified System)
+# =============================================================================
+
 from .cache import (
-    CacheAnalyzer,
-    cache_maintenance,
+    # Core
     cacheable,
     clear_afml_cache,
-    clear_cache_stats,
     get_cache_hit_rate,
-    get_cache_stats,
-    get_cache_summary,
-    get_comprehensive_cache_status,
     initialize_cache_system,
-    memory,
-    optimize_cache_system,
-    robust_cacheable,
-    setup_production_cache,
-    time_aware_cacheable,
+    UnifiedCacheKeyGenerator,
+    CACHE_DIRS,
+    # Monitoring & Maintenance
+    print_cache_health,
+    get_cache_efficiency_report,
+    analyze_cache_patterns,
+    diagnose_cache_issues,
+    get_cache_monitor,
+    # Selective cleaning
+    selective_cleaner,
+    clean_stale_cache,
+    # High-level APIs
+    backtest_cache,
+    BacktestCache,
+    # Backwards compatibility shim
+    cv_cacheable,
 )
 
-# =============================================================================
-# IMPORT CACHE SYSTEM - Updated with new features
-# =============================================================================
-
-
-# NEW: Import monitoring (optional - only if you want it at top level)
+# Optional MLflow integration (if present)
 try:
     from .cache import (
-        analyze_cache_patterns,
-        get_cache_efficiency_report,
-        get_cache_monitor,
-        print_cache_health,
-    )
-
-    CACHE_MONITORING_AVAILABLE = True
-except ImportError:
-    CACHE_MONITORING_AVAILABLE = False
-    logger.debug("Cache monitoring not available")
-
-# NEW: Import MLflow integration (optional)
-try:
-    from .cache import (
-        MLFLOW_INTEGRATION_AVAILABLE,
+        setup_mlflow_cache,
         get_mlflow_cache,
         mlflow_cached,
-        setup_mlflow_cache,
+        MLFLOW_INTEGRATION_AVAILABLE,
     )
 except ImportError:
     MLFLOW_INTEGRATION_AVAILABLE = False
-    logger.debug("MLflow integration not available")
+    logger.debug("MLflow integration not available in cache module")
 
-# NEW: Import backtest caching (optional)
+# =============================================================================
+# NUMBA WARMUP UTILITIES (if you still use them)
+# =============================================================================
+
 try:
-    from .cache import BacktestCache, cached_backtest, get_backtest_cache
-
-    BACKTEST_CACHE_AVAILABLE = True
+    from .numba_warmup import lazy_warmup, prewarm_numba_in_package, register_numba_dummy
+    NUMBA_UTILS_AVAILABLE = True
 except ImportError:
-    BACKTEST_CACHE_AVAILABLE = False
-    logger.debug("Backtest cache not available")
-
-# Numba warmup utilities
-from .numba_warmup import lazy_warmup, prewarm_numba_in_package, register_numba_dummy
+    NUMBA_UTILS_AVAILABLE = False
+    logger.debug("Numba warmup utilities not available")
 
 # =============================================================================
-# INITIALIZE CACHE SYSTEM FIRST (before any heavy imports)
+# INITIALIZE CACHE SYSTEM EARLY
 # =============================================================================
 
-# Initialize cache system immediately
 initialize_cache_system()
 
-# Adjust these as needed after inspecting actual function signatures in your codebase.
-# register_numba_dummy(
-#     "_precompute_active_indices_nopython",
-#     args=(np.array([np.int64(0)]), np.array([np.int64(0)]), np.array([np.int64(0)])),
-# )
-
-
 # =============================================================================
-# LAZY LOADING SETUP
+# LAZY LOADING SETUP FOR HEAVY MODULES
 # =============================================================================
 
-# Module mapping - only add modules that are actually heavy to import
+# Module mapping - only heavy/expensive modules
 HEAVY_MODULES = {
-    # ML modules (typically have sklearn, xgboost, etc.)
     "ensemble": "ensemble",
     "clustering": "clustering",
     "feature_importance": "feature_importance",
     "cross_validation": "cross_validation",
-    # Portfolio modules (may have cvxpy, scipy.optimize)
     "portfolio_optimization": "portfolio_optimization",
     "online_portfolio_selection": "online_portfolio_selection",
-    # Analysis modules (pandas, numpy heavy operations)
     "structural_breaks": "structural_breaks",
     "backtest_statistics": "backtest_statistics",
-    # Data processing (may have large dependencies)
     "microstructural_features": "microstructural_features",
     "multi_product": "multi_product",
 }
 
-# Lightweight modules - import directly for better IDE support
+# Lightweight modules - import directly
 try:
     from . import (
         bet_sizing,
@@ -121,221 +105,161 @@ try:
         sampling,
         util,
     )
-    # Handle nested modules
     from .filters import filters
     from .strategies import trading_strategies
 
-    logger.debug("Imported lightweight modules directly")
+    logger.debug("Lightweight modules imported successfully")
 except ImportError as e:
-    logger.warning("Some lightweight modules failed to import: {}", e)
+    logger.warning(f"Some lightweight modules failed to import: {e}")
 
 # Cache for lazy-loaded heavy modules
 _module_cache: Dict[str, ModuleType] = {}
 
-# =============================================================================
-# LAZY LOADING FOR HEAVY MODULES ONLY
-# =============================================================================
-
 
 def __getattr__(name: str) -> ModuleType:
-    """Lazy load heavy modules only."""
+    """Lazy load heavy modules on first access."""
     if name in HEAVY_MODULES:
-        # Check cache first
         if name in _module_cache:
             return _module_cache[name]
 
-        # Import and cache
         try:
             import_path = f"afml.{HEAVY_MODULES[name]}"
-            logger.debug("Lazy loading heavy module: {}", name)
+            logger.debug(f"Lazy loading heavy module: {name}")
             module = importlib.import_module(import_path)
             _module_cache[name] = module
-            logger.info(
-                "Loaded heavy module: {} ({} MB)", name, _get_module_size(module)
-            )
+            logger.info(f"Loaded heavy module: {name}")
             return module
         except ImportError as e:
-            logger.error("Failed to import heavy module {}: {}", name, e)
+            logger.error(f"Failed to import heavy module {name}: {e}")
             raise AttributeError(f"Module 'afml' has no attribute '{name}'") from e
 
-    # Handle filters special case (nested module)
+    # Handle nested modules
     if name == "filters":
-        try:
-            from .filters import filters
-
-            return filters
-        except ImportError as e:
-            raise AttributeError(f"Module 'afml' has no attribute '{name}'") from e
+        from .filters import filters
+        return filters
     if name == "strategies":
-        try:
-            from .strategies import trading_strategies
-
-            return trading_strategies
-        except ImportError as e:
-            raise AttributeError(f"Module 'afml' has no attribute '{name}'") from e
+        from .strategies import trading_strategies
+        return trading_strategies
 
     raise AttributeError(f"Module 'afml' has no attribute '{name}'")
 
 
 def _get_module_size(module) -> str:
-    """Rough estimate of module memory footprint."""
+    """Rough estimate of module memory footprint (for logging)."""
     try:
-        # Count objects in module namespace
-        obj_count = len(
-            [
-                obj
-                for obj in vars(module).values()
-                if not callable(obj) or hasattr(obj, "__module__")
-            ]
-        )
-        return f"~{obj_count // 10}0"  # Very rough estimate
+        obj_count = len([obj for obj in vars(module).values() if not callable(obj)])
+        return f"\~{obj_count // 10}0 objects"
     except Exception:
         return "unknown"
 
 
 # =============================================================================
-# SIMPLE MODULE MANAGEMENT (only what's actually useful)
+# PRELOAD CONVENIENCE FUNCTIONS
 # =============================================================================
 
-
 def preload_heavy_modules(*module_names: str) -> Dict[str, ModuleType]:
-    """
-    Preload specific heavy modules. Only use this if you know you'll need them.
-
-    Args:
-        *module_names: Names of heavy modules to preload
-
-    Returns:
-        Dict of successfully loaded modules
-    """
+    """Preload specific heavy modules."""
     loaded = {}
     for name in module_names:
         if name in HEAVY_MODULES:
             try:
-                module = getattr(sys.modules[__name__], name)  # Triggers __getattr__
+                module = getattr(sys.modules[__name__], name)  # triggers __getattr__
                 loaded[name] = module
             except Exception as e:
-                logger.warning("Failed to preload {}: {}", name, e)
+                logger.warning(f"Failed to preload {name}: {e}")
         else:
-            logger.warning(
-                "'{}' is not a heavy module (already imported or doesn't exist)", name
-            )
-
+            logger.warning(f"'{name}' is not a recognized heavy module")
     return loaded
 
 
-def get_loaded_heavy_modules() -> List[str]:
-    """Get list of currently loaded heavy modules."""
-    return list(_module_cache.keys())
-
-
 def preload_ml_modules() -> Dict[str, ModuleType]:
-    """Convenience function to preload all ML-related modules."""
-    ml_modules = ["ensemble", "clustering", "feature_importance", "cross_validation"]
-    return preload_heavy_modules(*ml_modules)
+    """Preload all ML-related heavy modules."""
+    return preload_heavy_modules("ensemble", "clustering", "feature_importance", "cross_validation")
 
 
 def preload_portfolio_modules() -> Dict[str, ModuleType]:
-    """Convenience function to preload portfolio-related modules."""
-    portfolio_modules = ["portfolio_optimization", "online_portfolio_selection"]
-    return preload_heavy_modules(*portfolio_modules)
+    """Preload portfolio-related heavy modules."""
+    return preload_heavy_modules("portfolio_optimization", "online_portfolio_selection")
+
+
+def get_loaded_heavy_modules() -> List[str]:
+    """Return list of currently loaded heavy modules."""
+    return list(_module_cache.keys())
 
 
 # =============================================================================
-# CACHE MONITORING UTILITIES - Enhanced
+# CACHE STATUS & MAINTENANCE
 # =============================================================================
-
 
 def cache_status() -> str:
-    """Get human-readable cache status string."""
-    summary = get_cache_summary()
+    """Return a human-readable summary of cache + module state."""
+    hit_rate = get_cache_hit_rate()
     loaded = get_loaded_heavy_modules()
-
-    status_parts = [
-        f"Hit rate: {summary['hit_rate']:.1%}",
-        f"Tracked functions: {summary['functions_tracked']}",
+    parts = [
+        f"Cache hit rate: {hit_rate:.1%}",
+        f"Tracked functions: {len(cache_stats.get_stats())}",
         f"Heavy modules loaded: {len(loaded)}",
     ]
-
     if loaded:
-        status_parts.append(f"({', '.join(loaded)})")
+        parts.append(f"({', '.join(loaded)})")
+    return " | ".join(parts)
 
-    return " | ".join(status_parts)
 
-
-def maintain_cache(
-    auto_clear: bool = True, max_size_mb: int = 500, max_age_days: int = 30
-):
-    """
-    Perform intelligent cache maintenance.
-
-    Args:
-        auto_clear: Automatically clear changed functions
-        max_size_mb: Maximum cache size in MB
-        max_age_days: Remove cache files older than this
-    """
-    logger.info("Running cache maintenance...")
-    report = cache_maintenance(
-        auto_clear_changed=auto_clear,
-        max_cache_size_mb=max_size_mb,
-        max_age_days=max_age_days,
-    )
-    return report
+def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days: int = 30):
+    """Perform intelligent cache maintenance using selective cleaner."""
+    logger.info("Running AFML cache maintenance...")
+    if auto_clear:
+        selective_cleaner.clean_stale()
+    selective_cleaner.clean_old_entries(days=max_age_days)
+    selective_cleaner.clean_large_files(max_size_mb=max_size_mb)
+    logger.info("Cache maintenance completed.")
+    print_cache_health()
 
 
 # =============================================================================
-# __all__ AND METADATA
+# METADATA
 # =============================================================================
 
 __version__ = "1.0.0"
 __author__ = "AFML Team"
 
 __all__ = [
-    # Core cache system
-    "memory",
+    # Core cache
     "cacheable",
-    "get_cache_hit_rate",
-    "get_cache_stats",
-    "clear_cache_stats",
+    "cv_cacheable",
     "clear_afml_cache",
-    "get_cache_summary",
-    "CacheAnalyzer",
+    "get_cache_hit_rate",
     "initialize_cache_system",
-    # NEW: Robust cache keys
-    "robust_cacheable",
-    "time_aware_cacheable",
-    # NEW: Enhanced cache functions
-    "get_comprehensive_cache_status",
-    "optimize_cache_system",
-    "setup_production_cache",
-    # Cache monitoring (if available)
+    "UnifiedCacheKeyGenerator",
+    "CACHE_DIRS",
+    # Monitoring
     "print_cache_health",
     "get_cache_efficiency_report",
     "analyze_cache_patterns",
+    "diagnose_cache_issues",
     "get_cache_monitor",
-    # MLflow integration (if available)
+    # Maintenance
+    "selective_cleaner",
+    "clean_stale_cache",
+    "maintain_cache",
+    "cache_status",
+    # Backtest
+    "backtest_cache",
+    "BacktestCache",
+    # MLflow (optional)
     "setup_mlflow_cache",
     "get_mlflow_cache",
     "mlflow_cached",
-    # Backtest caching (if available)
-    "cached_backtest",
-    "get_backtest_cache",
-    "BacktestCache",
     # Module management
     "preload_heavy_modules",
     "preload_ml_modules",
     "preload_portfolio_modules",
     "get_loaded_heavy_modules",
-    # Utilities
-    "cache_status",
-    "maintain_cache",
-    # Selective cache management
-    "cache_maintenance",
-    # Numba utilities
+    # Numba (optional)
     "lazy_warmup",
     "prewarm_numba_in_package",
     "register_numba_dummy",
-    # Lightweight modules (directly imported)
+    # Lightweight modules
     "data_structures",
     "util",
     "datasets",
@@ -348,7 +272,7 @@ __all__ = [
     "filters",
     "mt5",
     "production",
-    # Heavy modules (lazy loaded)
+    # Heavy modules (lazy-loaded)
     "ensemble",
     "clustering",
     "feature_importance",
@@ -362,20 +286,15 @@ __all__ = [
 ]
 
 # =============================================================================
-# STARTUP
+# STARTUP LOGGING
 # =============================================================================
 
-logger.info(
-    "AFML v{} ready - {} heavy modules available for lazy loading",
-    __version__,
-    len(HEAVY_MODULES),
-)
-logger.debug("Cache status: {}", cache_status())
+logger.info(f"AFML v{__version__} initialized successfully")
+logger.info(f"Cache status: {cache_status()}")
 
-# Log available enhanced features
-if CACHE_MONITORING_AVAILABLE:
-    logger.debug("✓ Cache monitoring available")
 if MLFLOW_INTEGRATION_AVAILABLE:
-    logger.debug("✓ MLflow integration available")
-if BACKTEST_CACHE_AVAILABLE:
-    logger.debug("✓ Backtest caching available")
+    logger.debug("✓ MLflow cache integration available")
+if NUMBA_UTILS_AVAILABLE:
+    logger.debug("✓ Numba warmup utilities available")
+
+logger.debug("Use maintain_cache() or print_cache_health() for cache insights")
