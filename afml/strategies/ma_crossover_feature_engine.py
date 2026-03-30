@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
-from ..cache import apply_decorator_to_methods, cacheable
 from ..features.fractals import (
     calculate_enhanced_fractals,
     calculate_fractal_trend_features,
@@ -16,7 +15,6 @@ from ..labeling.trend_scanning import trend_scanning_labels
 from ..util.misc import optimize_dtypes, set_resampling_freq
 
 
-@apply_decorator_to_methods(cacheable())
 class ForexFeatureEngine:
     """
     Feature engineering specifically designed for forex MA crossover strategies
