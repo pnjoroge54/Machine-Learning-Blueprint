@@ -853,7 +853,7 @@ class ModelDevelopmentPipeline:
         )
         self.is_primary = 'side' not in self.events.columns
         self.config['model_role'] = 'primary' if self.is_primary else 'secondary'
-        logger.info(f"Model role: {self.config['model_role']} | Label space: {np.unique(self.events['bin'])}")
+        logger.info(f"Model role: {self.config['model_role']} | Label space: {np.unique(self.events['bin']).tolist()}")
         logger.info(f"Average uniqueness: ({self.events['tW'].mean():.4f})")
         self.completed_steps["label_generation"] = True
 
