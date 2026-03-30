@@ -9,7 +9,7 @@ from ..util.pipelines import MyPipeline, make_custom_pipeline, make_weighted_sco
 from .cross_validation import PurgedKFold
 
 
-@cacheable(time_aware=True)
+@cacheable(time_aware=True, auto_versioning=False)
 def clf_hyper_fit(
     features,
     labels,
