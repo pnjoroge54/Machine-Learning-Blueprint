@@ -1,7 +1,8 @@
+### 4. `afml/cache/__init__.py`
+```python
 """
 AFML Unified Cache System
-=========================
-Single, production-ready caching solution for all ML, backtesting, and CV workflows.
+Single production-ready caching solution.
 """
 
 from .unified_cache import (
@@ -15,23 +16,17 @@ from .unified_cache import (
     CACHE_DIRS,
 )
 
-# High-level APIs
 from .backtest_cache import backtest_cache, BacktestCache
-from .cv_cache import cv_cacheable  # shim for backwards compatibility
-
-# Updated supporting modules
-from .selective_cleaner import (
-    SelectiveCacheCleaner,
-    selective_cleaner,
-    clean_stale_cache,
-    clean_module_cache,
-    get_cache_summary,
-)
+from .cv_cache import cv_cacheable  # backwards compatibility shim
+from .selective_cleaner import SelectiveCacheCleaner, selective_cleaner, clean_stale_cache
 from .cache_monitoring import (
-    CacheMonitor, get_cache_monitor, print_cache_health,
-    get_cache_efficiency_report, analyze_cache_patterns, diagnose_cache_issues
+    CacheMonitor,
+    get_cache_monitor,
+    print_cache_health,
+    get_cache_efficiency_report,
+    analyze_cache_patterns,
+    diagnose_cache_issues,
 )
-from .startup_script import run_cache_startup
 
 __all__ = [
     "cacheable",
@@ -45,15 +40,16 @@ __all__ = [
     "backtest_cache",
     "BacktestCache",
     "cv_cacheable",
-    "get_cache_monitor",
-    "CacheMonitor",
-    "run_cache_startup",
     "SelectiveCacheCleaner",
     "selective_cleaner",
     "clean_stale_cache",
+    "CacheMonitor",
+    "get_cache_monitor",
+    "print_cache_health",
+    "get_cache_efficiency_report",
+    "analyze_cache_patterns",
+    "diagnose_cache_issues",
 ]
 
-# Auto-initialize on first import (optional but recommended)
+# Auto-initialize when package is imported
 initialize_cache_system()
-
-
