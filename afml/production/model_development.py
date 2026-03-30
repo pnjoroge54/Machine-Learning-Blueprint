@@ -135,7 +135,7 @@ from .file_manager import ModelFileManager
 # Cached data helpers
 # ============================================================================
 
-@cacheable(time_aware=True)
+@cacheable(time_aware=True, auto_versioning=False)
 def get_bar_size(tick_df, bar_size):
     """
     Compute tick-based bar size.
@@ -155,7 +155,7 @@ def get_bar_size(tick_df, bar_size):
     return calculate_ticks_per_period(tick_df, bar_size)
 
 
-@cacheable(time_aware=True)
+@cacheable(time_aware=True, auto_versioning=False)
 def load_and_prepare_training_data(
     symbol, start_date, end_date, account_name, bar_type, bar_size, price, path=None
 ):
@@ -209,7 +209,7 @@ def load_and_prepare_training_data(
     return data
 
 
-@cacheable(time_aware=True)
+@cacheable(time_aware=True, auto_versioning=False)
 def create_feature_engineering_pipeline(
     data: pd.DataFrame, feature_config: Dict, data_config: Dict
 ) -> pd.DataFrame:
@@ -252,7 +252,7 @@ def create_feature_engineering_pipeline(
     return features.join(time_feat, how="left")
 
 
-@cacheable(time_aware=True)
+@cacheable(time_aware=True, auto_versioning=False)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: BaseStrategy,
@@ -263,7 +263,6 @@ def generate_events_triple_barrier(
     min_ret: float = 0.0,
     vertical_barrier_zero: bool = True,
     filter_as_series: bool = True,
-    on_crossover: bool = True,
 ) -> pd.DataFrame:
     """
     Generate trading events using the triple-barrier method.
@@ -288,8 +287,7 @@ def generate_events_triple_barrier(
         Set label to zero if vertical barrier is reached.
     filter_as_series : bool, default=True
         Pass volatility threshold as series instead of scalar.
-    on_crossover : bool, default=True
-        Whether strategy expects crossover for signal
+
     Returns
     -------
     pd.DataFrame
@@ -326,7 +324,7 @@ def generate_events_triple_barrier(
     else:
         filter_threshold = None
 
-    side, t_events = get_entries(strategy, data, filter_threshold, on_crossover)
+    side, t_events = get_entries(strategy, data, filter_threshold)
     vb = add_vertical_barrier(t_events, close, **max_holding_period)
 
     events = triple_barrier_labels(
@@ -496,7 +494,7 @@ def get_optimal_sample_weight(
         Cross-validation results.
     """
 
-    valid_index = features.dropna().index.intersection(events.index)
+    valid_index = features.index.intersection(events.index)
     cont = events.loc[valid_index]
     X = features.loc[valid_index]
     y = cont["bin"]
@@ -504,7 +502,7 @@ def get_optimal_sample_weight(
     classifier = SequentiallyBootstrappedBaggingClassifier(
         n_estimators=100,
         samples_info_sets=cont['t1'],
-        price_bars_index=features.loc[cont.index[0]: cont["t1"].max()].index,
+        price_bars_index=features.index,
         n_jobs=-1,
     )
 
@@ -855,7 +853,7 @@ class ModelDevelopmentPipeline:
         )
         self.is_primary = 'side' not in self.events.columns
         self.config['model_role'] = 'primary' if self.is_primary else 'secondary'
-        logger.info(f"Model role: {self.config['model_role']} | Label space: {sorted(self.events['bin'].unique())}")
+        logger.info(f"Model role: {self.config['model_role']} | Label space: {np.unique(self.events['bin'])}")
         logger.info(f"Average uniqueness: ({self.events['tW'].mean():.4f})")
         self.completed_steps["label_generation"] = True
 
