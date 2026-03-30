@@ -1330,9 +1330,9 @@ class ModelDevelopmentPipeline:
         )
         standard_bag.estimators_         = bag.estimators_
         standard_bag.estimators_features_= bag.estimators_features_
-        standard_bag.classes_            = getattr(bag, "classes_", np.array(sorted(y.unique())))
-        standard_bag.n_classes_          = len(standard_bag.classes_)
-        standard_bag.n_features_in_      = X.shape[1]
+        standard_bag.classes_            = bag.classes_
+        standard_bag.n_classes_          = bag.n_classes_
+        standard_bag.n_features_in_      = bag.n_features_in_
 
         if hasattr(bag, "oob_score_"):
             standard_bag.oob_score_ = bag.oob_score_
