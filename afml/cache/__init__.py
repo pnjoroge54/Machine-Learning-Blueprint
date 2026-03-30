@@ -27,7 +27,10 @@ from .selective_cleaner import (
     clean_module_cache,
     get_cache_summary,
 )
-from .cache_monitoring import get_cache_monitor, CacheMonitor
+from .cache_monitoring import (
+    CacheMonitor, get_cache_monitor, print_cache_health,
+    get_cache_efficiency_report, analyze_cache_patterns, diagnose_cache_issues
+)
 from .startup_script import run_cache_startup
 
 __all__ = [
