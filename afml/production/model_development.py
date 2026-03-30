@@ -937,7 +937,7 @@ class ModelDevelopmentPipeline:
         else:
             self._train_model_sklearn()
 
-        self.best_model = Pipeline([
+        self.best_model = MyPipeline([
             ("preprocessor", self.preprocessor),
             *self.best_model.steps,
         ])
