@@ -499,11 +499,14 @@ def get_optimal_sample_weight(
     X = features.loc[valid_index]
     y = cont["bin"]
 
-    classifier = SequentiallyBootstrappedBaggingClassifier(
-        n_estimators=100,
-        samples_info_sets=cont['t1'],
-        price_bars_index=features.loc[cont.index[0]: cont['t1'].max()].index,
-        n_jobs=-1,
+    classifier = RandomForestClassifier(
+        criterion="entropy",
+        class_weight="balanced_subsample",
+        n_estimators=200,
+        max_depth=4,
+        min_weight_fraction_leaf=0.05,
+        max_samples=cont["tW"].mean().round(2),
+        random_state=42,
     )
 
     cv_gen = PurgedKFold(n_splits=n_splits, t1=cont["t1"], pct_embargo=0.01)
