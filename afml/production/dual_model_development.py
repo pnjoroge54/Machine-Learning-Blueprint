@@ -82,6 +82,7 @@ class BidAskLongShortPipeline:
         save: bool = True,
         export_onnx: bool = False,
         calibrate: bool = False,
+        display: bool = False,
         verbose: bool = True
     ) -> Dict:
         """
@@ -120,6 +121,7 @@ class BidAskLongShortPipeline:
                 save,
                 export_onnx,
                 calibrate,
+                display,
                 verbose
             )
             
@@ -133,6 +135,7 @@ class BidAskLongShortPipeline:
                 save,
                 export_onnx,
                 calibrate,
+                display,
                 verbose
             )
             
@@ -241,7 +244,7 @@ class BidAskLongShortPipeline:
         self.long_pipeline.completed_steps['label_generation'] = True
         self.short_pipeline.completed_steps['label_generation'] = True
         
-    def _train_side_model(self, pipeline, side_name, generate_reports, save, export_onnx, verbose):
+    def _train_side_model(self, pipeline, side_name, generate_reports, save, export_onnx, calibrate, display, verbose):
         """Train model for specific side."""
         pipeline.compute_sample_weights()
         pipeline.add_meta_features()
@@ -251,8 +254,10 @@ class BidAskLongShortPipeline:
         pipeline._compile_metrics()
         pipeline.export_onnx = self.export_onnx
         
+        if calibrate:
+            pipeline.calibrate_model()
         if generate_reports:
-            pipeline._generate_analysis_reports()
+            pipeline._generate_analysis_reports(display)
         if save:
             pipeline._save_all_artifacts()
             
