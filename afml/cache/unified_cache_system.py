@@ -740,10 +740,10 @@ def cacheable(
             if current_hash:
                 store = get_version_store()
                 if store.has_changed(func_name, current_hash):
-                    logger.info(
-                        f"Function '{func.__qualname__}' has changed "
-                        f"— clearing stale cache"
-                    )
+                    logger.warning(
+                          f"Auto-versioning: clearing cache for {func.__qualname__} "
+                          f"(stored={stored}, current={current_hash})"
+                      )
                     try:
                         cached_func.clear()
                     except Exception as e:
@@ -1019,11 +1019,9 @@ __all__ = [
     # Backward compatibility aliases
     "robust_cacheable",
     "time_aware_cacheable",
-    "cv_cacheable",
     "data_tracking_cacheable",
     # Utilities
     "disable_auto_versioning",
-    # clf_hyper_fit support
     "reconstruct_param_grid",
     "create_cacheable_param_grid",
     # Reports
