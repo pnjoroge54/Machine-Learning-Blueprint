@@ -14,6 +14,9 @@ from loguru import logger
 
 from . import cacheable, initialize_cache_system
 from .mql5_bridge import MQL5Bridge, SignalPacket
+from .unified_cache import initialize_cache_system
+from .selective_cleaner import selective_cleaner
+
 
 # Configure logging
 logger.remove()
@@ -34,6 +37,14 @@ logger.add(
     level="DEBUG",
     enqueue=True,
 )
+
+
+def run_cache_startup():
+    initialize_cache_system()
+    # Optional: light cleanup on startup during development
+    selective_cleaner.clean_stale(dry_run=False)  # uncomment if desired
+    logger.info("AFML Cache startup complete.")
+    
 
 def wait_for_connection(bridge: MQL5Bridge, timeout: int = 60) -> bool:
     """
