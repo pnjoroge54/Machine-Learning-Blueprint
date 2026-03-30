@@ -19,7 +19,6 @@ from loguru import logger
 from .cache import (
     # Core
     cacheable,
-    cv_cacheable,
     clear_afml_cache,
     get_cache_hit_rate,
     initialize_cache_system,
@@ -38,6 +37,23 @@ from .cache import (
     backtest_cache,
     BacktestCache,
 )
+
+# =============================================================================
+# DATA TRACKING (convenience re-export at top level)
+# =============================================================================
+
+try:
+    from .cache import (
+        DataAccessTracker,
+        log_data_access,
+        print_contamination_report,
+        clear_data_access_log,
+    )
+except ImportError:
+    DataAccessTracker = None
+    log_data_access = lambda *a, **k: None
+    print_contamination_report = lambda: None
+    clear_data_access_log = lambda: None
 
 # Optional MLflow
 try:
@@ -189,15 +205,16 @@ def maintain_cache(auto_clear: bool = True, max_size_mb: int = 500, max_age_days
 # =============================================================================
 
 __version__ = "1.0.0"
-__author__ = "AFML Team"
+__author__ = "Patrick M. Njoroge"
 
 __all__ = [
-    "cacheable", "cv_cacheable", "clear_afml_cache", "get_cache_hit_rate",
+    "cacheable", "clear_afml_cache", "get_cache_hit_rate",
     "initialize_cache_system", "UnifiedCacheKeyGenerator", "CACHE_DIRS",
     "print_cache_health", "get_cache_efficiency_report", "analyze_cache_patterns",
     "diagnose_cache_issues", "get_cache_monitor",
     "selective_cleaner", "clean_stale_cache", "maintain_cache", "cache_status",
-    "backtest_cache", "BacktestCache",
+    "backtest_cache", "BacktestCache", "DataAccessTracker",
+    "log_data_access", "print_contamination_report", "clear_data_access_log",
     "preload_heavy_modules", "preload_ml_modules", "preload_portfolio_modules",
     "get_loaded_heavy_modules",
     # Lightweight
