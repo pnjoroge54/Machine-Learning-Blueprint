@@ -542,7 +542,8 @@ def get_optimal_sample_weight(
             scheme = f"{best_scheme}_{'linear' if lin else 'exp'}_{decay}"
             time_decay_weights[scheme] = best_weight * decay_vec
 
-    for scheme, weight in tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay for {best_scheme}"):
+    for scheme, weight in tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay for "):
+        tqdm.set_postfix_str(f"{scheme}")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"], scheme, best_score, best_scheme, cv_results
         )
@@ -985,7 +986,7 @@ class ModelDevelopmentPipeline:
         )
 
         self.calibrator_ = CalibratorCV(
-            estimator=MyPipeline(self.best_model.steps),
+            estimator=self.best_model,
             cv=cv,
         )
         self.calibrator_.fit(X, y, sample_weight=sample_weight)
