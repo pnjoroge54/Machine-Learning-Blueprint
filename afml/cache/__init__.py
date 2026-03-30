@@ -4,6 +4,8 @@ AFML Unified Cache System
 Production-grade caching + data access tracking for financial ML workflows.
 """
 
+from loguru import logger
+
 from .unified_cache import (
     cacheable,
     UnifiedCacheKeyGenerator,
