@@ -502,7 +502,7 @@ def get_optimal_sample_weight(
     classifier = SequentiallyBootstrappedBaggingClassifier(
         n_estimators=100,
         samples_info_sets=cont['t1'],
-        price_bars_index=features.index,
+        price_bars_index=features.loc[cont.index[0]: cont['t1'].max()].index,
         n_jobs=-1,
     )
 
