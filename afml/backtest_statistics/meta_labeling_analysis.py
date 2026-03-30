@@ -16,7 +16,7 @@ from sklearn.metrics import classification_report
 from tqdm import tqdm
 
 from ..bet_sizing.bet_sizing import bet_size_budget, bet_size_probability, bet_size_reserve
-from ..cache.unified_cache_system import cacheable
+from ..cache import cacheable
 from ..cross_validation.cross_validation import PurgedSplit
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..production.model_development import (
