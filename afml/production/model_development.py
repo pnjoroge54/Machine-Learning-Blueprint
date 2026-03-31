@@ -10,7 +10,7 @@ and rigorous cross-validation protocols designed for non-IID financial data.
 The pipeline now supports two training paths controlled by
 `model_params['use_optuna']`:
 
-    False (default): clf_hyper_fit via GridSearchCV / RandomizedSearchCV.
+    False (default): clf_hyper_fit_cached via GridSearchCV / RandomizedSearchCV.
     True:            optimize_trading_model via Optuna + HyperbandPruner.
 
 When use_optuna=True the following changes apply:
@@ -110,7 +110,7 @@ from tqdm import tqdm
 
 from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
 from ..calibration.calibration import CalibratorCV   # ← NEW
-from ..cross_validation.hyper_fit import clf_hyper_fit
+from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
 from ..cross_validation.optuna_hyper_fit import (
@@ -904,7 +904,7 @@ class ModelDevelopmentPipeline:
             - self.study is populated for post-study visualization.
 
         When use_optuna=False:
-            - clf_hyper_fit is called with the pre-computed sample_weight.
+            - clf_hyper_fit_cached is called with the pre-computed sample_weight.
             - Behavior is identical to the original pipeline.
 
         In both paths, when bagging_sequential=True:
@@ -987,7 +987,7 @@ class ModelDevelopmentPipeline:
         )
 
         self.calibrator_ = CalibratorCV(
-            estimator=self.best_model,
+            estimator=self.best_model.steps[-1][-1],
             cv=cv,
         )
         self.calibrator_.fit(X, y, sample_weight=sample_weight)
@@ -1011,12 +1011,12 @@ class ModelDevelopmentPipeline:
         sample_weight_train = self.sample_weight.loc[self.events.index]
         sample_weight_score = self.events["w"].loc[sample_weight_train.index]
 
-        included = inspect.signature(clf_hyper_fit).parameters.keys()
+        included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
         params = {k: v for k, v in self.model_params.items() if k in included}
 
         if bagging_sequential and bagging_n > 0:
             params["bagging_n_estimators"] = 0
-            tuned_pipeline, self.cv_results = clf_hyper_fit(
+            tuned_pipeline, self.cv_results = clf_hyper_fit_cached(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
                 t1=self.events["t1"],
@@ -1029,7 +1029,7 @@ class ModelDevelopmentPipeline:
                 tuned_pipeline, sample_weight=sample_weight_train,
             )
         else:
-            self.best_model, self.cv_results = clf_hyper_fit(
+            self.best_model, self.cv_results = clf_hyper_fit_cached(
                 features=self.preprocessed_features,
                 labels=self.events["bin"],
                 t1=self.events["t1"],
