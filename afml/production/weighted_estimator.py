@@ -4,6 +4,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.pipeline import Pipeline
 
 from ..sample_weights.optimized_attribution import get_weights_by_time_decay_optimized
+from ..util.pipelines import MyPipeline
 
 
 class _WeightedEstimator(BaseEstimator, ClassifierMixin):
@@ -97,7 +98,7 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
     def set_params(self, **params):
         base_params = {}
         for key in list(params.keys()):
-            if issubclass(self.base_estimator, Pipeline):
+            if isinstance(self.base_estimator, (Pipeline, MyPipeline)):
                 key = key.split("__")[-1]
             if key.startswith("base_"):
                 base_params[key[5:]] = params.pop(key)
