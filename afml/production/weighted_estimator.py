@@ -97,7 +97,7 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
     def set_params(self, **params):
         base_params = {}
         for key in list(params.keys()):
-            if issubclass(Pipeline):
+            if issubclass(self, Pipeline):
                 key = key.split("__")[-1]
             if key.startswith("base_"):
                 base_params[key[5:]] = params.pop(key)
