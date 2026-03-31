@@ -15,6 +15,8 @@ from .unified_cache import (
     initialize_cache_system,
     CacheAnalyzer,
     CACHE_DIRS,
+    create_cacheable_param_grid,
+    reconstruct_param_grid
 )
 
 from .backtest_cache import backtest_cache, BacktestCache
@@ -73,6 +75,8 @@ __all__ = [
     "initialize_cache_system",
     "CacheAnalyzer",
     "CACHE_DIRS",
+    "create_cacheable_param_grid",
+    "reconstruct_param_grid",
 
     # Monitoring
     "CacheMonitor",
