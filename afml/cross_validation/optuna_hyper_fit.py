@@ -135,7 +135,7 @@ class FinancialModelSuggester:
         # Validate against base model's accepted parameters
         if isinstance(base_model, (Pipeline, MyPipeline):
             valid_keys = set([k.split("__")[-1] for k in base_model.get_params().keys()])
-        except:
+        else:
             valid_keys = set(base_model.get_params().keys())
             
         invalid = set(model_params) - valid_keys
