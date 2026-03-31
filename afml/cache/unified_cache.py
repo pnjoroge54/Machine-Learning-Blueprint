@@ -383,8 +383,56 @@ class CacheAnalyzer:
         logger.info(f"CacheAnalyzer '{self.name}': session complete")
 
 
+
+def create_cacheable_param_grid(param_distributions: Dict) -> Dict:
+    """Convert scipy distributions to cacheable representation."""
+    cacheable_params = {}
+
+    for key, value in param_distributions.items():
+        if isinstance(value, (rv_discrete_frozen, rv_continuous_frozen)):
+            dist_info = (
+                type(value).__name__,
+                value.args if hasattr(value, "args") else (),
+                value.kwds if hasattr(value, "kwds") else {},
+            )
+            cacheable_params[key] = dist_info
+        else:
+            cacheable_params[key] = value
+
+    return cacheable_params
+
+
+def reconstruct_param_grid(cacheable_params: Dict) -> Dict:
+    """Reconstruct scipy distributions from cacheable representation."""
+    import scipy.stats as stats
+    from scipy.stats import randint, uniform
+
+    reconstructed = {}
+
+    for key, value in cacheable_params.items():
+        if isinstance(value, tuple) and len(value) == 3:
+            dist_type, args, kwds = value
+
+            if dist_type == "rv_discrete_frozen":
+                reconstructed[key] = randint(*args, **kwds)
+            elif dist_type == "rv_continuous_frozen":
+                reconstructed[key] = uniform(*args, **kwds)
+            else:
+                try:
+                    dist_class = getattr(stats, dist_type.replace("_frozen", ""))
+                    reconstructed[key] = dist_class(*args, **kwds)
+                except Exception:
+                    logger.warning(f"Could not reconstruct: {dist_type}")
+                    reconstructed[key] = value
+        else:
+            reconstructed[key] = value
+
+    return reconstructed
+
+
 # Export for other modules
 __all__ = [
     "cacheable", "UnifiedCacheKeyGenerator", "cache_stats", "get_cache_hit_rate",
-    "clear_afml_cache", "initialize_cache_system", "CacheAnalyzer", "CACHE_DIRS"
+    "clear_afml_cache", "initialize_cache_system", "CacheAnalyzer", "CACHE_DIRS",
+    "create_cacheable_param_grid", "reconstruct_param_grid",
 ]
