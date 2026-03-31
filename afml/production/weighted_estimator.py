@@ -91,7 +91,7 @@ class _WeightedEstimator(BaseEstimator, ClassifierMixin):
         }
         if deep:
             base_params = self.base_estimator.get_params(deep=True)
-            params.update({f"base_{k}": v for k, v in base_params.items()})
+            params.update({f"base_{k.split("__")[-1]}": v for k, v in base_params.items()})
         return params
 
     def set_params(self, **params):
