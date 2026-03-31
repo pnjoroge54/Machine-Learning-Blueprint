@@ -18,6 +18,7 @@ from optuna.samplers import TPESampler
 from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
+from sklearn.pipeline import Pipeline
 
 from .cross_validation import PurgedKFold
 from ..production.weighted_estimator import _WeightedEstimator
@@ -131,7 +132,11 @@ class FinancialModelSuggester:
         model_params = {k: v for k, v in params.items() if k not in cls.WEIGHT_KEYS}
 
         # Validate against base model's accepted parameters
-        valid_keys = set(base_model.get_params().keys())
+        if issubclass(Pipeline):
+            valid_keys = set([k.split("__")[-1] for k in base_model.get_params().keys()])
+        else:
+            valid_keys = set(base_model.get_params().keys())
+            
         invalid = set(model_params) - valid_keys
         if invalid:
             raise ValueError(
