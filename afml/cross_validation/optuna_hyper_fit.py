@@ -132,7 +132,7 @@ class FinancialModelSuggester:
         model_params = {k: v for k, v in params.items() if k not in cls.WEIGHT_KEYS}
 
         # Validate against base model's accepted parameters
-        if issubclass(Pipeline):
+        if issubclass(base_model, Pipeline):
             valid_keys = set([k.split("__")[-1] for k in base_model.get_params().keys()])
         else:
             valid_keys = set(base_model.get_params().keys())
