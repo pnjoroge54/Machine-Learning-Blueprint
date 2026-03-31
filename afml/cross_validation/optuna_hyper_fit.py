@@ -22,6 +22,7 @@ from sklearn.pipeline import Pipeline
 
 from .cross_validation import PurgedKFold
 from ..production.weighted_estimator import _WeightedEstimator
+from ..util.pipelines import MyPipeline
 
 
 class FinancialModelSuggester:
@@ -132,9 +133,9 @@ class FinancialModelSuggester:
         model_params = {k: v for k, v in params.items() if k not in cls.WEIGHT_KEYS}
 
         # Validate against base model's accepted parameters
-        if issubclass(base_model, Pipeline):
+        if isinstance(base_model, (Pipeline, MyPipeline):
             valid_keys = set([k.split("__")[-1] for k in base_model.get_params().keys()])
-        else:
+        except:
             valid_keys = set(base_model.get_params().keys())
             
         invalid = set(model_params) - valid_keys
