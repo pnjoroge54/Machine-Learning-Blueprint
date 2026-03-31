@@ -412,8 +412,9 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
         metrics[f"rolling_f1_{window}"]        = f1
 
     return metrics.dropna()
+    
 
-
+@cacheable(time_aware=True, auto_versioning=False)
 def best_weighting_scheme(
     classifier,
     X,
@@ -446,7 +447,6 @@ def best_weighting_scheme(
     return best_score, best_scheme, cv_results
 
 
-@cacheable(time_aware=True)
 def get_optimal_sample_weight(
     data_index: pd.DatetimeIndex,
     events: pd.DataFrame,
