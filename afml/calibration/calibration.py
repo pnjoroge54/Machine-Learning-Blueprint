@@ -77,7 +77,7 @@ from sklearn.utils.validation import check_array, check_is_fitted
 
 from ..cross_validation.scoring import probability_weighted_accuracy
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
-from ..util.pipelines import MyPipeline
+from ..util.pipelines import make_custom_pipeline
 
 
 # ---- Calibration Methods ----
@@ -106,7 +106,8 @@ def fit_platt_scaling(
         Fitted LogisticRegression calibrator
     """
     X_calib = np.asarray(scores_calib).reshape(-1, 1)
-    platt = MyPipeline(["platt", LogisticRegression(C=C, solver=solver, max_iter=max_iter)])
+    # platt = make_custom_pipeline(LogisticRegression(C=C, solver=solver, max_iter=max_iter))
+    platt = LogisticRegression(C=C, solver=solver, max_iter=max_iter)
     platt.fit(X_calib, y_calib, sample_weight=sample_weight)
     return platt
 
@@ -399,7 +400,8 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
 
         # ── Phase 2: Fit calibration map ──────────────────────────────────
         if self.method == "isotonic":
-            self.calibrator_ = MyPipeline(["iso", IsotonicRegression(out_of_bounds="clip", increasing=True)])
+            # self.calibrator_ = MyPipeline(["iso", IsotonicRegression(out_of_bounds="clip", increasing=True)])
+            self.calibrator_ = IsotonicRegression(out_of_bounds="clip", increasing=True)
             self.calibrator_.fit(
                 oof_probs[valid_mask],
                 y[valid_mask],
