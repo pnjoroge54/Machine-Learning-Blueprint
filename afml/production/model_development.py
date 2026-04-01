@@ -987,7 +987,7 @@ class ModelDevelopmentPipeline:
         )
 
         self.calibrator_ = CalibratorCV(
-            estimator=self.best_model.steps[-1][-1],
+            estimator=MyPipeline(self.best_model),
             cv=cv,
         )
         self.calibrator_.fit(X, y, sample_weight=sample_weight)
@@ -1002,7 +1002,7 @@ class ModelDevelopmentPipeline:
         )
 
         # Replace best_model so downstream inference uses calibrated probs
-        self.best_model = self.calibrator_
+        self.best_model = Pipeline(self.calibrator_.steps)
         self.completed_steps["calibration"] = True
 
     def _train_model_sklearn(self):
