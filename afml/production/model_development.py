@@ -690,7 +690,7 @@ class ModelDevelopmentPipeline:
         self.label_config  = label_config
         self.target_config = target_config
         self.account_name  = data_config.get("account_name", "default")
-        self.pipeline_version = "4.1"
+        self.pipeline_version = "4.2"
         self.model_params  = model_params
 
         self.config = data_config.copy()
@@ -1463,19 +1463,40 @@ class ModelDevelopmentPipeline:
         logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
 
     def _generate_analysis_reports(self, display: bool = False):   # ← NEW param
-        """Generates hyperparameter analysis, importance plots, and HTML summary."""
+        """
+        Generates hyperparameter analysis, importance plots, and HTML summary.
+
+        Robustness improvement (v4.2):
+            Any column in cv_results["cv_results"] that is 100% NaN is dropped
+            before calling generate_complete_hyperparameter_report.
+            This prevents the matplotlib/seaborn "autodetected range of [nan, nan]"
+            error when RandomizedSearchCV param_grid contains heterogeneous
+            search spaces.
+        """
         try:
             if self.cv_results and "cv_results" in self.cv_results:
                 cv_df = pd.DataFrame(self.cv_results["cv_results"])
+
+                # ── FIX: remove fully-NaN columns (prevents plot range error) ──
+                nan_cols = cv_df.columns[cv_df.isna().all()].tolist()
+                if nan_cols:
+                    cv_df = cv_df.dropna(axis=1, how="all")
+                    logger.info(
+                        f"Hyperparameter report: dropped {len(nan_cols)} fully-NaN "
+                        f"column(s): {nan_cols}"
+                    )
+
                 generate_complete_hyperparameter_report(
                     cv_results=cv_df,
                     strategy_config=self.config,
                     output_dir=self.file_paths["reports"],
-                    display_in_notebook=display,   # ← NEW: thread through
+                    display_in_notebook=display,
                 )
+
             self._generate_training_summary_html()
             if self.study is not None:
                 self._generate_optuna_report()
+
         except Exception as e:
             logger.warning(f"Report generation failed: {e}")
 
