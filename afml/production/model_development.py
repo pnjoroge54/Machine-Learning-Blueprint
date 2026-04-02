@@ -99,6 +99,7 @@ from feature_engine.selection import DropConstantFeatures, DropDuplicateFeatures
 from loguru import logger
 from numba import njit, prange
 from pathlib import Path
+from pprint import pformat
 from scipy.stats import uniform
 from sklearn import clone
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -1101,8 +1102,8 @@ class ModelDevelopmentPipeline:
         )
 
         logger.info(
-            f"Optuna complete. Best score: {self.study.best_value:.4f}  "
-            f"Best params: {self.study.best_params}"
+            f"Optuna complete. \nBest score: {self.study.best_value:.4f}"
+            f"\nBest params: {pformat(self.study.best_params)}"
         )
         best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
 
