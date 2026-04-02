@@ -815,6 +815,7 @@ class ModelDevelopmentPipeline:
             self.train_model()
 
             # ── Calibration (optional) ──────────────────────────────────────
+            self.calibrate = calibrate
             if calibrate:
                 self.calibrate_model()
 
@@ -1355,7 +1356,7 @@ class ModelDevelopmentPipeline:
         # Unwrap CalibratorCV if calibration was applied —
         # feature importance lives in the inner estimator, not the calibrator.
         clf = self.best_model
-        if isinstance(clf, CalibratorCV):
+        if self.calibrate:
             clf = clf.estimator_
 
         # best_model (or its inner estimator) is preprocessor → clf/bag.
@@ -1377,7 +1378,11 @@ class ModelDevelopmentPipeline:
         elif isinstance(clf, _WeightedEstimator):
             importances = clf.base_estimator.feature_importances_
         else:
-            importances = clf.feature_importances_
+            try:
+                importances = clf.feature_importances_
+            except Exception as e:
+                importances = np.zeros(len(feat_names))
+                logger.error(e)
 
         self.feature_importance = pd.DataFrame({
             "feature":    feat_names,
