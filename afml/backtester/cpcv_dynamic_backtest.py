@@ -33,7 +33,7 @@ from joblib import Parallel, delayed
 from sklearn.base import clone
 
 from afml.cross_validation.combinatorial import CombinatorialPurgedCV
-from prop_firm_sizer import PropFirmAccountState, PropFirmAwareSizer, Phase
+from .prop_firm_sizer import PropFirmAccountState, PropFirmAwareSizer, Phase
 
 
 # ── Backtest configuration ────────────────────────────────────────────────────
