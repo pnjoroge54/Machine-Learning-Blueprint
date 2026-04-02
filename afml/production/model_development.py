@@ -990,7 +990,7 @@ class ModelDevelopmentPipeline:
         )
 
         self.calibrator_ = CalibratorCV(
-            estimator=MyPipeline(self.best_model),
+            estimator=make_custom_pipeline(self.best_model),
             cv=cv,
         )
         self.calibrator_.fit(X, y, sample_weight=sample_weight)
