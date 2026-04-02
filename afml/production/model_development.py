@@ -936,10 +936,7 @@ class ModelDevelopmentPipeline:
                 av_uniqueness = self.events['tW'].mean().round(2)
                 self.model_params['bagging_max_samples'] = av_uniqueness
                 logger.info(f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})")
-        elif isinstance(pipe.steps[-1][-1], RandomForestClassifier):
-            av_uniqueness = self.events['tW'].mean().round(2)
-            self.model_params["param_grid"]["max_samples"] = uniform(av_uniqueness, 1 - av_uniqueness)
-
+        
         self.model_params['pipe_clf'] = pipe
 
         if self.model_params.get('use_optuna', False):
