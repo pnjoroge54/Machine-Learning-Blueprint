@@ -719,6 +719,8 @@ class ModelDevelopmentPipeline:
         self.metrics                = None
         self.study                  = None
         self.is_primary             = None
+        self.display                = None
+        self.calibrate             = None
 
         if isinstance(model_params["pipe_clf"], Pipeline):
             model = model_params["pipe_clf"].steps[-1][1]
