@@ -253,6 +253,8 @@ class BidAskLongShortPipeline:
         pipeline.analyze_features()
         pipeline._compile_metrics()
         pipeline.export_onnx = self.export_onnx
+        pipeline.calibrate = calibrate
+        pipeline.display = display
         
         if calibrate:
             pipeline.calibrate_model()
