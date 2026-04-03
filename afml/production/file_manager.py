@@ -750,7 +750,7 @@ class ModelFileManager:
     
         Load only the model and calibrator:
     
-            >>> arts = mgr.load_from_path(path, artifact_types=["model", "isotonic_calibrator"])
+            >>> arts = mgr.load_from_path(path, artifact_types=["model", "calibrator"])
     
         Load just the feature configuration (to rebuild features for new data):
     
@@ -804,7 +804,7 @@ class ModelFileManager:
             # Handle multi-word prefixes
             multi_word_prefixes = [
                 "feature_importance", "feature_config", "feature_names",
-                "isotonic_calibrator",
+                "calibrator",
             ]
             for prefix in multi_word_prefixes:
                 if stem.startswith(prefix):
