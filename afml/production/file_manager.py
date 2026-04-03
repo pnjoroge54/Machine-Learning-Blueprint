@@ -429,6 +429,7 @@ class ConfigPathGenerator:
         )
         weights_filename = self.generate_filename(config, "weights")
         strategy_filename = self.generate_filename(config, "strategy")
+        target_config_filename = self.generate_filename(config, "target_config")
         feature_config_filename = self.generate_filename(config, "feature_config")
         feature_names_filename = self.generate_filename(config, "feature_names")
         calibrator_filename = self.generate_filename(config, "calibrator")   # ADDED
@@ -449,6 +450,7 @@ class ConfigPathGenerator:
             "config": base_dir / config_filename,
             "metrics": base_dir / metrics_filename,
             "events": base_dir / events_filename,
+            "target_config": base_dir / target_config_filename,
             "feature_names": base_dir / feature_names_filename,
             "feature_config": base_dir / feature_config_filename,
             "feature_importance": base_dir / feature_importance_filename,
@@ -712,140 +714,6 @@ class ModelFileManager:
 
         return results
 
-    
-    
-    def load_from_path(
-        self,
-        model_dir: Union[str, Path],
-        artifact_types: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Load artifacts from a known model directory.
-    
-        This is the fast path for when you already have the directory,
-        skipping the recursive search that load_artifacts() performs.
-    
-        Parameters
-        ----------
-        model_dir : str or Path
-            Path to the model directory (the config-hash leaf folder).
-        artifact_types : list of str, optional
-            Artifact keys to load (e.g., ["model", "metrics"]).
-            If None, loads everything found in the directory.
-    
-        Returns
-        -------
-        dict
-            Loaded artifacts keyed by artifact name.
-    
-        Examples
-        --------
-        Load everything from a known directory:
-    
-            >>> mgr = ModelFileManager(base_dir="./Models")
-            >>> arts = mgr.load_from_path("./Models/my_strat/BTCUSD/.../a1b2c3d4")
-            >>> model = arts["model"]
-            >>> preprocessor = arts["model"].steps[0][1]
-            >>> feature_names = arts.get("feature_names", [])
-    
-        Load only the model and calibrator:
-    
-            >>> arts = mgr.load_from_path(path, artifact_types=["model", "calibrator"])
-    
-        Load just the feature configuration (to rebuild features for new data):
-    
-            >>> arts = mgr.load_from_path(path, artifact_types=["feature_config", "feature_names"])
-            >>> feature_config = arts["feature_config"]
-    
-        Access the preprocessor from a loaded model:
-    
-            >>> arts = mgr.load_from_path(path, artifact_types=["model"])
-            >>> pipeline = arts["model"]              # sklearn Pipeline
-            >>> preprocessor = pipeline.steps[0][1]   # (name, transformer) tuple
-            >>> estimator = pipeline.steps[-1][1]     # final estimator
-        """
-        model_dir = Path(model_dir)
-        if not model_dir.is_dir():
-            raise FileNotFoundError(f"Directory not found: {model_dir}")
-    
-        data: Dict[str, Any] = {"base_dir": model_dir}
-    
-        # Load config.json first (always, for context)
-        config_candidates = list(model_dir.glob("config_*.json"))
-        if config_candidates:
-            try:
-                with open(config_candidates[0], "r") as f:
-                    data["config"] = json.load(f)
-            except Exception as e:
-                data["config"] = {"_load_error": str(e)}
-        else:
-            data["config"] = {}
-    
-        # Build the file list to process
-        if artifact_types is not None:
-            files = []
-            for pattern in artifact_types:
-                files.extend(model_dir.glob(f"{pattern}_*"))
-                files.extend(model_dir.glob(f"{pattern}.*"))
-            # Deduplicate while preserving order
-            seen = set()
-            files = [f for f in files if f not in seen and not seen.add(f)]
-        else:
-            files = sorted(model_dir.iterdir())
-    
-        for file_path in files:
-            if not file_path.is_file():
-                continue
-    
-            # Derive artifact key from filename prefix
-            stem = file_path.stem
-            key = stem.split("_")[0]
-    
-            # Handle multi-word prefixes
-            multi_word_prefixes = [
-                "feature_importance", "feature_config", "feature_names",
-                "calibrator",
-            ]
-            for prefix in multi_word_prefixes:
-                if stem.startswith(prefix):
-                    key = prefix
-                    break
-    
-            # Skip if already loaded or if it is a directory artifact
-            if key in data and key != "config":
-                continue
-    
-            try:
-                if file_path.suffix == ".joblib":
-                    loaded = joblib.load(file_path)
-                    if isinstance(loaded, dict) and "model" in loaded:
-                        data["model"] = loaded["model"]
-                        for k, v in loaded.items():
-                            if k != "model" and k not in data:
-                                data[k] = v
-                    else:
-                        data[key] = loaded
-    
-                elif file_path.suffix == ".parquet":
-                    df = pd.read_parquet(file_path)
-                    data[key] = df.squeeze() if df.shape[1] == 1 else df
-    
-                elif file_path.suffix == ".pkl":
-                    with open(file_path, "rb") as f:
-                        data[key] = cloudpickle.load(f)
-    
-                elif file_path.suffix == ".json":
-                    with open(file_path, "r") as f:
-                        data[key] = json.load(f)
-    
-                elif file_path.suffix == ".csv":
-                    data[key] = pd.read_csv(file_path)
-    
-            except Exception as e:
-                data[f"{key}_load_error"] = str(e)
-    
-        return data
-
     def load_artifacts(
         self,
         search_criteria: Optional[Dict[str, str]] = None,
@@ -1045,3 +913,135 @@ class ModelFileManager:
             return groups
 
         return _nest(artifacts, group_by)
+
+    def load_from_path(
+        self,
+        model_dir: Union[str, Path],
+        artifact_types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Load artifacts from a known model directory.
+    
+        This is the fast path for when you already have the directory,
+        skipping the recursive search that load_artifacts() performs.
+    
+        Parameters
+        ----------
+        model_dir : str or Path
+            Path to the model directory (the config-hash leaf folder).
+        artifact_types : list of str, optional
+            Artifact keys to load (e.g., ["model", "metrics"]).
+            If None, loads everything found in the directory.
+    
+        Returns
+        -------
+        dict
+            Loaded artifacts keyed by artifact name.
+    
+        Examples
+        --------
+        Load everything from a known directory:
+    
+            >>> mgr = ModelFileManager(base_dir="./Models")
+            >>> arts = mgr.load_from_path("./Models/my_strat/BTCUSD/.../a1b2c3d4")
+            >>> model = arts["model"]
+            >>> preprocessor = arts["model"].steps[0][1]
+            >>> feature_names = arts.get("feature_names", [])
+    
+        Load only the model and calibrator:
+    
+            >>> arts = mgr.load_from_path(path, artifact_types=["model", "calibrator"])
+    
+        Load just the feature configuration (to rebuild features for new data):
+    
+            >>> arts = mgr.load_from_path(path, artifact_types=["feature_config", "feature_names"])
+            >>> feature_config = arts["feature_config"]
+    
+        Access the preprocessor from a loaded model:
+    
+            >>> arts = mgr.load_from_path(path, artifact_types=["model"])
+            >>> pipeline = arts["model"]              # sklearn Pipeline
+            >>> preprocessor = pipeline.steps[0][1]   # (name, transformer) tuple
+            >>> estimator = pipeline.steps[-1][1]     # final estimator
+        """
+        model_dir = Path(model_dir)
+        if not model_dir.is_dir():
+            raise FileNotFoundError(f"Directory not found: {model_dir}")
+    
+        data: Dict[str, Any] = {"base_dir": model_dir}
+    
+        # Load config.json first (always, for context)
+        config_candidates = list(model_dir.glob("config_*.json"))
+        if config_candidates:
+            try:
+                with open(config_candidates[0], "r") as f:
+                    data["config"] = json.load(f)
+            except Exception as e:
+                data["config"] = {"_load_error": str(e)}
+        else:
+            data["config"] = {}
+    
+        # Build the file list to process
+        if artifact_types is not None:
+            files = []
+            for pattern in artifact_types:
+                files.extend(model_dir.glob(f"{pattern}_*"))
+                files.extend(model_dir.glob(f"{pattern}.*"))
+            # Deduplicate while preserving order
+            seen = set()
+            files = [f for f in files if f not in seen and not seen.add(f)]
+        else:
+            files = sorted(model_dir.iterdir())
+    
+        for file_path in files:
+            if not file_path.is_file():
+                continue
+    
+            # Derive artifact key from filename prefix
+            stem = file_path.stem
+            key = stem.split("_")[0]
+    
+            # Handle multi-word prefixes
+            multi_word_prefixes = [
+                "feature_importance", "feature_config", "feature_names",
+                "calibrator",
+            ]
+            for prefix in multi_word_prefixes:
+                if stem.startswith(prefix):
+                    key = prefix
+                    break
+    
+            # Skip if already loaded or if it is a directory artifact
+            if key in data and key != "config":
+                continue
+    
+            try:
+                if file_path.suffix == ".joblib":
+                    loaded = joblib.load(file_path)
+                    if isinstance(loaded, dict) and "model" in loaded:
+                        data["model"] = loaded["model"]
+                        for k, v in loaded.items():
+                            if k != "model" and k not in data:
+                                data[k] = v
+                    else:
+                        data[key] = loaded
+    
+                elif file_path.suffix == ".parquet":
+                    df = pd.read_parquet(file_path)
+                    data[key] = df.squeeze() if df.shape[1] == 1 else df
+    
+                elif file_path.suffix == ".pkl":
+                    with open(file_path, "rb") as f:
+                        data[key] = cloudpickle.load(f)
+    
+                elif file_path.suffix == ".json":
+                    with open(file_path, "r") as f:
+                        data[key] = json.load(f)
+    
+                elif file_path.suffix == ".csv":
+                    data[key] = pd.read_csv(file_path)
+    
+            except Exception as e:
+                data[f"{key}_load_error"] = str(e)
+    
+        return data
