@@ -318,6 +318,7 @@ class ConfigPathGenerator:
             "report": ".html",
             "log": ".log",
             "strategy": ".pkl",
+            "preprocessor": ".pkl",
         }
 
         extension = extensions.get(file_type, ".dat")
@@ -433,6 +434,7 @@ class ConfigPathGenerator:
         feature_config_filename = self.generate_filename(config, "feature_config")
         feature_names_filename = self.generate_filename(config, "feature_names")
         calibrator_filename = self.generate_filename(config, "calibrator")   # ADDED
+        preprocessor_filename = self.generate_filename(config, "preprocessor")   # ADDED
           
         # One DB per strategy, shared across all symbols/timeframes/configs.
         # Studies are separated by study_name (set in _train_model_optuna).
@@ -458,6 +460,7 @@ class ConfigPathGenerator:
             "weights": base_dir / weights_filename,
             "strategy": base_dir / strategy_filename,
             "calibrator": base_dir / calibrator_filename,   # ADDED
+            "preprocessor": base_dir / preprocessor_filename,   # ADDED
             "logs": base_dir / "logs",
             "plots": base_dir / "plots",
             "reports": base_dir / "reports",
