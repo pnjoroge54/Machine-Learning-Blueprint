@@ -247,7 +247,7 @@ class ConfigPathGenerator:
         self,
         config: dict,
         file_type: str,
-        include_timestamp: bool = True,
+        include_timestamp: bool = False,
         include_config_summary: bool = True,
     ) -> str:
         """
@@ -260,7 +260,7 @@ class ConfigPathGenerator:
         file_type : str
             Type of file (e.g., 'model', 'features', 'events', 'metrics', 'config').
         include_timestamp : bool, optional
-            Include timestamp in filename (default: True).
+            Include timestamp in filename (default: False).
         include_config_summary : bool, optional
             Include config summary in filename (default: True).
 
@@ -420,7 +420,7 @@ class ConfigPathGenerator:
         model_filename = self.create_model_filename(config, model_type)
         model_filename_onnx = model_filename.replace(".joblib", ".onnx")
         config_filename = self.generate_filename(
-            config, "config", include_timestamp=False
+            config, "config"
         )
         metrics_filename = self.generate_filename(config, "metrics")
         features_filename = self.generate_filename(config, "features")
@@ -433,7 +433,7 @@ class ConfigPathGenerator:
         target_config_filename = self.generate_filename(config, "target_config")
         feature_config_filename = self.generate_filename(config, "feature_config")
         feature_names_filename = self.generate_filename(config, "feature_names")
-        calibrator_filename = self.generate_filename(config, "calibrator")   # ADDED
+        calibrator_filename = self.generate_filename(config, "calibrator", include_timestamp=True)   # ADDED
         preprocessor_filename = self.generate_filename(config, "preprocessor")   # ADDED
           
         # One DB per strategy, shared across all symbols/timeframes/configs.
