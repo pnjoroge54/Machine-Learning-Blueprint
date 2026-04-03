@@ -1439,12 +1439,20 @@ class ModelDevelopmentPipeline:
         if self.sample_weight is not None:
             self.file_manager.save_dataframe(self.sample_weight.to_frame("weights"), "weights")
         self.file_manager.save_object(self.metrics, "metrics")
+        # ── NEW: persist feature_config and feature_names ─────────
+        if hasattr(self, "feature_config") and self.feature_config is not None:
+            self.file_manager.save_object(self.feature_config, "feature_config")
+    
+        feature_names = self._get_feature_names()
+        if feature_names:
+            self.file_manager.save_object(feature_names, "feature_names")
+
 
         if self.calibrator_ is not None:
-            # Save the isotonic calibrator map separately for the deployed
+            # Save the calibrator map separately for the deployed
             # ONNX path — apply calibrator_.calibrator_.predict() on raw
             # ONNX model probabilities at inference time.
-            self.file_manager.save_object(self.calibrator_.calibrator_, "isotonic_calibrator")
+            self.file_manager.save_object(self.calibrator_.calibrator_, "calibrator")
 
         if self.export_onnx:
             # Unwrap CalibratorCV before ONNX conversion.
