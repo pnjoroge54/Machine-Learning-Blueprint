@@ -54,6 +54,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss, log_loss
 from sklearn.model_selection import ParameterGrid
+from sklearn.utils.validation import check_is_fitted
 
 # ── afml imports ──────────────────────────────────────────────────────────────
 # Adjust paths to match your project layout.
@@ -89,24 +90,22 @@ class DataPartition:
     Reference: https://www.mql5.com/en/articles/21603 Part II
     """
 
-    X_outer:      pd.DataFrame
-    y_outer:      pd.Series
-    sw_outer:     pd.Series
-    t1_outer:     pd.Series
+    X_outer: pd.DataFrame
+    y_outer: pd.Series
+    sw_outer: pd.Series
+    t1_outer: pd.Series
 
-    X_inner_val:  pd.DataFrame
-    y_inner_val:  pd.Series
+    X_inner_val: pd.DataFrame
+    y_inner_val: pd.Series
     sw_inner_val: pd.Series
 
-    X_final:      pd.DataFrame
-    y_final:      pd.Series
-    sw_final:     pd.Series
+    X_final: pd.DataFrame
+    y_final: pd.Series
+    sw_final: pd.Series
 
     _final_opened: bool = field(default=False, init=False, repr=False)
 
-    def open_final_test(
-        self,
-    ) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
+    def open_final_test(self) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
         """
         Open the Final Test Set. Raises RuntimeError on any subsequent call.
 
@@ -126,11 +125,11 @@ class DataPartition:
 
 
 def partition_data(
-    X:             pd.DataFrame,
-    y:             pd.Series,
-    t1:            pd.Series,
+    X: pd.DataFrame,
+    y: pd.Series,
+    t1: pd.Series,
     sample_weight: pd.Series,
-    inner_val_pct:  float = 0.20,
+    inner_val_pct: float = 0.20,
     final_test_pct: float = 0.20,
 ) -> DataPartition:
     """
@@ -145,20 +144,18 @@ def partition_data(
     inner_val_pct : float   Fraction reserved for inner validation.
     final_test_pct : float  Fraction reserved for the final test.
     """
-    n         = len(X)
+    n = len(X)
     outer_end = int(n * (1.0 - inner_val_pct - final_test_pct))
-    val_end   = int(n * (1.0 - final_test_pct))
+    val_end = int(n * (1.0 - final_test_pct))
 
     return DataPartition(
         X_outer=X.iloc[:outer_end],
         y_outer=y.iloc[:outer_end],
         sw_outer=sample_weight.iloc[:outer_end],
         t1_outer=t1.iloc[:outer_end],
-
         X_inner_val=X.iloc[outer_end:val_end],
         y_inner_val=y.iloc[outer_end:val_end],
         sw_inner_val=sample_weight.iloc[outer_end:val_end],
-
         X_final=X.iloc[val_end:],
         y_final=y.iloc[val_end:],
         sw_final=sample_weight.iloc[val_end:],
@@ -170,22 +167,22 @@ def partition_data(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _INNER_SCORERS = {
-    'neg_brier':   lambda y, p, w: -brier_score_loss(y, p, sample_weight=w),
+    'neg_brier': lambda y, p, w: -brier_score_loss(y, p, sample_weight=w),
     'neg_logloss': lambda y, p, w: -log_loss(y, p, sample_weight=w),
 }
 
 
 def inner_cv_search(
-    X_train:        pd.DataFrame,
-    y_train:        pd.Series,
-    sw_train:       pd.Series,
-    t1_train:       pd.Series,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    sw_train: pd.Series,
+    t1_train: pd.Series,
     estimator,
-    param_grid:     Dict[str, List],
-    n_inner_splits: int   = 3,
-    pct_embargo:    float = 0.01,
+    param_grid: Dict[str, List],
+    n_inner_splits: int = 3,
+    pct_embargo: float = 0.01,
     min_train_size: float = 0.1,
-    scoring:        str   = 'neg_brier',
+    scoring: str = 'neg_brier',
 ) -> Tuple[Dict[str, Any], float, List[Dict]]:
     """
     Anchored walk-forward grid search with Masters' 1-SE rule.
@@ -216,7 +213,7 @@ def inner_cv_search(
         t1=t1_train,
         pct_embargo=pct_embargo,
         expanding_window=True,
-        min_train_size=min_train_size,   # float fraction, NOT int
+        min_train_size=min_train_size,  # float fraction, NOT int
     )
 
     all_scores: List[Dict] = []
@@ -229,11 +226,14 @@ def inner_cv_search(
             clf.set_params(**params)
 
             # iloc indexing — X_train is pd.DataFrame
-            clf.fit(
-                X_train.iloc[tr_idx],
-                y_train.iloc[tr_idx],
-                sample_weight=sw_train.iloc[tr_idx].values,
-            )
+            try:
+                clf.fit(
+                    X_train.iloc[tr_idx],
+                    y_train.iloc[tr_idx],
+                    sample_weight=sw_train.iloc[tr_idx].values,
+                )
+            except TypeError:
+                clf.fit(X_train.iloc[tr_idx], y_train.iloc[tr_idx])
 
             probs = clf.predict_proba(X_train.iloc[val_idx])[:, 1]
             fold_scores.append(
@@ -248,11 +248,11 @@ def inner_cv_search(
             continue
 
         mean_s = float(np.mean(fold_scores))
-        std_s  = float(np.std(fold_scores))
+        std_s = float(np.std(fold_scores))
         all_scores.append({
-            'params':     params,
+            'params': params,
             'mean_score': mean_s,
-            'std_score':  std_s,
+            'std_score': std_s,
         })
 
     if not all_scores:
@@ -263,7 +263,7 @@ def inner_cv_search(
 
     # 1-SE rule: among params within 1 SE of best, prefer simplest (Masters 1995)
     best_entry = max(all_scores, key=lambda x: x['mean_score'])
-    threshold  = best_entry['mean_score'] - best_entry['std_score']
+    threshold = best_entry['mean_score'] - best_entry['std_score']
     within_1se = [s for s in all_scores if s['mean_score'] >= threshold]
 
     # ParameterGrid is ordered (coarser → finer), so within_1se[0] = simplest
@@ -320,39 +320,39 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
     def __init__(
         self,
         estimator,
-        param_grid:        Dict[str, List],
-        n_outer_splits:    int   = 5,
-        n_inner_splits:    int   = 3,
-        pct_embargo:       float = 0.01,
-        min_train_size:    float = 0.1,
-        scoring:           str   = 'neg_brier',
-        inner_val_pct:     float = 0.20,
-        final_test_pct:    float = 0.20,
-        outer_cv_type:     str   = 'walkforward',
-        cpcv_n_folds:      int   = 6,
-        cpcv_n_test_folds: int   = 2,
-        close_prices:      Optional[pd.Series] = None,
-        primary_sides:     Optional[pd.Series] = None,
+        param_grid: Dict[str, List],
+        n_outer_splits: int = 5,
+        n_inner_splits: int = 3,
+        pct_embargo: float = 0.01,
+        min_train_size: float = 0.1,
+        scoring: str = 'neg_brier',
+        inner_val_pct: float = 0.20,
+        final_test_pct: float = 0.20,
+        outer_cv_type: str = 'walkforward',
+        cpcv_n_folds: int = 6,
+        cpcv_n_test_folds: int = 2,
+        close_prices: Optional[pd.Series] = None,
+        primary_sides: Optional[pd.Series] = None,
     ):
-        self.estimator         = estimator
-        self.param_grid        = param_grid
-        self.n_outer_splits    = n_outer_splits
-        self.n_inner_splits    = n_inner_splits
-        self.pct_embargo       = pct_embargo
-        self.min_train_size    = min_train_size
-        self.scoring           = scoring
-        self.inner_val_pct     = inner_val_pct
-        self.final_test_pct    = final_test_pct
-        self.outer_cv_type     = outer_cv_type
-        self.cpcv_n_folds      = cpcv_n_folds
+        self.estimator = estimator
+        self.param_grid = param_grid
+        self.n_outer_splits = n_outer_splits
+        self.n_inner_splits = n_inner_splits
+        self.pct_embargo = pct_embargo
+        self.min_train_size = min_train_size
+        self.scoring = scoring
+        self.inner_val_pct = inner_val_pct
+        self.final_test_pct = final_test_pct
+        self.outer_cv_type = outer_cv_type
+        self.cpcv_n_folds = cpcv_n_folds
         self.cpcv_n_test_folds = cpcv_n_test_folds
-        self.close_prices      = close_prices
-        self.primary_sides     = primary_sides
+        self.close_prices = close_prices
+        self.primary_sides = primary_sides
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
     def _make_outer_cv(
-        self, t1: pd.Series
+        self, t1: pd.Series,
     ) -> Union[PurgedWalkForwardCV, CombinatorialPurgedCV]:
         if self.outer_cv_type == 'cpcv':
             return CombinatorialPurgedCV(
@@ -372,16 +372,19 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
     def _fit_clf(self, estimator, X, y, sw, params):
         clf = clone(estimator)
         clf.set_params(**params)
-        clf.fit(X, y, sample_weight=sw.values)
+        try:
+            clf.fit(X, y, sample_weight=sw.values)
+        except TypeError:
+            clf.fit(X, y)
         return clf
 
     def _oof_for_fold(
         self,
-        X_tr:    pd.DataFrame,
-        y_tr:    pd.Series,
-        sw_tr:   pd.Series,
-        t1_tr:   pd.Series,
-        params:  dict,
+        X_tr: pd.DataFrame,
+        y_tr: pd.Series,
+        sw_tr: pd.Series,
+        t1_tr: pd.Series,
+        params: dict,
     ) -> pd.Series:
         """
         Collect OOF predictions within an outer training fold using
@@ -392,7 +395,7 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
         """
         inner_cv = PurgedWalkForwardCV(
             n_splits=self.n_inner_splits,
-            t1=t1_tr,                    # same index as X_tr after iloc slice
+            t1=t1_tr,  # same index as X_tr after iloc slice
             pct_embargo=self.pct_embargo,
             expanding_window=True,
             min_train_size=self.min_train_size,
@@ -402,11 +405,15 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
         for in_tr, in_val in inner_cv.split(X_tr, y_tr):
             clf_oof = clone(self.estimator)
             clf_oof.set_params(**params)
-            clf_oof.fit(
-                X_tr.iloc[in_tr],
-                y_tr.iloc[in_tr],
-                sample_weight=sw_tr.iloc[in_tr].values,
-            )
+            try:
+                clf_oof.fit(
+                    X_tr.iloc[in_tr],
+                    y_tr.iloc[in_tr],
+                    sample_weight=sw_tr.iloc[in_tr].values,
+                )
+            except TypeError:
+                clf_oof.fit(X_tr.iloc[in_tr], y_tr.iloc[in_tr])
+
             inner_oof.iloc[in_val] = clf_oof.predict_proba(
                 X_tr.iloc[in_val]
             )[:, 1]
@@ -417,9 +424,9 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
 
     def fit(
         self,
-        X:             pd.DataFrame,
-        y:             pd.Series,
-        t1:            pd.Series,
+        X: pd.DataFrame,
+        y: pd.Series,
+        t1: pd.Series,
         sample_weight: pd.Series,
     ) -> "UnifiedValidationCalibrator":
         """
@@ -446,7 +453,7 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
 
         # OOF storage aligned to outer training index
         oof_probs_raw = pd.Series(np.nan, index=dp.X_outer.index)
-        outer_scores:         List[Dict] = []
+        outer_scores: List[Dict] = []
         best_params_per_fold: List[Dict] = []
 
         # ── Outer loop ────────────────────────────────────────────────────
@@ -458,10 +465,10 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
             if self.outer_cv_type == 'cpcv'
             else f"Walk-Forward (n_splits={self.n_outer_splits}, anchored)"
         )
-        print(f"\n{'█'*60}")
+        print(f"\n{'█' * 60}")
         print(f"  OUTER LOOP — {_mode}")
         print(f"  Outer training: {len(dp.X_outer)} obs")
-        print(f"{'█'*60}")
+        print(f"{'█' * 60}")
 
         # CPCV yields (train_idx, test_idx_LIST) — list of arrays per test fold.
         # Walk-forward yields (train_idx, test_idx) — flat arrays.
@@ -471,23 +478,23 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
         for fold_num, split_output in enumerate(split_iter):
             if self.outer_cv_type == 'cpcv':
                 tr_idx, test_idx_list = split_output
-                te_idx = np.concatenate(test_idx_list)  # ← flatten list of arrays
+                te_idx = np.concatenate(test_idx_list)
             else:
                 tr_idx, te_idx = split_output
 
-            print(f"\n{'─'*55}")
-            print(f"  Outer fold {fold_num+1}  |  "
+            print(f"\n{'─' * 55}")
+            print(f"  Outer fold {fold_num + 1}  |  "
                   f"Train: {len(tr_idx)}  |  Test: {len(te_idx)}")
-            print(f"{'─'*55}")
+            print(f"{'─' * 55}")
 
             # iloc slice — preserves pd.DataFrame/Series with original index
-            X_tr  = dp.X_outer.iloc[tr_idx]
-            y_tr  = dp.y_outer.iloc[tr_idx]
+            X_tr = dp.X_outer.iloc[tr_idx]
+            y_tr = dp.y_outer.iloc[tr_idx]
             sw_tr = dp.sw_outer.iloc[tr_idx]
-            t1_tr = dp.t1_outer.iloc[tr_idx]   # same index as X_tr ✓
+            t1_tr = dp.t1_outer.iloc[tr_idx]
 
-            X_te  = dp.X_outer.iloc[te_idx]
-            y_te  = dp.y_outer.iloc[te_idx]
+            X_te = dp.X_outer.iloc[te_idx]
+            y_te = dp.y_outer.iloc[te_idx]
             sw_te = dp.sw_outer.iloc[te_idx]
 
             # ── Inner search ───────────────────────────────────────────────
@@ -511,7 +518,7 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
             valid = inner_oof.notna()
             if valid.sum() < 5:
                 warnings.warn(
-                    f"Fold {fold_num+1}: only {valid.sum()} valid inner OOF obs."
+                    f"Fold {fold_num + 1}: only {valid.sum()} valid inner OOF obs."
                 )
             cal = IsotonicRegression(out_of_bounds='clip', increasing=True)
             cal.fit(
@@ -530,37 +537,34 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
 
             b_raw = brier_score_loss(y_te, raw_te, sample_weight=sw_te.values)
             b_cal = brier_score_loss(y_te, cal_te, sample_weight=sw_te.values)
-            l_raw = log_loss(y_te, raw_te,  sample_weight=sw_te.values)
-            l_cal = log_loss(y_te, cal_te,  sample_weight=sw_te.values)
+            l_raw = log_loss(y_te, raw_te, sample_weight=sw_te.values)
+            l_cal = log_loss(y_te, cal_te, sample_weight=sw_te.values)
 
             outer_scores.append({
-                'fold':        fold_num + 1,
-                'params':      best_params,
-                'brier_raw':   b_raw,
-                'brier_cal':   b_cal,
+                'fold': fold_num + 1,
+                'params': best_params,
+                'brier_raw': b_raw,
+                'brier_cal': b_cal,
                 'logloss_raw': l_raw,
                 'logloss_cal': l_cal,
-                'n_train':     len(tr_idx),
-                'n_test':      len(te_idx),
+                'n_train': len(tr_idx),
+                'n_test': len(te_idx),
             })
             print(f"  Brier  raw={b_raw:.4f}  cal={b_cal:.4f}")
             print(f"  LogLoss raw={l_raw:.4f}  cal={l_cal:.4f}")
 
         # ── CPCV: path Sharpe distribution via CPCVAnalyzer ──────────────
         if self.outer_cv_type == 'cpcv':
-            print(f"\n  Running CPCVAnalyzer path analysis …")
-            # CPCVAnalyzer requires close_prices — this is the afml actual API
+            print("\n  Running CPCVAnalyzer path analysis …")
             self.cpcv_analyzer_ = CPCVAnalyzer(
                 estimator=clone(self.estimator),
                 cv_gen=outer_cv,
-                close_prices=self.close_prices,   # required — not optional
+                close_prices=self.close_prices,
             )
             self.cpcv_analyzer_.fit_predict(
                 dp.X_outer, dp.y_outer,
                 sample_weight=dp.sw_outer,
             )
-            # get_distribution_metrics() requires primary_sides pd.Series
-            # for meta-labelling. primary_sides contains +1/-1 direction signals.
             if self.primary_sides is not None:
                 dist_metrics = self.cpcv_analyzer_.get_distribution_metrics(
                     primary_sides=self.primary_sides.loc[dp.X_outer.index],
@@ -575,7 +579,7 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
                 )
 
         # ── Consensus params + final calibrator ──────────────────────────
-        param_strs    = [str(p) for p in best_params_per_fold]
+        param_strs = [str(sorted(p.items())) for p in best_params_per_fold]
         consensus_str = Counter(param_strs).most_common(1)[0][0]
         consensus_params = best_params_per_fold[param_strs.index(consensus_str)]
         print(f"\n  Consensus params: {consensus_params}")
@@ -604,26 +608,26 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
         inner_b_c = brier_score_loss(
             dp.y_inner_val, inner_cal, sample_weight=dp.sw_inner_val.values
         )
-        print(f"\n{'▶'*55}")
+        print(f"\n{'▶' * 55}")
         print(f"  INNER VALIDATION  (shortlisting checkpoint — do NOT retune)")
         print(f"  Brier  raw={inner_b_r:.4f}  cal={inner_b_c:.4f}")
-        print(f"{'▶'*55}")
+        print(f"{'▶' * 55}")
 
         # Final model on Outer + Inner Val
-        X_all  = pd.concat([dp.X_outer, dp.X_inner_val])
-        y_all  = pd.concat([dp.y_outer, dp.y_inner_val])
+        X_all = pd.concat([dp.X_outer, dp.X_inner_val])
+        y_all = pd.concat([dp.y_outer, dp.y_inner_val])
         sw_all = pd.concat([dp.sw_outer, dp.sw_inner_val])
 
         self.estimator_ = self._fit_clf(
             self.estimator, X_all, y_all, sw_all, consensus_params
         )
 
-        self.outer_scores_         = outer_scores
+        self.outer_scores_ = outer_scores
         self.best_params_per_fold_ = best_params_per_fold
-        self.consensus_params_     = consensus_params
-        self.inner_val_brier_      = {'raw': inner_b_r, 'cal': inner_b_c}
-        self.oof_probs_raw_        = oof_probs_raw
-        self.classes_              = np.unique(dp.y_outer.values)
+        self.consensus_params_ = consensus_params
+        self.inner_val_brier_ = {'raw': inner_b_r, 'cal': inner_b_c}
+        self.oof_probs_raw_ = oof_probs_raw
+        self.classes_ = np.unique(dp.y_outer.values)
 
         return self
 
@@ -634,42 +638,44 @@ class UnifiedValidationCalibrator(BaseEstimator, ClassifierMixin):
         Open and score the Final Test Set — EXACTLY ONCE.
         RuntimeError is raised on any subsequent call (Masters discipline).
         """
+        check_is_fitted(self, ["estimator_", "calibrator_"])
         X_f, y_f, sw_f = self.partition_.open_final_test()
 
         raw = self.estimator_.predict_proba(X_f)[:, 1]
         cal = np.clip(self.calibrator_.predict(raw), 0.0, 1.0)
 
         result = {
-            'brier_raw':     brier_score_loss(y_f, raw, sample_weight=sw_f.values),
-            'brier_cal':     brier_score_loss(y_f, cal, sample_weight=sw_f.values),
-            'logloss_raw':   log_loss(y_f, raw, sample_weight=sw_f.values),
-            'logloss_cal':   log_loss(y_f, cal, sample_weight=sw_f.values),
-            'raw_probs':     raw,
-            'cal_probs':     cal,
-            'y_true':        y_f,
+            'brier_raw': brier_score_loss(y_f, raw, sample_weight=sw_f.values),
+            'brier_cal': brier_score_loss(y_f, cal, sample_weight=sw_f.values),
+            'logloss_raw': log_loss(y_f, raw, sample_weight=sw_f.values),
+            'logloss_cal': log_loss(y_f, cal, sample_weight=sw_f.values),
+            'raw_probs': raw,
+            'cal_probs': cal,
+            'y_true': y_f,
             'sample_weight': sw_f,
         }
 
-        print(f"\n{'!'*60}")
-        print(f"  FINAL TEST SET — OPENED (evaluation now committed)")
+        print(f"\n{'!' * 60}")
+        print("  FINAL TEST SET — OPENED (evaluation now committed)")
         print(f"  Brier  raw={result['brier_raw']:.4f}  "
               f"cal={result['brier_cal']:.4f}")
         print(f"  LogLoss raw={result['logloss_raw']:.4f}  "
               f"cal={result['logloss_cal']:.4f}")
-        print(f"{'!'*60}")
+        print(f"{'!' * 60}")
 
         return result
 
     def outer_scores_summary(self) -> pd.DataFrame:
+        check_is_fitted(self, ["outer_scores_"])
         return pd.DataFrame(self.outer_scores_)
 
     # ── Inference ─────────────────────────────────────────────────────────
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        check_is_fitted(self, ["estimator_", "calibrator_"])
         raw = self.estimator_.predict_proba(X)[:, 1]
         cal = np.clip(self.calibrator_.predict(raw), 0.0, 1.0)
         return np.column_stack([1.0 - cal, cal])
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
-
