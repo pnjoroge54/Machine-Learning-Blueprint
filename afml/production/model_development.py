@@ -1447,7 +1447,12 @@ class ModelDevelopmentPipeline:
         if feature_names:
             self.file_manager.save_object(feature_names, "feature_names")
 
+        if hasattr(self, "preprocessor") and self.preprocessor is not None:
+            self.file_manager.save_object(self.preprocessor, "preprocessor")
 
+        if hasattr(self, "target_config") and self.target_config is not None:
+            self.file_manager.save_object(self.target_config, "target_config")
+    
         if self.calibrator_ is not None:
             # Save the calibrator map separately for the deployed
             # ONNX path — apply calibrator_.calibrator_.predict() on raw
