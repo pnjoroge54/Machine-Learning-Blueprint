@@ -433,7 +433,7 @@ class ConfigPathGenerator:
         target_config_filename = self.generate_filename(config, "target_config")
         feature_config_filename = self.generate_filename(config, "feature_config")
         feature_names_filename = self.generate_filename(config, "feature_names")
-        calibrator_filename = self.generate_filename(config, "calibrator", include_timestamp=True)   # ADDED
+        calibrator_filename = f"Calibrator_{model_filename}"   # ADDED
         preprocessor_filename = self.generate_filename(config, "preprocessor")   # ADDED
           
         # One DB per strategy, shared across all symbols/timeframes/configs.
