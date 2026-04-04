@@ -106,7 +106,6 @@ def fit_platt_scaling(
         Fitted LogisticRegression calibrator
     """
     X_calib = np.asarray(scores_calib).reshape(-1, 1)
-    # platt = make_custom_pipeline(LogisticRegression(C=C, solver=solver, max_iter=max_iter))
     platt = LogisticRegression(C=C, solver=solver, max_iter=max_iter)
     platt.fit(X_calib, y_calib, sample_weight=sample_weight)
     return platt
@@ -352,7 +351,7 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
             )
             
 
-        X_split, y_split = X, y
+        X_, y_ = X, y
         X = check_array(X, ensure_min_samples=2)
         y = check_array(y, ensure_min_samples=2, ensure_2d=False, dtype="int").ravel()
 
@@ -376,7 +375,7 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
         # ── Phase 1: OOF predictions ──────────────────────────────────────
         oof_probs = np.full(n_samples, np.nan)
 
-        for _, (train_idx, test_idx) in enumerate(self.cv_.split(X_split, y_split)):
+        for _, (train_idx, test_idx) in enumerate(self.cv_.split(X_, y_)):
             X_train, X_test = X[train_idx], X[test_idx]
             y_train         = y[train_idx]
             sw_train        = sample_weight[train_idx]
