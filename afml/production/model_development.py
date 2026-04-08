@@ -545,8 +545,7 @@ def get_optimal_sample_weight(
             scheme, best_score, best_scheme, cv_results,
         )
         if i == len(weights):
-            pbar1.set_description(f"Analyzed {sorted(list(weights.keys())} /nBest scheme: {best_scheme} ({scoring}={best_score:.4f})")
-            
+            pbar1.set_description(f"Analyzed {sorted(list(weights.keys()))} \nBest scheme: {best_scheme} ({scoring}={best_score:.4f})")
 
     best_weight  = weights[best_scheme]
     linear_search = [1, 0] if linear is None else ([1] if linear else [0])
