@@ -15,11 +15,12 @@ from optuna import TrialPruned, create_study
 from optuna.exceptions import StorageInternalError
 from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPruner
 from optuna.samplers import TPESampler
+
 from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, log_loss
 from sklearn.pipeline import Pipeline
-
+from pprint import pformat
 from .cross_validation import PurgedKFold
 from ..production.weighted_estimator import _WeightedEstimator
 from ..util.pipelines import MyPipeline
@@ -431,7 +432,7 @@ def optimize_trading_model(
 
 def print_best_trial(study, trial):
     if study.best_trial.number == trial.number:
-        print(f"\n🎯 New best trial #{trial.number} | Score: {trial.value:.4f}")
+        print(f"\n🎯 New best trial #{trial.number + 1} | Score: {trial.value:.4f} \n{pformat(trial.params)}")
 
 
 def save_intermediate_results(study, trial):
