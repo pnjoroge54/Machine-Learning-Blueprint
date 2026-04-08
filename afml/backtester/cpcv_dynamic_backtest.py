@@ -427,7 +427,7 @@ class CPCVDynamicBacktest:
             values near 0.5 indicate the result is consistent with chance.
         """
         try:
-            from afml.cross_validation.combinatorial import compute_pbo
+            from ..cross_validation.pbo import compute_pbo
         except ImportError:
             raise ImportError(
                 "compute_pbo not found. Ensure the Unified Validation Pipeline "
