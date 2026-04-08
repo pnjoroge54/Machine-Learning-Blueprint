@@ -347,7 +347,7 @@ class CPCVDynamicBacktest:
         # the φ paths are reconstructed by recombining fold OOF predictions.
         # Each element of paths is a list of (train_idx, test_idx) tuples —
         # one per fold within that path.
-        paths = list(self.cv_gen.split_paths(X, y))
+        paths = list(self.cv_gen.split(X, y))
 
         self.results_ = Parallel(n_jobs=self.cfg.n_jobs)(
             delayed(simulate_path)(
