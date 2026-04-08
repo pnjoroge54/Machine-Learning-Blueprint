@@ -816,7 +816,7 @@ class ModelDevelopmentPipeline:
             format="{time} | {name} | {level} | {message}", rotation="10 MB",
         )
         logger.add(
-            lambda msg: tqdm_write(msg, ""),
+            lambda msg: tqdm.write(msg, end=""),
             format="<green>{time:YYYY-MM-DD HH:mm:ss:ms}</green> | "
                    "<level>{level: <8}</level> | "
                    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
