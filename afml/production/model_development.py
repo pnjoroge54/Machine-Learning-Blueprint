@@ -134,12 +134,6 @@ from ..util.misc import date_conversion, value_counts_data
 from ..util.pipelines import make_custom_pipeline, set_pipeline_params, MyPipeline
 from .file_manager import ModelFileManager
 
-
-# Define a sink that uses tqdm.write
-def tqdm_sink(msg):
-    tqdm.write(msg, end="")  # end="" avoids double newlines
-
-
 # ============================================================================
 # Cached data helpers
 # ============================================================================
@@ -550,9 +544,13 @@ def get_optimal_sample_weight(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
+        logger.info(f"Finished {scheme} with score: {cv_results[scheme].mean():.4f}")  
         if i == len(weights):
-            pbar1.set_description(f"Analyzed {sorted(list(weights.keys()))} | Best scheme: {best_scheme} ({scoring}={best_score:.4f})")
-
+            pbar1.set_postfix({
+                "best": best_scheme,
+                "score": f"{best_score:.4f}"
+            })
+            
     best_weight  = weights[best_scheme]
     linear_search = [1, 0] if linear is None else ([1] if linear else [0])
 
@@ -576,9 +574,13 @@ def get_optimal_sample_weight(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
+        logger.info(f"Finished {scheme} with score: {cv_results[scheme].mean():.4f}")  
         if i == len(time_decay_weights):
-            pbar2.set_description(f"Analyzed time-decay factors {sorted(list(decay_factors))} | Best scheme: {best_scheme} ({scoring}={best_score:.4f})")
-
+            pbar2.set_postfix({
+                "best": best_scheme,
+                "score": f"{best_score:.4f}"
+            })
+        
     weights.update(time_decay_weights)
     cv_results_dict = {
         "best_score":  float(best_score),
@@ -812,9 +814,9 @@ class ModelDevelopmentPipeline:
         logger.add(
             self.log_file, level="INFO",
             format="{time} | {name} | {level} | {message}", rotation="10 MB",
-        
+        )
         logger.add(
-            tqdm_sink,
+            lambda msg: tqdm_write(msg, ""),
             format="<green>{time:YYYY-MM-DD HH:mm:ss:ms}</green> | "
                    "<level>{level: <8}</level> | "
                    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
