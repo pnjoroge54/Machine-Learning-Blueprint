@@ -324,6 +324,21 @@ class CombinatorialPurgedCV(BaseCrossValidator):
                 path_ids[i, j] = int(np.argwhere(recombined == i)[j][1])
         return path_ids
 
+    def split_paths(self, X, y=None, groups=None):
+        """Yield each combinatorial backtest path as a list of (train, test) per fold."""
+        # Generate all splits once (cached)
+        splits = list(self.split(X, y, groups))  # each element: (train_idx, test_idx_list)
+        for path_id in range(self.n_test_paths):
+            path_splits = []
+            for fold_id in range(self.n_folds):
+                # Find which split uses this fold as test and belongs to this path
+                split_idx = self.recombined_paths[fold_id, path_id]  # shape (n_folds, n_test_paths)
+                train, test_list = splits[split_idx]
+                # The test_list contains arrays for each test fold; find the one for this fold
+                test_idx = test_list[list(self.test_set_index[split_idx]).index(fold_id)]
+                path_splits.append((train, test_idx))
+            yield path_splits
+
     # ------------------------------------------------------------------
     # Core split
     # ------------------------------------------------------------------
