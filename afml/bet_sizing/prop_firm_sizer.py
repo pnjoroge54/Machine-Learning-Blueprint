@@ -36,8 +36,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
-from afml.bet_sizing.bet_sizing import bet_size_probability
-from afml.bet_sizing.ch10_snippets import get_w, bet_size_sigmoid
+from ..bet_sizing.bet_sizing import bet_size_probability
+from ..bet_sizing.ch10_snippets import get_w, bet_size_sigmoid
 
 
 # ── Phase enumeration ─────────────────────────────────────────────────────────
