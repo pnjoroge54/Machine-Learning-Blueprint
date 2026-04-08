@@ -447,7 +447,8 @@ class CPCVDynamicBacktest:
       # This satisfies the interface requirement; pct_embargo is set to 0.0 inside compute_pbo.
       t1_neutral = pd.Series(returns_matrix.index, index=returns_matrix.index)
   
-      pbo = compute_pbo(returns_matrix, t1=t1_neutral, n_folds=n_folds)
+      result = compute_pbo(returns_matrix, t1=t1_neutral, n_folds=n_folds)
+      pbo = result["pbo"]
       print(f"\n  PBO (CSCV, S={n_folds}): {pbo:.4f}")
       return pbo
       
