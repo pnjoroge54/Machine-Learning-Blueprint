@@ -432,7 +432,7 @@ def optimize_trading_model(
 
 def print_best_trial(study, trial):
     if study.best_trial.number == trial.number:
-        print(f"\n🎯 New best trial #{trial.number} | Score: {trial.value:.4f} \n{pformat(trial.params)}")
+        print(f"\n🎯 New best trial #{trial.number} | Score: {trial.value:.4f} \n{pformat(trial.params)} \n")
 
 
 def save_intermediate_results(study, trial):
@@ -488,9 +488,8 @@ def plot_model_vs_baseline(study, y, events, metric=None):
     else:
         # F1 baseline: majority-class predictor evaluated with sample weights.
         # If majority is class 0 the baseline F1 for the positive class is 0.
-        majority_class = probs.idxmax()
-        y_naive = np.full(len(y), fill_value=majority_class)
-        baseline_score = f1_score(y, y_naive, sample_weight=w, zero_division=0)
+        positive_class = 1
+        baseline_score = probs[positive_class] if positive_class in probs.index else 0.0
         baseline_label = f"Majority-Class Baseline (F1 = {baseline_score:.3f})"
         score_label = "Weighted F1 Score (Higher is Better)"
         metric_display = "F1"
