@@ -537,7 +537,7 @@ def get_optimal_sample_weight(
     cv_results = pd.DataFrame()
     scoring    = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
     
-    pbar1 = tqdm(weights.items(), total=len(weights), mininterval=1.0, leave=False)
+    pbar1 = tqdm(weights.items(), total=len(weights), mininterval=1.0)
     for i, (scheme, weight) in enumerate(pbar1, 1):
         pbar1.set_description(f"Analyzing {scheme} weighting scheme")
         best_score, best_scheme, cv_results = best_weighting_scheme(
