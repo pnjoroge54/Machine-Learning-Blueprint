@@ -486,10 +486,8 @@ def plot_model_vs_baseline(study, y, events, metric=None):
         score_label = "Weighted Log-Loss Score (Higher is Better)"
         metric_display = "Log-Loss"
     else:
-        # F1 baseline: majority-class predictor evaluated with sample weights.
-        # If majority is class 0 the baseline F1 for the positive class is 0.
-        positive_class = 1
-        baseline_score = probs[positive_class] if positive_class in probs.index else 0.0
+        # The weighted prevalence of the positive class
+        baseline_score = probs.get(1, 0.0) 
         baseline_label = f"Majority-Class Baseline (F1 = {baseline_score:.3f})"
         score_label = "Weighted F1 Score (Higher is Better)"
         metric_display = "F1"
