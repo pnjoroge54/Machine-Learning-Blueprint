@@ -410,43 +410,47 @@ class CPCVDynamicBacktest:
         return df
 
     def pbo_audit(self, n_folds: int = 8) -> float:
-        """
-        Compute the Probability of Backtest Overfitting (CSCV) from path returns.
-
-        Delegates to compute_pbo from the Unified Validation Pipeline module.
-
-        Parameters
-        ----------
-        n_folds : int
-            Number of subsets S for CSCV (typically 8–16).
-
-        Returns
-        -------
-        float
-            PBO in [0, 1]. Values near 0 indicate low overfitting risk;
-            values near 0.5 indicate the result is consistent with chance.
-        """
-        try:
-            from ..cross_validation.pbo import compute_pbo
-        except ImportError:
-            raise ImportError(
-                "compute_pbo not found. Ensure the Unified Validation Pipeline "
-                "module is installed in afml.cross_validation.combinatorial."
-            )
-
-        if not self.results_:
-            raise RuntimeError("Call run() before pbo_audit().")
-
-        # Build returns matrix: columns = paths, rows = bars
-        returns_matrix = pd.concat(
-            [r.returns.rename(r.path_id) for r in self.results_],
-            axis=1,
-        ).fillna(0.0)
-
-        pbo = compute_pbo(returns_matrix, n_folds=n_folds)
-        print(f"\n  PBO (CSCV, S={n_folds}): {pbo:.4f}")
-        return pbo
-
+      """
+      Compute the Probability of Backtest Overfitting (CSCV) from path returns.
+  
+      Delegates to compute_pbo from the Unified Validation Pipeline module.
+  
+      Parameters
+      ----------
+      n_folds : int
+          Number of subsets S for CSCV (typically 8–16).
+  
+      Returns
+      -------
+      float
+          PBO in [0, 1]. Values near 0 indicate low overfitting risk;
+          values near 0.5 indicate the result is consistent with chance.
+      """
+      try:
+          from ..cross_validation.pbo import compute_pbo
+      except ImportError:
+          raise ImportError(
+              "compute_pbo not found. Ensure the Unified Validation Pipeline "
+              "module is installed in afml.cross_validation.combinatorial."
+          )
+  
+      if not self.results_:
+          raise RuntimeError("Call run() before pbo_audit().")
+  
+      # Build returns matrix: columns = paths, rows = bars
+      returns_matrix = pd.concat(
+          [r.returns.rename(r.path_id) for r in self.results_],
+          axis=1,
+      ).fillna(0.0)
+  
+      # Create a neutral t1 series aligned with the returns_matrix index.
+      # This satisfies the interface requirement; pct_embargo is set to 0.0 inside compute_pbo.
+      t1_neutral = pd.Series(returns_matrix.index, index=returns_matrix.index)
+  
+      pbo = compute_pbo(returns_matrix, t1=t1_neutral, n_folds=n_folds)
+      print(f"\n  PBO (CSCV, S={n_folds}): {pbo:.4f}")
+      return pbo
+      
     def plot_equity_distribution(
         self,
         figsize: tuple[float, float] = (7.5, 4.5),
