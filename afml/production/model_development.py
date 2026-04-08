@@ -544,7 +544,6 @@ def get_optimal_sample_weight(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
-        logger.info(f"Finished {scheme} with score: {cv_results[scheme].mean():.4f}")  
         if i == len(weights):
             pbar1.set_postfix({
                 "best": best_scheme,
@@ -574,7 +573,6 @@ def get_optimal_sample_weight(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
-        logger.info(f"Finished {scheme} with score: {cv_results[scheme].mean():.4f}")  
         if i == len(time_decay_weights):
             pbar2.set_postfix({
                 "best": best_scheme,
