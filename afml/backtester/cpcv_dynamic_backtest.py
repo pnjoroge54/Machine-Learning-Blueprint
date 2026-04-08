@@ -32,8 +32,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.base import clone
 
-from afml.cross_validation.combinatorial import CombinatorialPurgedCV
-from afml.bet_sizing.prop_firm_sizer import PropFirmAccountState, PropFirmAwareSizer, Phase
+from ..cross_validation.combinatorial import CombinatorialPurgedCV
+from ..bet_sizing.prop_firm_sizer import PropFirmAccountState, PropFirmAwareSizer, Phase
 
 
 # ── Backtest configuration ────────────────────────────────────────────────────
