@@ -39,7 +39,7 @@ def calculate_ticks_per_period(
     num_rounded = int(round(num_ticks))
 
     # Round dynamically based on magnitude
-    num_digits = len(str(num_rounded)) - 1
+    num_digits = max(3, len(str(num_rounded)) - 1)
     rounded_ticks = int(round(num_rounded, -num_digits))
     rounded_ticks = max(10, rounded_ticks)  # Make 10 ticks the minimum bar size
 
