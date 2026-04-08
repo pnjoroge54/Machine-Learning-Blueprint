@@ -61,16 +61,6 @@ Key AFML Methodologies Implemented:
    metrics are fed back into the model, allowing it to adapt to changing
    market regimes and its own recent performance.
 
-Performance Optimizations:
--------------------------
-- Numba JIT Compilation: High-frequency rolling metrics and weight attributions
-  are offloaded to parallelized C-level code for maximum throughput.
-- Time-Aware Caching: Utilizes a custom hashing mechanism to ensure that
-  feature engineering and data loading are only re-computed when the
-  underlying data or parameters change, effectively eliminating look-ahead bias.
-- Memory Management: Efficient use of Parquet for artifact storage and
-  DataFrame pruning via constant and duplicate feature removal.
-
 Pipeline Workflow:
 -----------------
 1. Data Loading: Fetches tick data and constructs specialized bars.
@@ -84,6 +74,18 @@ Pipeline Workflow:
 7. Calibration (optional): Wraps best_model in CalibratorCV to correct
    systematic overconfidence before position sizing.
 8. Reporting: Generates HTML summaries and hyperparameter importance reports.
+
+Meta-Labeling Flow:
+------------------
+Primary models (is_primary=True or auto-detected) can hand off to a secondary
+pipeline via prepare_meta_labeling_inputs(), which returns the events DataFrame
+annotated with the primary model's predicted side column. Pass the result
+directly as the `events` argument when constructing the secondary pipeline.
+
+When strategy=None the pipeline uses every bar as a potential entry point with
+no directional side signal, producing a symmetric triple-barrier label space
+(bin ∈ {-1, 0, 1}). This is the correct default for a purely ML-driven pipeline
+with no pre-defined entry logic.
 """
 
 import inspect
@@ -110,7 +112,7 @@ from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
 from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
-from ..calibration.calibration import CalibratorCV   # ← NEW
+from ..calibration.calibration import CalibratorCV
 from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
 from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
@@ -256,7 +258,7 @@ def create_feature_engineering_pipeline(
 @cacheable(time_aware=True, auto_versioning=False)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
-    strategy: BaseStrategy,
+    strategy: Optional[BaseStrategy],
     target_config: dict,
     profit_target: float = 1,
     stop_loss: float = 1,
@@ -272,10 +274,15 @@ def generate_events_triple_barrier(
     ----------
     data : pd.DataFrame
         Price bars with 'close' column.
-    strategy : BaseStrategy
-        Strategy instance implementing `generate_signals()`.
-    target_config : int
-        Lookback window for volatility estimation.
+    strategy : BaseStrategy or None
+        Strategy instance implementing `generate_signals()`. When None, every
+        bar in `data` is treated as a potential entry point and no directional
+        side signal is applied, producing a symmetric label space
+        (bin ∈ {-1, 0, 1}).
+    target_config : dict
+        Volatility target configuration.
+        - func: Volatility target function
+        - params: Function parameters
     profit_target : float, default=1
         Profit-taking threshold multiplier.
     stop_loss : float, default=1
@@ -293,10 +300,11 @@ def generate_events_triple_barrier(
     -------
     pd.DataFrame
         Event labels with columns:
-        - 'bin' : {-1, 0, 1} classification
+        - 'bin' : {-1, 0, 1} for primary; {0, 1} for secondary (meta-label)
         - 't1'  : vertical barrier timestamps
         - 'w'   : sample weights
         - 'tW'  : uniqueness weights
+        - 'side': directional signal (only present for secondary models)
 
     Notes
     -----
@@ -307,25 +315,32 @@ def generate_events_triple_barrier(
         close=data["close"], df=data, data=data, prices=data,
     )
     close = data["close"]
-    target_func = target_config["func"]
+    target_func   = target_config["func"]
     target_params = target_config["params"].copy()
 
     sig = inspect.signature(target_func)
     for key in sig.parameters.keys():
         if key not in target_params:
-            target_params[key] = data_dict[key]
+            target_params[key] = data_dict.get(key)
 
     try:
         target = target_func(**target_params)
     except Exception as e:
         print(e)
 
-    if strategy.get_objective() == "mean_reversion":
-        filter_threshold = target if filter_as_series else target.mean()
+    # ── Entry generation ──────────────────────────────────────────────────────
+    if strategy is None:
+        # No pre-defined signal: use every bar as a candidate entry.
+        # side=None → symmetric triple-barrier (bin ∈ {-1, 0, 1}).
+        side     = None
+        t_events = close.index
     else:
-        filter_threshold = None
+        if strategy.get_objective() == "mean_reversion":
+            filter_threshold = target if filter_as_series else target.mean()
+        else:
+            filter_threshold = None
+        side, t_events = get_entries(strategy, data, filter_threshold)
 
-    side, t_events = get_entries(strategy, data, filter_threshold)
     vb = add_vertical_barrier(t_events, close, **max_holding_period)
 
     events = triple_barrier_labels(
@@ -394,10 +409,9 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     Generates self-referential 'Meta-Features' for the model.
 
     By observing its own recent performance metrics as input features, the
-    primary model can learn to 'size down' or avoid trades during periods
-    where its recent accuracy or F1-score is declining (Meta-Labeling concept).
+    secondary model can learn to size down or avoid trades during periods
+    where the primary model's recent accuracy or F1-score is declining.
     """
-
     y_true  = events["bin"].to_numpy(np.int8)
     y_pred  = np.ones(len(y_true), dtype=np.int8)
     weights = sample_weight.to_numpy(np.float32)
@@ -406,14 +420,16 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     for window in window_sizes:
         if window > len(y_true):
             continue
-        accuracy, precision, recall, f1 = _rolling_metrics_numba(y_true, y_pred, weights, window)
+        accuracy, precision, recall, f1 = _rolling_metrics_numba(
+            y_true, y_pred, weights, window
+        )
         metrics[f"rolling_accuracy_{window}"]  = accuracy
         metrics[f"rolling_precision_{window}"] = precision
         metrics[f"rolling_recall_{window}"]    = recall
         metrics[f"rolling_f1_{window}"]        = f1
 
     return metrics.dropna()
-    
+
 
 @cacheable(time_aware=True, auto_versioning=False)
 def best_weighting_scheme(
@@ -478,7 +494,7 @@ def get_optimal_sample_weight(
     events : pd.DataFrame
         Event labels with uniqueness weights.
     features: pd.DataFrame
-        Training features
+        Training features.
     n_splits : int, optional
         Number of cross-validation splits (default: 5).
     linear : bool, optional
@@ -494,11 +510,10 @@ def get_optimal_sample_weight(
     cv_results : dict
         Cross-validation results.
     """
-
     valid_index = features.dropna().index.intersection(events.index)
     cont = events.loc[valid_index]
-    X = features.loc[valid_index]
-    y = cont["bin"]
+    X    = features.loc[valid_index]
+    y    = cont["bin"]
 
     classifier = RandomForestClassifier(
         criterion="entropy",
@@ -513,21 +528,22 @@ def get_optimal_sample_weight(
     cv_gen = PurgedKFold(n_splits=n_splits, t1=cont["t1"], pct_embargo=0.01)
 
     weights = {
-        "return":      cont["w"],
-        "unweighted":  pd.Series(1.0, index=cont.index),
-        "uniqueness":  cont["tW"],
+        "return":     cont["w"],
+        "unweighted": pd.Series(1.0, index=cont.index),
+        "uniqueness": cont["tW"],
     }
 
     best_score, best_scheme = 0, None
     cv_results = pd.DataFrame()
-    scoring = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+    scoring    = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
 
     for scheme, weight in tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights)):
         best_score, best_scheme, cv_results = best_weighting_scheme(
-            clone(classifier), X, y, cv_gen, scoring, weight, weights["return"], scheme, best_score, best_scheme, cv_results
+            clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
+            scheme, best_score, best_scheme, cv_results,
         )
 
-    best_weight = weights[best_scheme]
+    best_weight  = weights[best_scheme]
     linear_search = [1, 0] if linear is None else ([1] if linear else [0])
 
     time_decay_weights = {}
@@ -544,10 +560,11 @@ def get_optimal_sample_weight(
             time_decay_weights[scheme] = best_weight * decay_vec
 
     pbar = tqdm(time_decay_weights.items(), total=len(time_decay_weights))
-    for i,(scheme, weight) in enumerate(pbar, 1):
+    for i, (scheme, weight) in enumerate(pbar, 1):
         pbar.set_description(f"Analyzing time-decay {scheme}")
         best_score, best_scheme, cv_results = best_weighting_scheme(
-            clone(classifier), X, y, cv_gen, scoring, weight, weights["return"], scheme, best_score, best_scheme, cv_results
+            clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
+            scheme, best_score, best_scheme, cv_results,
         )
         if i == len(time_decay_weights):
             pbar.set_description(f"Analyzed time-decay factors {sorted(list(decay_factors))}")
@@ -580,21 +597,30 @@ class ModelDevelopmentPipeline:
     - Backend Switching: Transparently toggles between Scikit-learn (Grid)
       and Optuna (Bayesian) optimization based on 'use_optuna' config.
     - Artifact Management: Automatically organizes models, parquet data,
-      and HTML reports into a versioned directory structure.
+      and HTML reports into a versioned directory structure. The model
+      filename is prefixed with the bagging wrapper type (sbag/bag/plain)
+      so artifacts are immediately distinguishable in the file system.
     - Calibration (optional): Wraps the trained model in CalibratorCV
       to correct systematic overconfidence before downstream bet sizing.
     - Analysis: Triggers feature importance calculation and automated
       contamination reports after every successful run.
+
+    Meta-Labeling:
+    - Primary models (is_primary=True or auto-detected) can hand off to a
+      secondary pipeline via prepare_meta_labeling_inputs().
+    - strategy=None instructs the pipeline to use every bar as a candidate
+      entry point with no directional signal (symmetric barriers).
     """
 
     def __init__(
         self,
-        strategy: BaseStrategy,
         data_config: dict,
         feature_config: dict,
         target_config: dict,
         label_config: dict,
         model_params: dict,
+        strategy: Optional[BaseStrategy] = None,
+        is_primary: Optional[bool] = None,
         base_dir: str = "Models",
     ):
         """
@@ -605,160 +631,181 @@ class ModelDevelopmentPipeline:
         data_config : dict
             Bar construction configuration.
             - symbol : str
-                Trading instrument symbol.
-            - start_date : str
-                Training start date ('YYYY-MM-DD').
-            - end_date : str
-                Training end date ('YYYY-MM-DD').
+            - start_date : str  ('YYYY-MM-DD')
+            - end_date : str    ('YYYY-MM-DD')
             - account_name : str
-                Name of trading account
-            - bar_type : str
-                Type of bar ('tick', 'volume', 'time').
-            - bar_size : str
-                Bar size specification (e.g., 'M1', 'M5').
-            - price : str
-                Price type ('bid', 'ask', 'mid_price', 'bid_ask').
+            - bar_type : str    ('tick', 'volume', 'time')
+            - bar_size : str    (e.g. 'M1', 'M5')
+            - price : str       ('bid', 'ask', 'mid_price', 'bid_ask')
             - path : Union[str, Path] = None
-                Path to data folder. If None uses default, Path.home() / "tick_data_parquet"
-        strategy : BaseStrategy
-            Signal generating strategy.
+        strategy : BaseStrategy or None, optional
+            Signal-generating strategy.  When None every bar is treated as a
+            potential entry point and no directional side signal is applied,
+            producing a symmetric label space (bin ∈ {-1, 0, 1}).  Pass a
+            concrete strategy only when entry timing or direction comes from a
+            rule-based signal (e.g. moving-average crossover for meta-labeling).
         feature_config : dict
-            Feature engineering configuration.
             - func: Feature engineering function
             - params: Function parameters
         target_config : dict
-            Volatility target configuration.
             - func: Volatility target function
             - params: Function parameters
         label_config : dict
-            Triple-barrier labeling configuration.
             - profit_target : float
             - stop_loss : float
-            - max_holding_period : int
+            - max_holding_period : dict
             - min_ret : float
             - vertical_barrier_zero : bool
             - filter_as_series : bool
         model_params : dict
-            Model training configuration.
-                - pipe_clf : BaseEstimator or sklearn.pipeline.Pipeline or MyPipeline
-                    A BaseEstimator or Pipeline containing preprocessing and classification steps.
-                - param_grid : dict or list of dicts
-                    Hyperparameter grid for search. Keys should include pipeline step
-                    names as prefixes (e.g., 'classifier__max_depth').
-                - n_splits : int, default=5
-                    Number of folds for purged k-fold cross-validation.
-                - bagging_n_estimators : int, default=0
-                    Number of base estimators in bagging ensemble. If 0, no bagging
-                    is applied and the best single estimator is returned. If > 0,
-                    returns a BaggingClassifier fitted on the full dataset.
-                - bagging_max_samples : float or int, default=1.0
-                    For bagging: fraction (if float in (0, 1]) or number (if int) of
-                    samples to draw for each base estimator.
-                - bagging_max_features : float or int, default=1.0
-                    For bagging: fraction (if float in (0, 1]) or number (if int) of
-                    features to draw for each base estimator.
-                - rnd_search_iter : int, default=0
-                    If 0, uses GridSearchCV (exhaustive search). If > 0, uses
-                    RandomizedSearchCV with this many iterations.
-                - n_jobs : int, default=-1
-                    Number of parallel jobs. -1 uses all available cores.
-                - pct_embargo : float, default=0.02
-                    Percentage of samples to embargo in test folds to prevent leakage
-                    from serially correlated labels. Range: [0, 1).
-                - random_state : int, RandomState instance or None, default=None
-                    Random state for reproducibility.
-                - use_optuna : bool, default=False
-                    Toggles Bayesian HPO (True) vs. Grid/Random Search (False).
-                - n_trials : (int, if Optuna=True)
-                    Number of Optuna trials.
-                - timeout : (int, if Optuna=True)
-                    Time limit in seconds for HPO.
-                - pruner_type : (str, if Optuna=True, default="hyperband")
-                    Model used for pruning. Options are "hyperband" and "median".
-                    If any other value, SuccessiveHalvingPruner is used.
-                - verbose : int, default=0
-                    Controls verbosity of output.
-        base_dir: str
-            Path to save pipeline data
+            - pipe_clf : BaseEstimator or Pipeline or MyPipeline
+            - param_grid : dict or list of dicts
+            - n_splits : int, default=5
+            - bagging_n_estimators : int, default=0
+            - bagging_sequential : bool, default=False
+            - bagging_max_samples : float or int, default=1.0
+            - bagging_max_features : float or int, default=1.0
+            - rnd_search_iter : int, default=0
+            - n_jobs : int, default=-1
+            - pct_embargo : float, default=0.02
+            - random_state : int or None, default=None
+            - use_optuna : bool, default=False
+            - n_trials : int  (Optuna only)
+            - timeout : int   (Optuna only)
+            - pruner_type : str, default='hyperband'
+            - verbose : int, default=0
+        is_primary : bool or None, optional
+            Explicit role override.
+            - True  → treat as primary model regardless of events content.
+            - False → treat as secondary (meta-labeling) model.
+            - None  → auto-detect: primary if 'side' not in events.columns
+                       (default, preserves original behaviour).
+        base_dir : str
+            Root directory for saved artifacts.
         """
+        self.data_config    = data_config
+        self.symbol         = data_config["symbol"]
+        self.train_start    = data_config["start_date"]
+        self.train_end      = data_config["end_date"]
+        self.strategy       = strategy
+        self.feature_config = feature_config
+        self.label_config   = label_config
+        self.target_config  = target_config
+        self.account_name   = data_config.get("account_name", "default")
+        self.pipeline_version = "4.3"
+        self.model_params   = model_params
 
-        self.data_config   = data_config
-        self.symbol        = data_config["symbol"]
-        self.train_start   = data_config["start_date"]
-        self.train_end     = data_config["end_date"]
-        self.strategy      = strategy
-        self.feature_config= feature_config
-        self.label_config  = label_config
-        self.target_config = target_config
-        self.account_name  = data_config.get("account_name", "default")
-        self.pipeline_version = "4.2"
-        self.model_params  = model_params
+        # Explicit is_primary override; None means auto-detect in generate_labels.
+        self._is_primary_override = is_primary
 
         self.config = data_config.copy()
         self.config["training_start"] = self.config.pop("start_date")
         self.config["training_end"]   = self.config.pop("end_date")
-        self.config["strategy"]       = strategy.get_strategy_name()
+        self.config["strategy"]       = (
+            strategy.get_strategy_name() if strategy is not None else "ml_driven"
+        )
         self.config["feature_func"]   = feature_config["func"].__name__
         self.config["feature_params"] = feature_config["params"]
         self.config["target_func"]    = target_config["func"].__name__
         self.config["target_params"]  = target_config["params"]
         self.config.update(label_config)
 
-        self.bar_data               = None
-        self.features               = None
-        self.events                 = None
-        self.sample_weight          = None
-        self.best_weighting_scheme  = None
-        self.meta_features          = None
-        self.preprocessed_features  = None
-        self.preprocessor           = None   # fitted DropConstant+DropDuplicate
-        self.best_model             = None
-        self.calibrator_            = None   # ← NEW: CalibratorCV (if calibrate=True)
-        self.cv_results             = None
-        self.weight_cv_results      = None
-        self.feature_importance     = None
-        self.metrics                = None
-        self.study                  = None
-        self.is_primary             = None
-        self.display                = None
+        # ── State ─────────────────────────────────────────────────────────────
+        self.bar_data              = None
+        self.features              = None
+        self.events                = None
+        self.sample_weight         = None
+        self.best_weighting_scheme = None
+        self.meta_features         = None
+        self.preprocessed_features = None
+        self.preprocessor          = None
+        self.best_model            = None
+        self.calibrator_           = None
+        self.cv_results            = None
+        self.weight_cv_results     = None
+        self.feature_importance    = None
+        self.metrics               = None
+        self.study                 = None
+        self.is_primary            = None   # resolved in generate_labels()
+        self.display               = None
         self.calibrate             = None
 
+        # ── Model type: bagging wrapper prefix + base estimator token ─────────
+        # The wrapper prefix is computed here — it depends only on model_params
+        # and is therefore stable for the lifetime of this instance.  It is
+        # prepended to the base estimator token so the model filename in the
+        # file system immediately identifies the ensemble strategy used.
+        #
+        # Examples:  sbag_rf  |  bag_rf  |  plain_rf
+        #
         if isinstance(model_params["pipe_clf"], Pipeline):
-            model = model_params["pipe_clf"].steps[-1][1]
+            _base_model = model_params["pipe_clf"].steps[-1][1]
         else:
-            model = model_params["pipe_clf"]
+            _base_model = model_params["pipe_clf"]
 
-        self.model_type  = get_model_type(model)
-        self.file_manager= ModelFileManager(base_dir)
-        self.file_paths  = self.file_manager.setup_model_directory(self.config, self.model_type)
+        self.model_type = f"{self._bagging_wrapper}_{get_model_type(_base_model)}"
+
+        self.file_manager = ModelFileManager(base_dir)
+        self.file_paths   = self.file_manager.setup_model_directory(
+            self.config, self.model_type
+        )
 
         self.decay_factors = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9]
 
         self.completed_steps = {
-            "data_loading":     False,
+            "data_loading":        False,
             "feature_engineering": False,
-            "label_generation": False,
-            "weight_computation": False,
-            "meta_features":    False,
-            "model_training":   False,
-            "calibration":      False,   # ← NEW
-            "analysis":         False,
+            "label_generation":    False,
+            "weight_computation":  False,
+            "meta_features":       False,
+            "model_training":      False,
+            "calibration":         False,
+            "analysis":            False,
         }
 
         self.log_file = self.file_paths["logs"] / "pipeline.log"
         self._setup_logging()
         self.n_splits = model_params["n_splits"]
 
+    # ── Properties ────────────────────────────────────────────────────────────
+
+    @property
+    def _bagging_wrapper(self) -> str:
+        """
+        Canonical three-state label for the bagging wrapper in use.
+
+        Computed purely from model_params so it is available from __init__
+        onward.  Used as a prefix on model_type (and therefore on the saved
+        model filename) so artifacts are immediately distinguishable without
+        opening them.
+
+        Returns
+        -------
+        str
+            'sbag'  — SequentiallyBootstrappedBaggingClassifier
+            'bag'   — standard BaggingClassifier
+            'plain' — no bagging; base estimator used directly
+        """
+        sequential   = self.model_params.get("bagging_sequential", False)
+        n_estimators = self.model_params.get("bagging_n_estimators", 0)
+        if sequential and n_estimators > 0:
+            return "sbag"
+        if n_estimators > 0:
+            return "bag"
+        return "plain"
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+
     def _setup_logging(self):
         logger.remove()
-        logger.add(self.log_file, level="INFO",
-                   format="{time} | {name} | {level} | {message}", rotation="10 MB")
+        logger.add(
+            self.log_file, level="INFO",
+            format="{time} | {name} | {level} | {message}", rotation="10 MB",
+        )
         logger.add(lambda msg: tqdm.write(msg, end=""), level="DEBUG", colorize=True)
         self.logger = logger.bind(context=self.__class__.__name__)
 
-    # ------------------------------------------------------------------
-    # run()
-    # ------------------------------------------------------------------
+    # ── run() ─────────────────────────────────────────────────────────────────
 
     def run(
         self,
@@ -766,8 +813,8 @@ class ModelDevelopmentPipeline:
         cache_reports:    bool = False,
         save:             bool = True,
         export_onnx:      bool = False,
-        calibrate:        bool = False,   # ← NEW
-        display:          bool = False,   # ← NEW
+        calibrate:        bool = False,
+        display:          bool = False,
         verbose:          bool = True,
     ) -> Tuple:
         """
@@ -786,28 +833,28 @@ class ModelDevelopmentPipeline:
         calibrate : bool, optional
             Fit CalibratorCV on OOF predictions after training.
             When True, self.best_model is replaced with the fitted calibrator,
-            so predict_proba() returns calibrated probabilities directly.
-            self.calibrator_ is populated for post-hoc diagnostics.
-            Default: False.
+            so all downstream calls to best_model.predict_proba() return
+            calibrated probabilities.  Default: False.
         display : bool, optional
             Display the hyperparameter analysis report inline in a Jupyter
-            notebook using IPython.display. When False, the report is still
-            saved to disk as a Markdown file.  Default: False.
+            notebook using IPython.display.  Default: False.
         verbose : bool, optional
             Print progress information (default: True).
 
         Returns
         -------
         tuple
-            (best_model, features_columns, metrics, config)
+            (best_model, feature_columns, metrics, config)
         """
-        time0 = time.time()
-        self.export_onnx = export_onnx
+        time0      = time.time()
         use_optuna = self.model_params.get("use_optuna", False)
 
         if verbose:
             print("\n" + "=" * 70)
-            print(f"PRODUCTION MODEL DEVELOPMENT PIPELINE (Backend: {'Optuna' if use_optuna else 'sklearn'})")
+            print(
+                f"PRODUCTION MODEL DEVELOPMENT PIPELINE "
+                f"(Backend: {'Optuna' if use_optuna else 'sklearn'})"
+            )
             print("=" * 70)
 
         try:
@@ -819,7 +866,7 @@ class ModelDevelopmentPipeline:
             self.preprocess_features()
             self.train_model()
 
-            # ── Calibration (optional) ──────────────────────────────────────
+            # ── Calibration (optional) ────────────────────────────────────────
             self.calibrate = calibrate
             if calibrate:
                 self.calibrate_model()
@@ -831,7 +878,8 @@ class ModelDevelopmentPipeline:
                 self._generate_analysis_reports(display=display)
             if cache_reports:
                 self._display_cache_reports()
-            if (save or self.export_onnx) and self.best_model is not None:
+            if (save or export_onnx) and self.best_model is not None:
+                self.export_onnx = export_onnx
                 try:
                     self._save_all_artifacts()
                 except Exception as e:
@@ -839,32 +887,49 @@ class ModelDevelopmentPipeline:
                     raise
 
             if verbose:
-                print(f"\n✓ Completed in {pd.Timedelta(seconds=time.time()-time0).round('1s')}")
+                elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
+                print(f"\n✓ Completed in {elapsed}")
+
             return self.best_model, self._get_feature_names(), self.metrics, self.config
 
         except Exception as e:
             logger.error(f"Pipeline failed: {e}")
             raise
 
-    # ------------------------------------------------------------------
-    # Pipeline steps
-    # ------------------------------------------------------------------
+    # ── Pipeline steps ────────────────────────────────────────────────────────
 
     def load_training_data(self):
         self.bar_data = load_and_prepare_training_data(**self.data_config)
         self.completed_steps["data_loading"] = True
 
     def engineer_features(self):
-        self.features = create_feature_engineering_pipeline(self.bar_data, self.feature_config, self.data_config)
+        self.features = create_feature_engineering_pipeline(
+            self.bar_data, self.feature_config, self.data_config
+        )
         self.completed_steps["feature_engineering"] = True
 
     def generate_labels(self):
+        """
+        Apply the triple-barrier method and resolve the model's role.
+
+        Role resolution order:
+        1. If ``_is_primary_override`` was set at construction, use it.
+        2. Otherwise auto-detect: primary when 'side' is absent from events.
+        """
         self.events = generate_events_triple_barrier(
             self.bar_data, self.strategy, self.target_config, **self.label_config
         )
-        self.is_primary = 'side' not in self.events.columns
-        self.config['model_role'] = 'primary' if self.is_primary else 'secondary'
-        logger.info(f"Model role: {self.config['model_role']} | Label space: {np.unique(self.events['bin']).tolist()}")
+
+        if self._is_primary_override is not None:
+            self.is_primary = self._is_primary_override
+        else:
+            self.is_primary = "side" not in self.events.columns
+
+        self.config["model_role"] = "primary" if self.is_primary else "secondary"
+        logger.info(
+            f"Model role: {self.config['model_role']} | "
+            f"Label space: {np.unique(self.events['bin']).tolist()}"
+        )
         logger.info(f"Average uniqueness: ({self.events['tW'].mean():.4f})")
         self.completed_steps["label_generation"] = True
 
@@ -876,20 +941,30 @@ class ModelDevelopmentPipeline:
         self.best_weighting_scheme = self.weight_cv_results["best_scheme"]
         logger.info(f"best_weighting_scheme: {self.best_weighting_scheme}")
         self.completed_steps["weight_computation"] = True
-    
+
     def add_meta_features(self):
+        """
+        Append rolling performance meta-features for secondary models.
+
+        Primary models skip this step — they have no prior predictions to
+        reference.  Secondary (meta-labeling) models receive rolling accuracy,
+        precision, recall, and F1 metrics derived from the primary model's
+        label outcomes, allowing the secondary to adapt to changing regimes.
+        """
         if self.is_primary:
             self.meta_features = pd.DataFrame(index=self.events.index)
-            logger.info("Primary model detected — rolling meta-features skipped.")
+            logger.info("Primary model — rolling meta-features skipped.")
         else:
-            self.meta_features = calculate_rolling_metrics(self.events, self.sample_weight)
+            self.meta_features = calculate_rolling_metrics(
+                self.events, self.sample_weight
+            )
         self.completed_steps["meta_features"] = True
 
     def preprocess_features(self):
         if self.meta_features.empty:
             combined = self.features.dropna()
         else:
-            combined = self.features.join(self.meta_features, how='inner').dropna()
+            combined = self.features.join(self.meta_features, how="inner").dropna()
 
         self.preprocessor = Pipeline([
             ("dcf", DropConstantFeatures()),
@@ -902,45 +977,35 @@ class ModelDevelopmentPipeline:
         """
         Dispatch to the appropriate HPO backend.
 
-        When use_optuna=True:
-            - optimize_trading_model is called with the base estimator and events.
-            - FinancialModelSuggester wraps it in _WeightedEstimator per trial.
-            - weight_scheme, weight_decay, and weight_linear are jointly optimized.
-            - Return-attribution weights (events['w']) always used for scoring.
-            - self.study is populated for post-study visualization.
-
-        When use_optuna=False:
-            - clf_hyper_fit_cached is called with the pre-computed sample_weight.
-            - Behavior is identical to the original pipeline.
-
-        In both paths, when bagging_sequential=True:
-            - HPO tunes the base classifier without any bagging wrapper.
-            -  is applied post-HPO using
-              the tuned base estimator, events['t1'], and bar_data.index.
+        The Optuna study optimises the base estimator's hyperparameters only.
+        The bagging wrapper (if any) is applied post-HPO using the tuned base
+        estimator.  Because bagging is not part of the optimisation loop the
+        wrapper type does not affect the study name or config hash — a single
+        study's trials are valid priors regardless of which wrapper is
+        subsequently applied.
 
         Post-dispatch (both paths):
-            - The fitted preprocessor (DropConstant + DropDuplicate) is prepended
-              to best_model so that sklearn inference is fully self-contained.
-            - NOTE: for ONNX export, the preprocessor step is stripped from
-              best_model before conversion — DropConstantFeatures and
-              DropDuplicateFeatures have no ONNX operator mapping. Apply
-              self.preprocessor.transform() as a standalone step before
-              passing data to the deployed ONNX model. See _save_all_artifacts.
+            The fitted preprocessor (DropConstant + DropDuplicate) is prepended
+            to best_model so that sklearn inference is fully self-contained.
+            NOTE: for ONNX export the preprocessor step is stripped before
+            conversion.  Apply self.preprocessor.transform() as a standalone
+            step before passing data to the deployed ONNX model.
         """
-        self.model_params['pipe_clf'] = make_custom_pipeline(self.model_params['pipe_clf'])
-        pipe = clone(self.model_params['pipe_clf'])
+        self.model_params["pipe_clf"] = make_custom_pipeline(self.model_params["pipe_clf"])
+        pipe = clone(self.model_params["pipe_clf"])
 
-        bagging_n_estimators = self.model_params.get('bagging_n_estimators', 0)
-
+        bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
         if bagging_n_estimators > 0:
-            if self.model_params.get('bagging_max_samples') is None:
-                av_uniqueness = self.events['tW'].mean().round(2)
-                self.model_params['bagging_max_samples'] = av_uniqueness
-                logger.info(f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})")
-        
-        self.model_params['pipe_clf'] = pipe
+            if self.model_params.get("bagging_max_samples") is None:
+                av_uniqueness = self.events["tW"].mean().round(2)
+                self.model_params["bagging_max_samples"] = av_uniqueness
+                logger.info(
+                    f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})"
+                )
 
-        if self.model_params.get('use_optuna', False):
+        self.model_params["pipe_clf"] = pipe
+
+        if self.model_params.get("use_optuna", False):
             self._train_model_optuna()
         else:
             self._train_model_sklearn()
@@ -950,9 +1015,7 @@ class ModelDevelopmentPipeline:
             *self.best_model.steps,
         ])
         self.best_model = set_pipeline_params(self.best_model, n_jobs=-1)
-        self.completed_steps['model_training'] = True
-
-    # ── NEW: calibrate_model ────────────────────────────────────────────────
+        self.completed_steps["model_training"] = True
 
     def calibrate_model(self) -> None:
         """
@@ -963,23 +1026,20 @@ class ModelDevelopmentPipeline:
         isotonic map are generated without temporal leakage.
 
         After this method returns:
-        - self.best_model is replaced with the fitted CalibratorCV,
-          so all downstream calls to best_model.predict_proba() return
-          calibrated probabilities.
-        - self.calibrator_ holds the CalibratorCV instance for
-          post-hoc diagnostics (e.g. reliability diagram, Brier score
-          comparison, access to calibrator_.oof_probs_).
+        - self.best_model is replaced with the fitted CalibratorCV so all
+          downstream calls to best_model.predict_proba() return calibrated
+          probabilities.
+        - self.calibrator_ holds the CalibratorCV instance for post-hoc
+          diagnostics (reliability diagram, Brier score, oof_probs_).
 
         Notes
         -----
-        ONNX export: CalibratorCV is not ONNX-compatible. When
-        export_onnx=True, _save_all_artifacts() unwraps the calibrator and
-        exports the inner estimator (self.calibrator_.estimator_). At
-        deployment time, apply calibrator_.calibrator_.predict() as a
-        post-processing step on the ONNX model's raw probabilities.
+        ONNX export: CalibratorCV is not ONNX-compatible.  When export_onnx=True,
+        _save_all_artifacts() unwraps the calibrator and exports the inner
+        estimator (self.calibrator_.estimator_).
         """
-        X = self.preprocessed_features.loc[self.events.index]
-        y = self.events["bin"]
+        X             = self.preprocessed_features.loc[self.events.index]
+        y             = self.events["bin"]
         sample_weight = self.sample_weight.loc[self.events.index]
         pct_embargo   = self.model_params.get("pct_embargo", 0.01)
 
@@ -999,23 +1059,80 @@ class ModelDevelopmentPipeline:
             (self.calibrator_.oof_probs_[~np.isnan(self.calibrator_.oof_probs_)]
              - y.values[~np.isnan(self.calibrator_.oof_probs_)]) ** 2
         ))
-        logger.info(
-            f"CalibratorCV fitted. "
-            f"OOF Brier score: {oof_brier:.4f}"
-        )
+        logger.info(f"CalibratorCV fitted.  OOF Brier score: {oof_brier:.4f}")
 
-        # Replace best_model so downstream inference uses calibrated probs
         self.best_model = self.calibrator_
         self.completed_steps["calibration"] = True
 
+    # ── Meta-labeling handoff ─────────────────────────────────────────────────
+
+    def prepare_meta_labeling_inputs(self) -> pd.DataFrame:
+        """
+        Produce the events DataFrame annotated with the primary model's
+        predicted side, ready for consumption by a secondary pipeline.
+
+        The secondary pipeline detects 'side' in events.columns and switches
+        to binary meta-labeling (bin ∈ {0, 1}).  The side signal is derived
+        from the primary model's calibrated (or raw) probabilities:
+
+            side = +1  where P(positive class) >= 0.5
+            side = -1  otherwise
+
+        Usage
+        -----
+        >>> meta_events = primary_pipeline.prepare_meta_labeling_inputs()
+        >>> secondary = ModelDevelopmentPipeline(
+        ...     data_config    = data_config,
+        ...     feature_config = feature_config,
+        ...     target_config  = target_config,
+        ...     label_config   = {**label_config, "events": meta_events},
+        ...     model_params   = secondary_model_params,
+        ...     is_primary     = False,
+        ... )
+
+        Returns
+        -------
+        pd.DataFrame
+            Copy of self.events with an additional 'side' column
+            (values ∈ {-1, +1}).
+
+        Raises
+        ------
+        RuntimeError
+            If the pipeline has not completed training, or if called on a
+            secondary model.
+        """
+        if self.best_model is None:
+            raise RuntimeError(
+                "Pipeline must complete training before calling "
+                "prepare_meta_labeling_inputs()."
+            )
+        if not self.is_primary:
+            raise RuntimeError(
+                "prepare_meta_labeling_inputs() is only valid for primary models."
+            )
+
+        X = self.preprocessed_features.loc[self.events.index]
+        proba = self.best_model.predict_proba(X)
+
+        # The last column is always P(positive class) for both binary and
+        # ternary label spaces under sklearn's sorted-classes convention.
+        side = np.where(proba[:, -1] >= 0.5, 1, -1)
+
+        meta_events = self.events.copy()
+        meta_events["side"] = side
+        return meta_events
+
+    # ── Private training backends ─────────────────────────────────────────────
+
     def _train_model_sklearn(self):
-        bagging_sequential = self.model_params.get('bagging_sequential', False)
-        bagging_n = self.model_params.get('bagging_n_estimators', 0)
+        bagging_sequential = self.model_params.get("bagging_sequential", False)
+        bagging_n          = self.model_params.get("bagging_n_estimators", 0)
         sample_weight_train = self.sample_weight.loc[self.events.index]
         sample_weight_score = self.events["w"].loc[sample_weight_train.index]
 
         included = inspect.signature(clf_hyper_fit_cached).parameters.keys()
-        params = {k: v for k, v in self.model_params.items() if k in included}
+        params   = {k: v for k, v in self.model_params.items() if k in included}
 
         if bagging_sequential and bagging_n > 0:
             params["bagging_n_estimators"] = 0
@@ -1043,8 +1160,8 @@ class ModelDevelopmentPipeline:
 
     def _train_model_optuna(self):
         X, y    = self.preprocessed_features, self.events["bin"]
-        base_clf= self.model_params['pipe_clf'].steps[-1][1]
-        metric  = 'f1' if set(y.unique()) == {0, 1} else 'neg_log_loss'
+        base_clf = self.model_params["pipe_clf"].steps[-1][1]
+        metric   = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
 
         included   = inspect.signature(optimize_trading_model).parameters.keys()
         opt_params = {"metric": metric}
@@ -1054,29 +1171,26 @@ class ModelDevelopmentPipeline:
             elif k in included:
                 opt_params[k] = v
 
-        # ── Study name ───────────────────────────────────────────────────
-        # Human-readable prefix identifies the study in the dashboard.
-        # The 8-char config hash makes the key unique when any parameter
-        # that affects the optimization surface changes.
-        _bagging_sequential   = self.model_params.get("bagging_sequential", False)
-        _bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
-
-        if _bagging_sequential and _bagging_n_estimators > 0:
-            _wrapper = "sbag"
-        elif _bagging_n_estimators > 0:
-            _wrapper = "bag"
-        else:
-            _wrapper = "plain"
-
+        # ── Study name ────────────────────────────────────────────────────────
+        # Tokens that change the Optuna optimization surface:
+        #   strategy  — determines entry set and label distribution
+        #   symbol    — different instruments have different dynamics
+        #   bar_type/size — sampling frequency changes autocorrelation structure
+        #   role      — primary (ternary) vs secondary (binary) label space
+        #   config hash — catches all remaining surface dimensions (CV protocol,
+        #                 search space shape, barrier params, target function)
+        #
+        # The bagging wrapper is intentionally omitted: HPO optimises the base
+        # estimator only; bagging is applied post-study.  A study's trials are
+        # valid priors regardless of which wrapper is subsequently applied.
         _role        = "pri" if self.is_primary else "sec"
         _config_hash = self._get_study_config_hash(metric=metric)
 
         opt_params["study_name"] = (
-            f"{self.strategy.get_strategy_name()}"
+            f"{self.config['strategy']}"
             f"_{self.symbol}"
             f"_{self.data_config.get('bar_type', 'unk')}"
             f"{self.data_config.get('bar_size', 'unk')}"
-            f"_{_wrapper}"
             f"_{_role}"
             f"_s{_config_hash}"
         )
@@ -1102,17 +1216,17 @@ class ModelDevelopmentPipeline:
         )
 
         logger.info(
-            f"Optuna complete. \nBest score: {self.study.best_value:.4f}"
+            f"Optuna complete.\nBest score: {self.study.best_value:.4f}"
             f"\nBest params: {pformat(self.study.best_params)}"
         )
-        best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
 
-        bagging_sequential   = self.model_params.get('bagging_sequential', False)
-        bagging_n_estimators = self.model_params.get('bagging_n_estimators', 0)
-        bagging_max_samples  = self.model_params.get('bagging_max_samples', 1.0)
-        bagging_max_features = self.model_params.get('bagging_max_features', 1.0)
-        n_jobs               = self.model_params.get('n_jobs', -1)
-        random_state         = self.model_params.get('random_state', None)
+        best_estimator   = make_custom_pipeline(self.study.best_estimator_.base_estimator)
+        bagging_sequential   = self.model_params.get("bagging_sequential", False)
+        bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
+        bagging_max_samples  = self.model_params.get("bagging_max_samples", 1.0)
+        bagging_max_features = self.model_params.get("bagging_max_features", 1.0)
+        n_jobs               = self.model_params.get("n_jobs", -1)
+        random_state         = self.model_params.get("random_state", None)
 
         if bagging_sequential and bagging_n_estimators > 0:
             self.best_model = self._apply_sequential_bagging(
@@ -1130,88 +1244,61 @@ class ModelDevelopmentPipeline:
                 random_state=random_state,
             )
             bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
-            self.best_model = Pipeline([('bag', bag)])
+            self.best_model = Pipeline([("bag", bag)])
         else:
             self.best_model = best_estimator
 
         pruner_type = self.model_params.get("pruner_type", "hyperband")
         self.cv_results = {
-            'best_params':         self.study.best_params,
-            'best_score':          self.study.best_value,
-            'cv_results':          cv_results_df,
-            'scoring':             metric,
-            'search_method':       'optuna',
-            'pruner_type':         pruner_type,
-            'n_trials_completed':  len([t for t in self.study.trials if t.state.name == 'COMPLETE']),
-            'n_trials_pruned':     len([t for t in self.study.trials if t.state.name == 'PRUNED']),
+            "best_params":        self.study.best_params,
+            "best_score":         self.study.best_value,
+            "cv_results":         cv_results_df,
+            "scoring":            metric,
+            "search_method":      "optuna",
+            "pruner_type":        pruner_type,
+            "n_trials_completed": len([t for t in self.study.trials if t.state.name == "COMPLETE"]),
+            "n_trials_pruned":    len([t for t in self.study.trials if t.state.name == "PRUNED"]),
         }
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # PATCH 2 — Replace _get_study_config_hash entirely
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ── Config hash ───────────────────────────────────────────────────────────
 
     def _get_study_config_hash(self, metric: str = "") -> str:
         """
-        Return an 8-character SHA-256 prefix that uniquely identifies the
+        Return an 8-character SHA-256 prefix uniquely identifying the
         combination of parameters that determines the Optuna study's
-        optimization surface.
+        optimisation surface.
 
-        Every dimension that, if changed, should produce a fresh study is
-        included. Resuming an existing study is correct only when the
-        optimization surface is identical to the one those trials explored.
+        Resuming an existing study is only correct when the optimisation
+        surface is identical to the one those trials explored.  Every
+        dimension that, if changed, should produce a fresh study is included.
 
         Covered dimensions
         ------------------
-        bagging
-            Wrapper type (sequential / standard / none) and its parameters.
-            A SequentiallyBootstrappedBaggingClassifier uses a different
-            sampling distribution from BaggingClassifier; HPO results from
-            one are not valid priors for the other.
-
         model
-            Base classifier type and its constructor parameters. Changing
-            the estimator class or a structural hyperparameter (e.g.
-            criterion) changes the response surface.
-
+            Base classifier type and constructor parameters.
         search
-            Sorted list of search space keys. Adding or removing a
-            hyperparameter from the grid changes the dimensionality of the
-            space; existing trials become incomplete records and corrupt
-            the TPE surrogate.
-
+            Sorted list of search-space keys.  Adding or removing a
+            hyperparameter changes the dimensionality of the space; existing
+            trials become incomplete records and corrupt the TPE surrogate.
         cv
-            n_splits and pct_embargo. Different fold counts or embargo
-            fractions produce systematically different CV scores for the
-            same hyperparameter configuration.
-
+            n_splits and pct_embargo.
         metric
-            'f1' (binary label space) or 'neg_log_loss' (ternary).
-            Different objectives are not comparable; mixing trials from
-            both corrupts the study direction.
-
+            'f1' (binary) or 'neg_log_loss' (ternary).
         role
-            'primary' vs 'secondary'. Primary and secondary models
-            optimize on different label spaces (ternary vs binary {0, 1})
-            and different training sets (all events vs meta-labeled events).
-
+            'primary' vs 'secondary'.
         label
-            All label_config fields serialized by value. pt_sl, min_ret,
-            max_holding_period, and any other barrier parameters change the
-            label distribution and therefore the optimization surface.
-            Callable values (e.g. function references) are recorded by
-            their __name__ so the hash remains deterministic.
-
+            All label_config fields.
         target
-            Volatility target function name and parameters. These affect
-            the barrier distance computation and therefore the label
-            distribution.
+            Volatility target function name and parameters.
+
+        Note: bagging configuration is intentionally excluded.  HPO optimises
+        the base estimator only; the wrapper applied afterwards does not change
+        the optimisation surface.
 
         Parameters
         ----------
         metric : str
-            Scoring metric passed to optimize_trading_model. Computed in
-            _train_model_optuna before this method is called and passed
-            explicitly to avoid re-derivation.
+            Scoring metric passed to optimize_trading_model.
 
         Returns
         -------
@@ -1219,39 +1306,26 @@ class ModelDevelopmentPipeline:
             8-character lowercase hex string (SHA-256 prefix).
         """
         import hashlib
-        import json
 
-        # ── 1. Bagging wrapper ────────────────────────────────────────────
-        bagging_config = {
-            "sequential":   self.model_params.get("bagging_sequential", False),
-            "n_estimators": self.model_params.get("bagging_n_estimators", 0),
-            "max_samples":  self.model_params.get("bagging_max_samples",  1.0),
-            "max_features": self.model_params.get("bagging_max_features", 1.0),
-        }
-
-        # ── 2. Base classifier ────────────────────────────────────────────
+        # ── 1. Base classifier ────────────────────────────────────────────────
         pipe     = self.model_params["pipe_clf"]
         base_clf = pipe.steps[-1][1] if hasattr(pipe, "steps") else pipe
-
         model_config = {
             "type":   type(base_clf).__name__,
             "params": {k: str(v) for k, v in base_clf.get_params(deep=False).items()},
         }
 
-        # ── 3. Search space shape ─────────────────────────────────────────
+        # ── 2. Search space shape ─────────────────────────────────────────────
         param_grid   = self.model_params.get("param_grid", {})
         search_space = sorted(param_grid.keys())
 
-        # ── 4. CV protocol ────────────────────────────────────────────────
+        # ── 3. CV protocol ────────────────────────────────────────────────────
         cv_config = {
             "n_splits":    self.model_params.get("n_splits",    5),
             "pct_embargo": self.model_params.get("pct_embargo", 0.02),
         }
 
-        # ── 5. label_config ───────────────────────────────────────────────
-        # Serialize field by field. Skip callables (function references
-        # occasionally stored alongside barrier params) by recording their
-        # __name__ so the hash stays deterministic across interpreter sessions.
+        # ── 4. label_config ───────────────────────────────────────────────────
         label_cfg_serial: dict = {}
         for k, v in self.label_config.items():
             if callable(v):
@@ -1261,7 +1335,7 @@ class ModelDevelopmentPipeline:
             else:
                 label_cfg_serial[k] = str(v)
 
-        # ── 6. target_config ──────────────────────────────────────────────
+        # ── 5. target_config ──────────────────────────────────────────────────
         _tgt_func = self.target_config.get("func")
         target_cfg_serial = {
             "func": getattr(_tgt_func, "__name__", str(_tgt_func))
@@ -1272,16 +1346,15 @@ class ModelDevelopmentPipeline:
             },
         }
 
-        # ── 7. Combine and hash ───────────────────────────────────────────
+        # ── 6. Combine and hash ───────────────────────────────────────────────
         combined = {
-            "bagging": bagging_config,
-            "model":   model_config,
-            "search":  search_space,
-            "cv":      cv_config,
-            "metric":  metric,
-            "role":    "primary" if self.is_primary else "secondary",
-            "label":   label_cfg_serial,
-            "target":  target_cfg_serial,
+            "model":  model_config,
+            "search": search_space,
+            "cv":     cv_config,
+            "metric": metric,
+            "role":   "primary" if self.is_primary else "secondary",
+            "label":  label_cfg_serial,
+            "target": target_cfg_serial,
         }
 
         digest = hashlib.sha256(
@@ -1289,6 +1362,8 @@ class ModelDevelopmentPipeline:
         ).hexdigest()
 
         return digest[:8]
+
+    # ── Bagging helpers ───────────────────────────────────────────────────────
 
     def _apply_sequential_bagging(
         self,
@@ -1299,11 +1374,15 @@ class ModelDevelopmentPipeline:
     ) -> Pipeline:
         """
         Wrap a tuned base pipeline in SequentiallyBootstrappedBaggingClassifier.
+
+        After fitting, the trained estimators are transferred to a standard
+        BaggingClassifier shell so that inference (predict / predict_proba) is
+        available without requiring the events index at deployment time.
         """
-        bagging_n      = self.model_params.get('bagging_n_estimators', 0)
-        bagging_samples= self.model_params.get('bagging_max_samples', 1.0)
-        bagging_feats  = self.model_params.get('bagging_max_features', 1.0)
-        random_state   = self.model_params.get('random_state', 1)
+        bagging_n      = self.model_params.get("bagging_n_estimators", 0)
+        bagging_samples = self.model_params.get("bagging_max_samples", 1.0)
+        bagging_feats  = self.model_params.get("bagging_max_features", 1.0)
+        random_state   = self.model_params.get("random_state", 1)
 
         base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
 
@@ -1312,7 +1391,7 @@ class ModelDevelopmentPipeline:
             n_estimators=int(bagging_n),
             max_samples=bagging_samples,
             max_features=bagging_feats,
-            samples_info_sets=self.events['t1'],
+            samples_info_sets=self.events["t1"],
             price_bars_index=self.bar_data.index,
             random_state=random_state,
         )
@@ -1322,8 +1401,11 @@ class ModelDevelopmentPipeline:
         else:
             bag.fit(X, y)
 
-        logger.info("Sequential bootstrap fitted")
+        logger.info("Sequential bootstrap fitted.")
 
+        # Transfer fitted estimators to a standard BaggingClassifier for
+        # deployment — SequentiallyBootstrappedBaggingClassifier requires
+        # the price bar index at fit time but not at inference time.
         standard_bag = BaggingClassifier(
             estimator=MyPipeline(base_est.steps),
             n_estimators=len(bag.estimators_),
@@ -1334,48 +1416,43 @@ class ModelDevelopmentPipeline:
             random_state=random_state,
             n_jobs=bag.n_jobs,
         )
-        standard_bag.estimators_         = bag.estimators_
-        standard_bag.estimators_features_= bag.estimators_features_
-        standard_bag.classes_            = bag.classes_
-        standard_bag.n_classes_          = bag.n_classes_
-        standard_bag.n_features_in_      = bag.n_features_in_
+        standard_bag.estimators_          = bag.estimators_
+        standard_bag.estimators_features_ = bag.estimators_features_
+        standard_bag.classes_             = bag.classes_
+        standard_bag.n_classes_           = bag.n_classes_
+        standard_bag.n_features_in_       = bag.n_features_in_
 
-        if hasattr(bag, "oob_score_"):
-            standard_bag.oob_score_ = bag.oob_score_
-        if hasattr(bag, "oob_decision_function_"):
-            standard_bag.oob_decision_function_ = bag.oob_decision_function_
-        if hasattr(bag, "oob_prediction_"):
-            standard_bag.oob_prediction_ = bag.oob_prediction_
+        for attr in ("oob_score_", "oob_decision_function_", "oob_prediction_"):
+            if hasattr(bag, attr):
+                setattr(standard_bag, attr, getattr(bag, attr))
 
-        return Pipeline([('seq_bag', standard_bag)])
+        return Pipeline([("seq_bag", standard_bag)])
+
+    # ── Analysis ──────────────────────────────────────────────────────────────
 
     def analyze_features(self):
         from .weighted_estimator import _WeightedEstimator
 
-        # Unwrap CalibratorCV if calibration was applied —
-        # feature importance lives in the inner estimator, not the calibrator.
         clf = self.best_model
         if self.calibrate:
             clf = clf.estimator_
 
-        # best_model (or its inner estimator) is preprocessor → clf/bag.
-        if hasattr(clf, 'steps'):
+        if hasattr(clf, "steps"):
             clf = clf.steps[-1][1]
 
         feat_names = self._get_feature_names()
 
-        if isinstance(clf, SequentiallyBootstrappedBaggingClassifier):
-            importances = np.mean([
-                est.steps[-1][1].feature_importances_
-                for est in clf.estimators_
-            ], axis=0)
-        elif isinstance(clf, BaggingClassifier):
+        if isinstance(clf, (SequentiallyBootstrappedBaggingClassifier, BaggingClassifier)):
             importances = np.mean([
                 est.steps[-1][1].feature_importances_
                 for est in clf.estimators_
             ], axis=0)
         elif isinstance(clf, _WeightedEstimator):
-            importances = clf.base_estimator.feature_importances_
+            try:
+                importances = clf.base_estimator.feature_importances_
+            except Exception as e:
+                importances = np.zeros(len(feat_names))
+                logger.error(e)
         else:
             try:
                 importances = clf.feature_importances_
@@ -1391,20 +1468,24 @@ class ModelDevelopmentPipeline:
 
     def _compile_metrics(self):
         self.metrics = {
-            "cv_results":           self.cv_results,
-            "feature_importance":   self.feature_importance,
-            "training_samples":     len(self.bar_data),
-            "feature_count":        len(self._get_feature_names()),
-            "best_weighting_scheme":self.best_weighting_scheme,
-            "average_uniqueness":   self.events["tW"].mean(),
-            "completed_steps":      self.completed_steps,
-            "calibrated":           self.calibrator_ is not None,   # ← NEW
+            "cv_results":            self.cv_results,
+            "feature_importance":    self.feature_importance,
+            "training_samples":      len(self.bar_data),
+            "feature_count":         len(self._get_feature_names()),
+            "best_weighting_scheme": self.best_weighting_scheme,
+            "average_uniqueness":    self.events["tW"].mean(),
+            "completed_steps":       self.completed_steps,
+            "calibrated":            self.calibrator_ is not None,
+            "bagging_wrapper":       self._bagging_wrapper,
+            "model_role":            self.config.get("model_role"),
         }
 
     def _get_feature_names(self):
         if self.preprocessed_features is None:
             return []
         return self.preprocessed_features.columns.tolist()
+
+    # ── Persistence ───────────────────────────────────────────────────────────
 
     @staticmethod
     def _convert_mypipeline_for_onnx(pipeline: Pipeline) -> None:
@@ -1426,43 +1507,46 @@ class ModelDevelopmentPipeline:
 
     def _save_all_artifacts(self):
         metadata = {
-            "strategy":         self.strategy,
+            "strategy":         self.config["strategy"],
             "feature_names":    self._get_feature_names(),
             "use_optuna":       self.model_params.get("use_optuna", False),
             "pipeline_version": self.pipeline_version,
             "calibrated":       self.calibrator_ is not None,
+            "bagging_wrapper":  self._bagging_wrapper,
+            "model_role":       self.config.get("model_role"),
         }
         self.file_manager.save_model(self.best_model, metadata)
-        self.file_manager.save_object(self.strategy, "strategy")
+
+        if self.strategy is not None:
+            self.file_manager.save_object(self.strategy, "strategy")
+
         self.file_manager.save_dataframe(self.preprocessed_features, "features")
         self.file_manager.save_dataframe(self.events, "events")
+
         if self.sample_weight is not None:
-            self.file_manager.save_dataframe(self.sample_weight.to_frame("weights"), "weights")
+            self.file_manager.save_dataframe(
+                self.sample_weight.to_frame("weights"), "weights"
+            )
+
         self.file_manager.save_object(self.metrics, "metrics")
-        # ── NEW: persist feature_config and feature_names ─────────
-        if hasattr(self, "feature_config") and self.feature_config is not None:
+
+        if self.feature_config is not None:
             self.file_manager.save_object(self.feature_config, "feature_config")
-    
+
         feature_names = self._get_feature_names()
         if feature_names:
             self.file_manager.save_object(feature_names, "feature_names")
 
-        if hasattr(self, "preprocessor") and self.preprocessor is not None:
+        if self.preprocessor is not None:
             self.file_manager.save_object(self.preprocessor, "preprocessor")
 
-        if hasattr(self, "target_config") and self.target_config is not None:
+        if self.target_config is not None:
             self.file_manager.save_object(self.target_config, "target_config")
-    
+
         if self.calibrator_ is not None:
-            # Save the calibrator map separately for the deployed
-            # ONNX path — apply calibrator_.calibrator_.predict() on raw
-            # ONNX model probabilities at inference time.
             self.file_manager.save_object(self.calibrator_.calibrator_, "calibrator")
 
         if self.export_onnx:
-            # Unwrap CalibratorCV before ONNX conversion.
-            # CalibratorCV has no ONNX operator mapping.
-            # The inner estimator_ is the full-data-refitted sklearn model.
             if self.calibrator_ is not None:
                 onnx_source = Pipeline(self.calibrator_.estimator_.steps[1:])
             else:
@@ -1475,22 +1559,20 @@ class ModelDevelopmentPipeline:
 
         logger.info(f"Saved all artifacts to {self.file_paths['base_dir']}")
 
-    def _generate_analysis_reports(self, display: bool = False):   # ← NEW param
+    # ── Reporting ─────────────────────────────────────────────────────────────
+
+    def _generate_analysis_reports(self, display: bool = False):
         """
         Generates hyperparameter analysis, importance plots, and HTML summary.
 
-        Robustness improvement (v4.2):
-            Any column in cv_results["cv_results"] that is 100% NaN is dropped
-            before calling generate_complete_hyperparameter_report.
-            This prevents the matplotlib/seaborn "autodetected range of [nan, nan]"
-            error when RandomizedSearchCV param_grid contains heterogeneous
-            search spaces.
+        Any column in cv_results["cv_results"] that is 100% NaN is dropped
+        before calling generate_complete_hyperparameter_report to prevent the
+        matplotlib "autodetected range of [nan, nan]" error when param_grid
+        contains heterogeneous search spaces.
         """
         try:
             if self.cv_results and "cv_results" in self.cv_results:
                 cv_df = pd.DataFrame(self.cv_results["cv_results"])
-
-                # ── FIX: remove fully-NaN columns (prevents plot range error) ──
                 nan_cols = cv_df.columns[cv_df.isna().all()].tolist()
                 if nan_cols:
                     cv_df = cv_df.dropna(axis=1, how="all")
@@ -1498,7 +1580,6 @@ class ModelDevelopmentPipeline:
                         f"Hyperparameter report: dropped {len(nan_cols)} fully-NaN "
                         f"column(s): {nan_cols}"
                     )
-
                 generate_complete_hyperparameter_report(
                     cv_results=cv_df,
                     strategy_config=self.config,
@@ -1516,35 +1597,38 @@ class ModelDevelopmentPipeline:
     def _generate_optuna_report(self):
         """
         Save a self-contained HTML report with Optuna visualisation plots.
-
-        The baseline comparison matplotlib figure is saved as a PNG companion.
-        The matplotlib backend is temporarily switched to 'agg' to prevent
-        the figure from being auto-displayed in notebook environments.
         """
         import optuna.visualization as vis
         from plotly.io import to_html
-        import matplotlib.pyplot as plt   # already imported; plt.switch_backend works
+        import matplotlib.pyplot as plt
 
-        report_path = self.file_paths['reports'] / 'optuna_study_report.html'
+        report_path = self.file_paths["reports"] / "optuna_study_report.html"
         study       = self.study
 
-        n_complete = len([t for t in study.trials if t.state.name == 'COMPLETE'])
-        n_pruned   = len([t for t in study.trials if t.state.name == 'PRUNED'])
+        n_complete = len([t for t in study.trials if t.state.name == "COMPLETE"])
+        n_pruned   = len([t for t in study.trials if t.state.name == "PRUNED"])
 
         plot_specs = [
-            ('Optimization History',
-             'Objective value per trial. Dashed line shows the running best.',
-             lambda: vis.plot_optimization_history(study)),
-            ('Fold Scores per Trial (Intermediate Values)',
-             'Each line is one trial. Trials that end early were pruned by HyperbandPruner.',
-             lambda: vis.plot_intermediate_values(study)),
-            ('Hyperparameter Importances',
-             'fANOVA estimate of each parameter\'s contribution to score variance.',
-             lambda: vis.plot_param_importances(study)),
-            ('Parallel Coordinates',
-             'One line per completed trial, coloured by score. '
-             'Converging lines on the right indicate the high-scoring region.',
-             lambda: vis.plot_parallel_coordinate(study)),
+            (
+                "Optimization History",
+                "Objective value per trial. Dashed line shows the running best.",
+                lambda: vis.plot_optimization_history(study),
+            ),
+            (
+                "Fold Scores per Trial (Intermediate Values)",
+                "Each line is one trial. Trials that end early were pruned.",
+                lambda: vis.plot_intermediate_values(study),
+            ),
+            (
+                "Hyperparameter Importances",
+                "fANOVA estimate of each parameter's contribution to score variance.",
+                lambda: vis.plot_param_importances(study),
+            ),
+            (
+                "Parallel Coordinates",
+                "One line per completed trial, coloured by score.",
+                lambda: vis.plot_parallel_coordinate(study),
+            ),
         ]
 
         html_parts = [f"""<!DOCTYPE html>
@@ -1574,30 +1658,37 @@ class ModelDevelopmentPipeline:
 
         for title, caption, plot_fn in plot_specs:
             try:
-                from ..cross_validation.optuna_hyper_fit import plot_model_vs_baseline
-                original_backend = plt.get_backend()
-                plt.switch_backend("agg")
-                with plt.ioff():
-                    plot_model_vs_baseline(study, self.events["bin"], self.events)
-                    baseline_path = (
-                        self.file_paths["reports"] / "optuna_baseline_comparison.png"
-                    )
-                    plt.savefig(
-                        baseline_path, dpi=150, bbox_inches="tight",
-                        facecolor="#0f172a", edgecolor="none",
-                    )
-                    plt.close("all")
-                plt.switch_backend(original_backend)
-                logger.info(f"Baseline comparison plot saved: {baseline_path}")
+                fig  = plot_fn()
+                html = to_html(fig, full_html=False, include_plotlyjs="cdn")
+                html_parts.append(
+                    f'<div class="plot"><h2>{title}</h2>'
+                    f'<p class="caption">{caption}</p>{html}</div>'
+                )
             except Exception as e:
-                logger.warning(f"Baseline plot failed: {e}")
-        html_parts.append('</body></html>')
+                logger.warning(f"Optuna plot '{title}' failed: {e}")
 
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(html_parts))
+        try:
+            from ..cross_validation.optuna_hyper_fit import plot_model_vs_baseline
+            original_backend = plt.get_backend()
+            plt.switch_backend("agg")
+            with plt.ioff():
+                plot_model_vs_baseline(study, self.events["bin"], self.events)
+                baseline_path = self.file_paths["reports"] / "optuna_baseline_comparison.png"
+                plt.savefig(
+                    baseline_path, dpi=150, bbox_inches="tight",
+                    facecolor="#0f172a", edgecolor="none",
+                )
+                plt.close("all")
+            plt.switch_backend(original_backend)
+            logger.info(f"Baseline comparison plot saved: {baseline_path}")
+        except Exception as e:
+            logger.warning(f"Baseline plot failed: {e}")
+
+        html_parts.append("</body></html>")
+
+        report_path.write_text("\n".join(html_parts), encoding="utf-8")
         logger.info(f"Optuna study report saved: {report_path}")
 
-        
     def _generate_training_summary_html(self):
         """Constructs a comprehensive HTML training report."""
         try:
@@ -1612,16 +1703,21 @@ class ModelDevelopmentPipeline:
             <head>
                 <title>Training Report - {self.symbol}</title>
                 <style>
-                    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0f172a; color: #f1f5f9; padding: 40px; line-height: 1.6; }}
+                    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                            background-color: #0f172a; color: #f1f5f9; padding: 40px;
+                            line-height: 1.6; }}
                     .container {{ max-width: 900px; margin: auto; }}
                     h1 {{ color: #38bdf8; border-bottom: 2px solid #334155; padding-bottom: 10px; }}
-                    .card {{ background-color: #1e293b; border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid #334155; }}
+                    .card {{ background-color: #1e293b; border-radius: 12px; padding: 24px;
+                             margin-bottom: 24px; border: 1px solid #334155; }}
                     table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
                     th, td {{ text-align: left; padding: 12px; border-bottom: 1px solid #334155; }}
-                    th {{ color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.8rem; }}
+                    th {{ color: #94a3b8; font-weight: 600; text-transform: uppercase;
+                          font-size: 0.8rem; }}
                     .metric {{ font-size: 1.5rem; font-weight: 700; color: #22c55e; }}
                     .label {{ color: #94a3b8; font-size: 0.9rem; }}
-                    .badge {{ display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }}
+                    .badge {{ display: inline-block; padding: 2px 10px; border-radius: 999px;
+                              font-size: 0.78rem; font-weight: 600; }}
                     .badge-on  {{ background: #14532d; color: #4ade80; }}
                     .badge-off {{ background: #1e293b; color: #64748b; border: 1px solid #334155; }}
                 </style>
@@ -1635,17 +1731,42 @@ class ModelDevelopmentPipeline:
                         <h2>Performance Snapshot</h2>
                         <table>
                             <tr>
-                                <td><span class="label">Primary Metric ({self.cv_results.get('scoring', 'F1')})</span><br><span class="metric">{best_score:.4f}</span></td>
-                                <td><span class="label">Backend</span><br><strong>{search_method}</strong></td>
+                                <td>
+                                    <span class="label">
+                                        Primary Metric ({self.cv_results.get('scoring', 'F1')})
+                                    </span><br>
+                                    <span class="metric">{best_score:.4f}</span>
+                                </td>
+                                <td>
+                                    <span class="label">Backend</span><br>
+                                    <strong>{search_method}</strong>
+                                </td>
                             </tr>
                             <tr>
-                                <td><span class="label">Training Samples</span><br><strong>{len(self.events)}</strong></td>
-                                <td><span class="label">Average Uniqueness</span><br><strong>{self.events['tW'].mean():.4f}</strong></td>
+                                <td>
+                                    <span class="label">Training Samples</span><br>
+                                    <strong>{len(self.events)}</strong>
+                                </td>
+                                <td>
+                                    <span class="label">Average Uniqueness</span><br>
+                                    <strong>{self.events['tW'].mean():.4f}</strong>
+                                </td>
                             </tr>
                             <tr>
-                                <td><span class="label">Calibrated</span><br>
+                                <td>
+                                    <span class="label">Model Role</span><br>
+                                    <strong>{self.config.get('model_role', 'N/A').capitalize()}</strong>
+                                </td>
+                                <td>
+                                    <span class="label">Bagging Wrapper</span><br>
+                                    <strong>{self._bagging_wrapper}</strong>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <span class="label">Calibrated</span><br>
                                     <span class="badge {'badge-on' if calibrated else 'badge-off'}">
-                                        {'CalibratorCV ✓' if calibrated else 'No calibration'}
+                                        {'CalibratorCV' if calibrated else 'No calibration'}
                                     </span>
                                 </td>
                                 <td></td>
@@ -1655,20 +1776,33 @@ class ModelDevelopmentPipeline:
 
                     <div class="card">
                         <h2>Weighting Logic</h2>
-                        <p><strong>Selected Scheme:</strong> {self.best_weighting_scheme or "Standard/Time-Decay"}</p>
-                        <p class="label">Weights were optimized via Purged-KFold to minimize serial correlation leakage.</p>
+                        <p><strong>Selected Scheme:</strong>
+                           {self.best_weighting_scheme or "Standard/Time-Decay"}</p>
+                        <p class="label">
+                            Weights were optimized via Purged-KFold to minimize
+                            serial correlation leakage.
+                        </p>
                     </div>
                 </div>
             </body>
             </html>
             """
 
-            with open(report_path, "w") as f:
-                f.write(html_content)
+            report_path.write_text(html_content, encoding="utf-8")
             logger.info(f"Generated HTML summary report: {report_path}")
 
         except Exception as e:
             logger.error(f"HTML report generation failed: {e}")
+
+    def _display_cache_reports(self):
+        print("\n" + "=" * 70)
+        print("CACHE PERFORMANCE REPORT")
+        print("=" * 70)
+        monitor = get_cache_monitor()
+        if monitor:
+            monitor.print_report()
+
+    # ── Diagnostics ───────────────────────────────────────────────────────────
 
     def check_contamination(self):
         print("\n" + "=" * 70)
@@ -1698,23 +1832,32 @@ class ModelDevelopmentPipeline:
                     "Component": name,
                     "Type":      dtype,
                     "Rows":      shape[0] if isinstance(shape, tuple) else shape,
-                    "Columns":   shape[1] if isinstance(shape, tuple) and len(shape) > 1 else columns,
+                    "Columns":   (
+                        shape[1]
+                        if isinstance(shape, tuple) and len(shape) > 1
+                        else columns
+                    ),
                     "Memory (MB)": (
-                        data.memory_usage(deep=True).sum() / (1024**2)
+                        data.memory_usage(deep=True).sum() / (1024 ** 2)
                         if hasattr(data, "memory_usage") else "N/A"
                     ),
                 })
         return pd.DataFrame(summary_data)
 
 
-def get_model_type(model):
+# ============================================================================
+# Helpers
+# ============================================================================
+
+def get_model_type(model) -> str:
     types = {
-        "RandomForestClassifier":                  "rf",
+        "RandomForestClassifier":                    "rf",
         "SequentiallyBootstrappedBaggingClassifier": "seq_rf",
+        "DecisionTreeClassifier":                    "dt",
     }
     name = type(model).__name__
-    return types.get(name, name.replace("Classifier", ""))
+    return types.get(name, name.replace("Classifier", "").lower())
 
-def is_tree(estimator):
+
+def is_tree(estimator) -> bool:
     return isinstance(estimator, (RandomForestClassifier, DecisionTreeClassifier))
-
