@@ -537,15 +537,15 @@ def get_optimal_sample_weight(
     cv_results = pd.DataFrame()
     scoring    = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
     
-    pbar1 = tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights), mininterval=1.0, leave=False)
+    pbar1 = tqdm(weights.items(), total=len(weights), mininterval=1.0, leave=False)
     for i, (scheme, weight) in enumerate(pbar1, 1):
-        pbar1.set_description(f"Analyzing {scheme} weighting...")
+        pbar1.set_description(f"Analyzing {scheme} weighting scheme")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
         if i == len(weights):
-            pbar1.set_description(f"Analyzed {sorted(list(weights.keys()))} \nBest scheme: {best_scheme} ({scoring}={best_score:.4f})")
+            pbar1.set_description(f"Analyzed {sorted(list(weights.keys()))} | Best scheme: {best_scheme} ({scoring}={best_score:.4f})")
 
     best_weight  = weights[best_scheme]
     linear_search = [1, 0] if linear is None else ([1] if linear else [0])
@@ -565,13 +565,13 @@ def get_optimal_sample_weight(
 
     pbar2 = tqdm(time_decay_weights.items(), total=len(time_decay_weights), mininterval=1.0)
     for i, (scheme, weight) in enumerate(pbar2, 1):
-        pbar2.set_description(f"Analyzing time-decay {scheme}...")
+        pbar2.set_description(f"Analyzing time-decay {scheme}")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
         if i == len(time_decay_weights):
-            pbar2.set_description(f"Analyzed time-decay factors {sorted(list(decay_factors))} /nBest scheme: {best_scheme} ({scoring}={best_score:.4f})")
+            pbar2.set_description(f"Analyzed time-decay factors {sorted(list(decay_factors))} | Best scheme: {best_scheme} ({scoring}={best_score:.4f})")
 
     weights.update(time_decay_weights)
     cv_results_dict = {
