@@ -134,6 +134,12 @@ from ..util.misc import date_conversion, value_counts_data
 from ..util.pipelines import make_custom_pipeline, set_pipeline_params, MyPipeline
 from .file_manager import ModelFileManager
 
+
+# Define a sink that uses tqdm.write
+def tqdm_sink(msg):
+    tqdm.write(msg, end="")  # end="" avoids double newlines
+
+
 # ============================================================================
 # Cached data helpers
 # ============================================================================
@@ -801,14 +807,22 @@ class ModelDevelopmentPipeline:
     # ── Logging ───────────────────────────────────────────────────────────────
 
     def _setup_logging(self):
+        # Remove default handler and add our custom one 
         logger.remove()
         logger.add(
             self.log_file, level="INFO",
             format="{time} | {name} | {level} | {message}", rotation="10 MB",
+        
+        logger.add(
+            tqdm_sink,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss:ms}</green> | "
+                   "<level>{level: <8}</level> | "
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+                   "<level>{message}</level>",
+            colorize=True
         )
-        logger.add(lambda msg: tqdm.write(msg, end=""), level="DEBUG", colorize=True)
         self.logger = logger.bind(context=self.__class__.__name__)
-
+       
     # ── run() ─────────────────────────────────────────────────────────────────
 
     def run(
