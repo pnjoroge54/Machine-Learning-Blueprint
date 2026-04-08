@@ -432,7 +432,7 @@ def optimize_trading_model(
 
 def print_best_trial(study, trial):
     if study.best_trial.number == trial.number:
-        print(f"\n🎯 New best trial #{trial.number + 1} | Score: {trial.value:.4f} \n{pformat(trial.params)}")
+        print(f"\n🎯 New best trial #{trial.number} | Score: {trial.value:.4f} \n{pformat(trial.params)}")
 
 
 def save_intermediate_results(study, trial):
