@@ -674,61 +674,79 @@ class CombinatorialPurgedCV(BaseCrossValidator):
 # Optimal-folds search
 # ---------------------------------------------------------------------------
 
+@njit(cache=True)
+def _avg_train_size(n_obs: int, n_folds: int, n_test_folds: int) -> float:
+    """Average training set size (number of observations)."""
+    return n_obs / n_folds * (n_folds - n_test_folds)
+
+@njit(cache=True)
+def _n_test_paths(n_folds: int, n_test_folds: int) -> int:
+    """Number of distinct backtest paths = C(n_folds, n_test_folds) * n_test_folds / n_folds."""
+    # Using math.comb is not supported in Numba; implement manually.
+    # For small n_folds (<= 1000) we can use iterative multiplication.
+    def comb(n, k):
+        if k < 0 or k > n:
+            return 0
+        k = min(k, n - k)
+        c = 1
+        for i in range(1, k + 1):
+            c = c * (n - k + i) // i
+        return c
+    return comb(n_folds, n_test_folds) * n_test_folds // n_folds
+
+@njit(cache=True)
+def _cost(n_obs: int, n_folds: int, n_test_folds: int,
+          target_train_size: int, target_n_test_paths: int,
+          weight_train_size: float, weight_n_test_paths: float) -> float:
+    """Weighted relative distance cost."""
+    avg_tr = _avg_train_size(n_obs, n_folds, n_test_folds)
+    n_paths = _n_test_paths(n_folds, n_test_folds)
+    term1 = weight_train_size * abs(avg_tr - target_train_size) / target_train_size
+    term2 = weight_n_test_paths * abs(n_paths - target_n_test_paths) / target_n_test_paths
+    return term1 + term2
+
 def optimal_folds_number(
     n_observations: int,
     target_train_size: int,
     target_n_test_paths: int,
     weight_train_size: float = 1.0,
     weight_n_test_paths: float = 1.0,
-) -> Tuple[int, int]:
-    r"""Find the ``(n_folds, n_test_folds)`` pair that best matches the targets.
-
-    Minimises the weighted relative distance:
-
-    .. math::
-
-        \text{cost}(x,y) =
-            w_f \left|\frac{f(x,y) - f_{\text{target}}}{f_{\text{target}}}\right|
-          + w_g \left|\frac{g(x,y) - g_{\text{target}}}{g_{\text{target}}}\right|
-
-    where :math:`f` is the average training size and :math:`g` is the number
-    of test paths.
+) -> tuple:
+    """
+    Find (n_folds, n_test_folds) that best matches the targets using Numba.
 
     Parameters
     ----------
     n_observations : int
+        Total number of samples.
     target_train_size : int
+        Desired average number of observations in each training set.
     target_n_test_paths : int
+        Desired number of distinct backtest paths.
     weight_train_size : float, default=1.0
+        Relative importance of matching target_train_size.
     weight_n_test_paths : float, default=1.0
+        Relative importance of matching target_n_test_paths.
 
     Returns
     -------
-    n_folds : int
-    n_test_folds : int
+    tuple (n_folds, n_test_folds)
     """
+    best_cost = np.inf
+    best_pair = (3, 2)  # fallback
 
-    def _cost(x: int, y: int) -> float:
-        n_paths = _n_test_paths(n_folds=x, n_test_folds=y)
-        avg_tr = _avg_train_size(n_observations, x, y)
-        return (
-            weight_n_test_paths * abs(n_paths - target_n_test_paths) / target_n_test_paths
-            + weight_train_size * abs(avg_tr - target_train_size) / target_train_size
-        )
-
-    costs, res = [], []
     for n_folds in range(3, n_observations + 1):
-        cutoff = None
+        # Upper bound for n_test_folds: at most n_folds - 1, but we can stop early.
+        # The cost tends to increase when n_test_folds becomes too large relative to n_folds.
+        # A heuristic: stop when n_folds - n_test_folds <= 1? We'll just loop all.
         for n_test_folds in range(2, n_folds):
-            if cutoff is None or n_folds - n_test_folds <= cutoff:
-                c = _cost(n_folds, n_test_folds)
-                costs.append(c)
-                res.append((n_folds, n_test_folds))
-                if cutoff is None and c > 1e5:
-                    cutoff = n_test_folds
-    return res[int(np.argmin(costs))]
-
-
+            c = _cost(n_observations, n_folds, n_test_folds,
+                      target_train_size, target_n_test_paths,
+                      weight_train_size, weight_n_test_paths)
+            if c < best_cost:
+                best_cost = c
+                best_pair = (n_folds, n_test_folds)
+    return best_pair
 
 # ---------------------------------------------------------------------------
 # CPCVAnalyzer — module-level worker functions
