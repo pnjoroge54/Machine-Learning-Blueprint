@@ -518,14 +518,14 @@ def get_optimal_sample_weight(
     classifier = RandomForestClassifier(
         criterion="entropy",
         class_weight="balanced_subsample",
-        n_estimators=200,
+        n_estimators=100,
         max_depth=4,
         min_weight_fraction_leaf=0.05,
         max_samples=cont["tW"].mean().round(2),
         random_state=42,
     )
 
-    cv_gen = PurgedKFold(n_splits=n_splits, t1=cont["t1"], pct_embargo=0.01)
+    cv_gen = PurgedKFold(n_splits=n_splits, t1=cont["t1"], pct_embargo=0.02)
 
     weights = {
         "return":     cont["w"],
@@ -536,12 +536,17 @@ def get_optimal_sample_weight(
     best_score, best_scheme = 0, None
     cv_results = pd.DataFrame()
     scoring    = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
-
-    for scheme, weight in tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights)):
+    
+    pbar1 = tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights), mininterval=1.0)
+    for i, (scheme, weight) in enumerate(pbar1, 1):
+        pbar1.set_description(f"Analyzing {scheme} weighting...")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
+        if i == len(weights):
+            pbar1.set_description(f"Analyzed {sorted(list(weights.keys())} /nBest scheme: {best_scheme} ({scoring}={best_score:.4f})")
+            
 
     best_weight  = weights[best_scheme]
     linear_search = [1, 0] if linear is None else ([1] if linear else [0])
@@ -559,15 +564,15 @@ def get_optimal_sample_weight(
             scheme = f"{best_scheme}_{'linear' if lin else 'exp'}_{decay}"
             time_decay_weights[scheme] = best_weight * decay_vec
 
-    pbar = tqdm(time_decay_weights.items(), total=len(time_decay_weights))
-    for i, (scheme, weight) in enumerate(pbar, 1):
-        pbar.set_description(f"Analyzing time-decay {scheme}")
+    pbar2 = tqdm(time_decay_weights.items(), total=len(time_decay_weights), mininterval=1.0)
+    for i, (scheme, weight) in enumerate(pbar2, 1):
+        pbar2.set_description(f"Analyzing time-decay {scheme}...")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
         if i == len(time_decay_weights):
-            pbar.set_description(f"Analyzed time-decay factors {sorted(list(decay_factors))}")
+            pbar2.set_description(f"Analyzed time-decay factors {sorted(list(decay_factors))} /nBest scheme: {best_scheme} ({scoring}={best_score:.4f})")
 
     weights.update(time_decay_weights)
     cv_results_dict = {
@@ -1159,11 +1164,11 @@ class ModelDevelopmentPipeline:
             )
 
     def _train_model_optuna(self):
-        X, y    = self.preprocessed_features, self.events["bin"]
+        X, y = self.preprocessed_features, self.events["bin"]
         base_clf = self.model_params["pipe_clf"].steps[-1][1]
-        metric   = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
+        metric = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
 
-        included   = inspect.signature(optimize_trading_model).parameters.keys()
+        included = inspect.signature(optimize_trading_model).parameters.keys()
         opt_params = {"metric": metric}
         for k, v in self.model_params.items():
             if k == "param_grid":
@@ -1183,7 +1188,7 @@ class ModelDevelopmentPipeline:
         # The bagging wrapper is intentionally omitted: HPO optimises the base
         # estimator only; bagging is applied post-study.  A study's trials are
         # valid priors regardless of which wrapper is subsequently applied.
-        _role        = "pri" if self.is_primary else "sec"
+        _role = "pri" if self.is_primary else "sec"
         _config_hash = self._get_study_config_hash(metric=metric)
 
         opt_params["study_name"] = (
@@ -1197,7 +1202,7 @@ class ModelDevelopmentPipeline:
 
         db_path: Path = self.file_paths["db_path"]
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        opt_params["db_path"]      = f"sqlite:///{db_path.resolve()}"
+        opt_params["db_path"] = f"sqlite:///{db_path.resolve()}"
         opt_params["reports_path"] = self.file_paths["reports"] / "trials"
         callbacks = [check_for_overfitting, print_best_trial]
 
@@ -1220,13 +1225,13 @@ class ModelDevelopmentPipeline:
             f"\nBest params: {pformat(self.study.best_params)}"
         )
 
-        best_estimator   = make_custom_pipeline(self.study.best_estimator_.base_estimator)
-        bagging_sequential   = self.model_params.get("bagging_sequential", False)
+        best_estimator = make_custom_pipeline(self.study.best_estimator_.base_estimator)
+        bagging_sequential = self.model_params.get("bagging_sequential", False)
         bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
         bagging_max_samples  = self.model_params.get("bagging_max_samples", 1.0)
         bagging_max_features = self.model_params.get("bagging_max_features", 1.0)
-        n_jobs               = self.model_params.get("n_jobs", -1)
-        random_state         = self.model_params.get("random_state", None)
+        n_jobs = self.model_params.get("n_jobs", -1)
+        random_state = self.model_params.get("random_state", None)
 
         if bagging_sequential and bagging_n_estimators > 0:
             self.best_model = self._apply_sequential_bagging(
@@ -1234,6 +1239,7 @@ class ModelDevelopmentPipeline:
                 sample_weight=self.study.best_estimator_.sample_weight_,
             )
         elif bagging_n_estimators > 0:
+            time0 = time.time()
             base_est = set_pipeline_params(best_estimator, n_jobs=1)
             bag = BaggingClassifier(
                 estimator=MyPipeline(base_est.steps),
@@ -1245,6 +1251,8 @@ class ModelDevelopmentPipeline:
             )
             bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
             self.best_model = Pipeline([("bag", bag)])
+            elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
+            logger.info(f"\n✓ BaggingClassifier fitted in {elapsed}")
         else:
             self.best_model = best_estimator
 
@@ -1379,6 +1387,7 @@ class ModelDevelopmentPipeline:
         BaggingClassifier shell so that inference (predict / predict_proba) is
         available without requiring the events index at deployment time.
         """
+        time0 = time.time()
         bagging_n      = self.model_params.get("bagging_n_estimators", 0)
         bagging_samples = self.model_params.get("bagging_max_samples", 1.0)
         bagging_feats  = self.model_params.get("bagging_max_features", 1.0)
@@ -1400,8 +1409,6 @@ class ModelDevelopmentPipeline:
             bag.fit(X, y, sample_weight=sample_weight)
         else:
             bag.fit(X, y)
-
-        logger.info("Sequential bootstrap fitted.")
 
         # Transfer fitted estimators to a standard BaggingClassifier for
         # deployment — SequentiallyBootstrappedBaggingClassifier requires
@@ -1425,6 +1432,9 @@ class ModelDevelopmentPipeline:
         for attr in ("oob_score_", "oob_decision_function_", "oob_prediction_"):
             if hasattr(bag, attr):
                 setattr(standard_bag, attr, getattr(bag, attr))
+        
+        elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
+        logger.info(f"\n✓ Sequential bootstrap fitted in {elapsed}")
 
         return Pipeline([("seq_bag", standard_bag)])
 
