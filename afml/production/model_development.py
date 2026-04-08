@@ -138,7 +138,7 @@ from .file_manager import ModelFileManager
 # Cached data helpers
 # ============================================================================
 
-@cacheable(time_aware=True, auto_versioning=False)
+@cacheable(time_aware=True)
 def get_bar_size(tick_df, bar_size):
     """
     Compute tick-based bar size.
@@ -158,7 +158,7 @@ def get_bar_size(tick_df, bar_size):
     return calculate_ticks_per_period(tick_df, bar_size)
 
 
-@cacheable(time_aware=True, auto_versioning=False)
+@cacheable(time_aware=True)
 def load_and_prepare_training_data(
     symbol, start_date, end_date, account_name, bar_type, bar_size, price, path=None
 ):
@@ -212,7 +212,7 @@ def load_and_prepare_training_data(
     return data
 
 
-@cacheable(time_aware=True, auto_versioning=False)
+@cacheable(time_aware=True)
 def create_feature_engineering_pipeline(
     data: pd.DataFrame, feature_config: Dict, data_config: Dict
 ) -> pd.DataFrame:
@@ -255,7 +255,7 @@ def create_feature_engineering_pipeline(
     return features.join(time_feat, how="left")
 
 
-@cacheable(time_aware=True, auto_versioning=False)
+@cacheable(time_aware=True)
 def generate_events_triple_barrier(
     data: pd.DataFrame,
     strategy: Optional[BaseStrategy],
@@ -431,7 +431,7 @@ def calculate_rolling_metrics(events, sample_weight, window_sizes=[20, 50]):
     return metrics.dropna()
 
 
-@cacheable(time_aware=True, auto_versioning=False)
+@cacheable(time_aware=True)
 def best_weighting_scheme(
     classifier,
     X,
