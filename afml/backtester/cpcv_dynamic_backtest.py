@@ -148,11 +148,11 @@ def simulate_path(
         oof_probs.iloc[te_idx] = probs
 
     # Drop bars with no OOF prediction (purged/embargoed bars between folds)
-    valid_mask  = oof_probs.notna()
-    oof_probs   = oof_probs[valid_mask]
-    sides_valid = primary_sides[valid_mask]
-    events_valid= events[valid_mask]
-    ret_valid   = price_returns[valid_mask]
+    valid_mask  = oof_probs.notna().index
+    oof_probs = oof_probs.loc[valid_mask]
+    sides_valid = primary_sides.loc[valid_mask]
+    events_valid = events.loc[valid_mask]
+    ret_valid = price_returns.loc[valid_mask]
 
     # -- Size positions from OOF predictions ----------------------------------
     sizing_result = sizer.size(
