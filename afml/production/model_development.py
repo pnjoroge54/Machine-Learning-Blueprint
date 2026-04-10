@@ -704,7 +704,7 @@ class ModelDevelopmentPipeline:
         self.label_config   = label_config
         self.target_config  = target_config
         self.account_name   = data_config.get("account_name", "default")
-        self.pipeline_version = "4.3"
+        self.pipeline_version = "4.4"
         self.model_params   = model_params
 
         # Explicit is_primary override; None means auto-detect in generate_labels.
@@ -1403,10 +1403,10 @@ class ModelDevelopmentPipeline:
         available without requiring the events index at deployment time.
         """
         time0 = time.time()
-        bagging_n      = self.model_params.get("bagging_n_estimators", 0)
+        bagging_n = self.model_params.get("bagging_n_estimators", 0)
         bagging_samples = self.model_params.get("bagging_max_samples", 1.0)
-        bagging_feats  = self.model_params.get("bagging_max_features", 1.0)
-        random_state   = self.model_params.get("random_state", 1)
+        bagging_feats = self.model_params.get("bagging_max_features", 1.0)
+        random_state = self.model_params.get("random_state", 1)
 
         base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
 
@@ -1438,18 +1438,18 @@ class ModelDevelopmentPipeline:
             random_state=random_state,
             n_jobs=bag.n_jobs,
         )
-        standard_bag.estimators_          = bag.estimators_
+        standard_bag.estimators_ = bag.estimators_
         standard_bag.estimators_features_ = bag.estimators_features_
-        standard_bag.classes_             = bag.classes_
-        standard_bag.n_classes_           = bag.n_classes_
-        standard_bag.n_features_in_       = bag.n_features_in_
+        standard_bag.classes_ = bag.classes_
+        standard_bag.n_classes_ = bag.n_classes_
+        standard_bag.n_features_in_ = bag.n_features_in_
 
         for attr in ("oob_score_", "oob_decision_function_", "oob_prediction_"):
             if hasattr(bag, attr):
                 setattr(standard_bag, attr, getattr(bag, attr))
         
         elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
-        logger.info(f"\n✓ Sequential bootstrap fitted in {elapsed}")
+        logger.info(f"\n✓ Sequential bootstrap fitted in {str(elapsed).replace('0 days ', ''}")
 
         return Pipeline([("seq_bag", standard_bag)])
 
