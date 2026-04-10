@@ -166,17 +166,17 @@ class FinancialModelSuggester:
         """Returns curated parameter distributions for financial models."""
         spaces = {
             "random_forest": {
-                "n_estimators": range(50, 1001),
-                "max_depth": range(3, 21),
+                "n_estimators": range(50, 1000),
+                "max_depth": range(3, 12),
                 "min_weight_fraction_leaf": stats.uniform(0.025, 0.475),
-                "max_features": ["sqrt", "log2", 0.5, 0.7, 1.0],
+                "max_features": ["sqrt"],
                 "max_samples": np.arange(0.5, 1.1, 0.1).round(1).tolist(),
                 "ccp_alpha": stats.loguniform(1e-5, 1e-2),
             },
             "decision_tree": {
-                "max_depth": range(3, 21),
+                "max_depth": range(3, 12),
                 "min_weight_fraction_leaf": stats.uniform(0.025, 0.475),
-                "max_features": ["sqrt", "log2", 0.5, 0.7, 1.0],
+                "max_features": ["sqrt"],
                 "ccp_alpha": stats.loguniform(1e-5, 1e-2),
             },
             "xgboost": {
@@ -319,6 +319,7 @@ def optimize_trading_model(
     db_path: str = None,
     random_state: int = 42,
     refit: bool = True,
+    contine_study: bool = False,
     callbacks: List[Callable] = [],
 ):
     """
@@ -344,6 +345,7 @@ def optimize_trading_model(
         reports_path (str): Path to store intermediate trials.
         db_path (str): Path to store trials.      
         refit (bool): Fit best model on full data.
+        contine_study (bool): Run new trials.
         
     Returns:
         optuna.study.Study: The completed study object with history and best params.
@@ -372,12 +374,16 @@ def optimize_trading_model(
             storage=storage,       # RDBStorage object, not raw URL
             load_if_exists=True,
         )
-
+        
         logger.info(
             f"📊 Live dashboard available. In a separate terminal run:\n"
             f"   optuna-dashboard {db_path}\n"
             f"   Study: {study_name}"
         )
+
+        if len(study.trials) >= n_trials and not contine_study:
+            cv_results = optuna_to_cv_results(study)
+            return study, cv_results
         
         # Force single-threaded inside CV to prevent oversubscription
         if hasattr(classifier, 'n_jobs'):
