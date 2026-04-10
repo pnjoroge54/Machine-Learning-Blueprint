@@ -319,7 +319,7 @@ def optimize_trading_model(
     db_path: str = None,
     random_state: int = 42,
     refit: bool = True,
-    contine_study: bool = False,
+    continue_study: bool = False,
     callbacks: List[Callable] = [],
 ):
     """
@@ -345,7 +345,7 @@ def optimize_trading_model(
         reports_path (str): Path to store intermediate trials.
         db_path (str): Path to store trials.      
         refit (bool): Fit best model on full data.
-        contine_study (bool): Run new trials.
+        continue_study (bool): Run new trials.
         
     Returns:
         optuna.study.Study: The completed study object with history and best params.
@@ -381,7 +381,7 @@ def optimize_trading_model(
             f"   Study: {study_name}"
         )
 
-        if len(study.trials) < n_trials and contine_study:
+        if len(study.trials) < n_trials and continue_study:
             # Force single-threaded inside CV to prevent oversubscription
             if hasattr(classifier, 'n_jobs'):
                 classifier.set_params(n_jobs=1)
