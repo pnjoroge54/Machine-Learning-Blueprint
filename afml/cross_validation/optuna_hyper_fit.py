@@ -364,9 +364,8 @@ def optimize_trading_model(
         url=db_path,
         engine_kwargs={"connect_args": {"timeout": 30}, "pool_pre_ping": True},
     )
-
-    try:
-        study = optuna.create_study(
+    
+    study = optuna.create_study(
             direction="maximize", 
             sampler=sampler, 
             pruner=pruner, 
@@ -374,47 +373,53 @@ def optimize_trading_model(
             storage=storage,       # RDBStorage object, not raw URL
             load_if_exists=True,
         )
-        
-        logger.info(
-            f"📊 Live dashboard available. In a separate terminal run:\n"
-            f"   optuna-dashboard {db_path}\n"
-            f"   Study: {study_name}"
-        )
 
-        if not hasattr(study, "trials") or (len(study.trials) < n_trials) and continue_study:
-            # Force single-threaded inside CV to prevent oversubscription
-            if hasattr(classifier, 'n_jobs'):
-                classifier.set_params(n_jobs=1)
-        
-            # Ensure reproducibility
-            if hasattr(classifier, 'random_state'):
-                classifier.set_params(random_state=random_state)
-        
-            def objective(trial):
-                return optimize_trading_model_with_pruning(
-                    trial, X, y, events, data_index, classifier,
-                    param_distributions, n_splits, metric
-                )
-            
-            callbacks = [*callbacks]
-            if reports_path:
-                study.path = reports_path
-                callbacks += [save_intermediate_results]
+    n_completed = sum(
+            1 for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE
+        )
     
-            study.optimize(
-                objective, 
-                n_trials=n_trials, 
-                timeout=timeout, 
-                callbacks=callbacks
+    remaining = n_trials - n_completed
+    logger.info(
+        f"📊 Live dashboard available. In a separate terminal run:\n"
+        f"   optuna-dashboard {db_path}\n"
+        f"   Study: {study_name}"
+    )
+
+    try:
+        # Force single-threaded inside CV to prevent oversubscription
+        if hasattr(classifier, 'n_jobs'):
+            classifier.set_params(n_jobs=1)
+    
+        # Ensure reproducibility
+        if hasattr(classifier, 'random_state'):
+            classifier.set_params(random_state=random_state)
+    
+        def objective(trial):
+            return optimize_trading_model_with_pruning(
+                trial, X, y, events, data_index, classifier,
+                param_distributions, n_splits, metric
             )
-            
+        
+        callbacks = [*callbacks]
+        if reports_path:
+            study.path = reports_path
+            callbacks += [save_intermediate_results]
+
+        study.optimize(
+            objective, 
+            n_trials=remaining, 
+            timeout=(timeout if continue_study else 0), 
+            callbacks=callbacks
+        )
+        
         # Reconstruct best model from best params
         if refit:
             best_trial = study.best_trial
             best_model = FinancialModelSuggester.apply_from_params(
                 best_trial.params, classifier, events, data_index
             )
-
+    
             # Return to parallelized mode
             if hasattr(classifier, 'n_jobs'):
                 best_model.set_params(n_jobs=-1)
@@ -422,8 +427,8 @@ def optimize_trading_model(
             best_model.fit(X, y)
             study.best_estimator_ = best_model  # attach for convenience
             
-        cv_results = optuna_to_cv_results(study)
-        return study, cv_results
+            cv_results = optuna_to_cv_results(study)
+            return study, cv_results
         
     except StorageInternalError as e:
         print(f"❌ Storage Error: The database at {db_path} is locked or unreachable.")
