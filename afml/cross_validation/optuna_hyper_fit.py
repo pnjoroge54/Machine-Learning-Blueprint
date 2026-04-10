@@ -427,8 +427,8 @@ def optimize_trading_model(
             best_model.fit(X, y)
             study.best_estimator_ = best_model  # attach for convenience
             
-            cv_results = optuna_to_cv_results(study)
-            return study, cv_results
+        cv_results = optuna_to_cv_results(study)
+        return study, cv_results
         
     except StorageInternalError as e:
         print(f"❌ Storage Error: The database at {db_path} is locked or unreachable.")
