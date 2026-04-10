@@ -365,28 +365,28 @@ def optimize_trading_model(
         engine_kwargs={"connect_args": {"timeout": 30}, "pool_pre_ping": True},
     )
     
-    study = optuna.create_study(
-            direction="maximize", 
-            sampler=sampler, 
-            pruner=pruner, 
-            study_name=study_name, 
-            storage=storage,       # RDBStorage object, not raw URL
-            load_if_exists=True,
-        )
-
-    n_completed = sum(
-            1 for t in study.trials
-            if t.state == optuna.trial.TrialState.COMPLETE
-        )
-    
-    remaining = n_trials - n_completed
-    logger.info(
-        f"📊 Live dashboard available. In a separate terminal run:\n"
-        f"   optuna-dashboard {db_path}\n"
-        f"   Study: {study_name}"
-    )
-
     try:
+        study = optuna.create_study(
+                direction="maximize", 
+                sampler=sampler, 
+                pruner=pruner, 
+                study_name=study_name, 
+                storage=storage,       # RDBStorage object, not raw URL
+                load_if_exists=True,
+            )
+    
+        n_completed = sum(
+                1 for t in study.trials
+                if t.state == optuna.trial.TrialState.COMPLETE
+            )
+        
+        remaining = n_trials - n_completed
+        logger.info(
+            f"📊 Live dashboard available. In a separate terminal run:\n"
+            f"   optuna-dashboard {db_path}\n"
+            f"   Study: {study_name}"
+        )
+
         # Force single-threaded inside CV to prevent oversubscription
         if hasattr(classifier, 'n_jobs'):
             classifier.set_params(n_jobs=1)
