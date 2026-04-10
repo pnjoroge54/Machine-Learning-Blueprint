@@ -612,16 +612,6 @@ class ModelDevelopmentPipeline:
     - strategy=None instructs the pipeline to use every bar as a candidate
       entry point with no directional signal (symmetric barriers).
     """
-    from .file_manager import ModelFileManager
-    from ..calibration.calibration import CalibratorCV
-    from ..cross_validation.hyper_fit import clf_hyper_fit_cached
-    from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
-    from ..cross_validation.optuna_hyper_fit import (
-        optimize_trading_model,
-        optuna_to_cv_results,
-        print_best_trial,
-        check_for_overfitting,
-    )   
 
     def __init__(
         self,
@@ -694,6 +684,17 @@ class ModelDevelopmentPipeline:
         base_dir : str
             Root directory for saved artifacts.
         """
+        from .file_manager import ModelFileManager
+        from ..calibration.calibration import CalibratorCV
+        from ..cross_validation.hyper_fit import clf_hyper_fit_cached
+        from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
+        from ..cross_validation.optuna_hyper_fit import (
+            optimize_trading_model,
+            optuna_to_cv_results,
+            print_best_trial,
+            check_for_overfitting,
+        )
+        
         self.data_config    = data_config
         self.symbol         = data_config["symbol"]
         self.train_start    = data_config["start_date"]
