@@ -1365,7 +1365,7 @@ class ModelDevelopmentPipeline:
         return digest[:8]
 
     # ── Bagging helpers ───────────────────────────────────────────────────────
-
+    @cacheable(time_aware=True)
     def _apply_sequential_bagging(
         self,
         X: pd.DataFrame,
