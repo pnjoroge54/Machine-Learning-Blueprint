@@ -859,6 +859,8 @@ class ModelDevelopmentPipeline:
         tuple
             (best_model, feature_columns, metrics, config)
         """
+        from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
+        
         time0      = time.time()
         use_optuna = self.model_params.get("use_optuna", False)
 
@@ -888,7 +890,6 @@ class ModelDevelopmentPipeline:
             self._compile_metrics()
 
             if generate_reports:
-                from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
                 self._generate_analysis_reports(display=display)
             if cache_reports:
                 self._display_cache_reports()
