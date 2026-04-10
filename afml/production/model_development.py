@@ -710,6 +710,7 @@ class ModelDevelopmentPipeline:
         self._is_primary_override = is_primary
 
         self.config = data_config.copy()
+        del self.config["path"] # Not relevant for hashing
         self.config["training_start"] = self.config.pop("start_date")
         self.config["training_end"]   = self.config.pop("end_date")
         self.config["strategy"]       = (
@@ -1343,37 +1344,14 @@ class ModelDevelopmentPipeline:
             "pct_embargo": self.model_params.get("pct_embargo", 0.02),
         }
 
-        # ── 4. label_config ───────────────────────────────────────────────────
-        label_cfg_serial: dict = {}
-        for k, v in self.label_config.items():
-            if callable(v):
-                label_cfg_serial[k] = f"<fn:{getattr(v, '__name__', repr(v))}>"
-            elif isinstance(v, (list, tuple)):
-                label_cfg_serial[k] = [str(x) for x in v]
-            else:
-                label_cfg_serial[k] = str(v)
-
-        # ── 5. target_config ──────────────────────────────────────────────────
-        _tgt_func = self.target_config.get("func")
-        target_cfg_serial = {
-            "func": getattr(_tgt_func, "__name__", str(_tgt_func))
-                    if _tgt_func is not None else "",
-            "params": {
-                k: str(v)
-                for k, v in self.target_config.get("params", {}).items()
-            },
-        }
-
-        # ── 6. Combine and hash ───────────────────────────────────────────────
+        # ── 4. Combine and hash ───────────────────────────────────────────────
         combined = {
             "model": type(base_clf).__name__,
             "search": search_space,
             "cv": cv_config,
             "metric": metric,
             "role": "primary" if self.is_primary else "secondary",
-            "data": self.data_config,
-            "label": label_cfg_serial,
-            "target": target_cfg_serial,
+            "config": self.config,
         }
 
         digest = hashlib.sha256(
