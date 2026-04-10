@@ -835,6 +835,7 @@ class ModelDevelopmentPipeline:
         export_onnx:      bool = False,
         calibrate:        bool = False,
         display:          bool = False,
+        contine_study:    bool = False,
         verbose:          bool = True,
     ) -> Tuple:
         """
@@ -884,7 +885,7 @@ class ModelDevelopmentPipeline:
             self.compute_sample_weights()
             self.add_meta_features()
             self.preprocess_features()
-            self.train_model()
+            self.train_model(contine_study)
 
             # ── Calibration (optional) ────────────────────────────────────────
             self.calibrate = calibrate
@@ -993,7 +994,7 @@ class ModelDevelopmentPipeline:
         self.preprocessed_features = self.preprocessor.fit_transform(combined)
         self.events = self.events.loc[self.preprocessed_features.index]
 
-    def train_model(self):
+    def train_model(self, contine_study):
         """
         Dispatch to the appropriate HPO backend.
 
@@ -1026,7 +1027,7 @@ class ModelDevelopmentPipeline:
         self.model_params["pipe_clf"] = pipe
 
         if self.model_params.get("use_optuna", False):
-            self._train_model_optuna()
+            self._train_model_optuna(contine_study)
         else:
             self._train_model_sklearn()
 
@@ -1178,13 +1179,13 @@ class ModelDevelopmentPipeline:
                 sample_weight_score=sample_weight_score,
             )
 
-    def _train_model_optuna(self):
+    def _train_model_optuna(self, contine_study):
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = self.model_params["pipe_clf"].steps[-1][1]
         metric = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
 
         included = inspect.signature(optimize_trading_model).parameters.keys()
-        opt_params = {"metric": metric}
+        opt_params = {"metric": metric, "contine_study": contine_study}
         for k, v in self.model_params.items():
             if k == "param_grid":
                 opt_params["param_distributions"] = v
