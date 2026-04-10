@@ -743,7 +743,7 @@ class ModelDevelopmentPipeline:
 
         # ── Model type: bagging wrapper prefix + base estimator token ─────────
         # The wrapper prefix is computed here — it depends only on model_params
-        # and is therefore stable for the lifetime of this instance.  It is
+        # and is therefore stable for the lifetime of this instance. It is
         # prepended to the base estimator token so the model filename in the
         # file system immediately identifies the ensemble strategy used.
         #
@@ -1330,20 +1330,16 @@ class ModelDevelopmentPipeline:
         import hashlib
 
         # ── 1. Base classifier ────────────────────────────────────────────────
-        pipe     = self.model_params["pipe_clf"]
+        pipe = self.model_params["pipe_clf"]
         base_clf = pipe.steps[-1][1] if hasattr(pipe, "steps") else pipe
-        model_config = {
-            "type":   type(base_clf).__name__,
-            "params": {k: str(v) for k, v in base_clf.get_params(deep=False).items()},
-        }
 
         # ── 2. Search space shape ─────────────────────────────────────────────
-        param_grid   = self.model_params.get("param_grid", {})
+        param_grid = self.model_params.get("param_grid", {})
         search_space = sorted(param_grid.keys())
 
         # ── 3. CV protocol ────────────────────────────────────────────────────
         cv_config = {
-            "n_splits":    self.model_params.get("n_splits",    5),
+            "n_splits": self.model_params.get("n_splits", 5),
             "pct_embargo": self.model_params.get("pct_embargo", 0.02),
         }
 
@@ -1370,12 +1366,12 @@ class ModelDevelopmentPipeline:
 
         # ── 6. Combine and hash ───────────────────────────────────────────────
         combined = {
-            "model":  model_config,
+            "model": type(base_clf).__name__,
             "search": search_space,
-            "cv":     cv_config,
+            "cv": cv_config,
             "metric": metric,
-            "role":   "primary" if self.is_primary else "secondary",
-            "label":  label_cfg_serial,
+            "role": "primary" if self.is_primary else "secondary",
+            "label": label_cfg_serial,
             "target": target_cfg_serial,
         }
 
