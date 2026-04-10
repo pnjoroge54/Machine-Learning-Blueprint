@@ -381,7 +381,7 @@ def optimize_trading_model(
             f"   Study: {study_name}"
         )
 
-        if len(study.trials) < n_trials and continue_study:
+        if if hasattr(study, "trials") and len(study.trials) < n_trials and continue_study:
             # Force single-threaded inside CV to prevent oversubscription
             if hasattr(classifier, 'n_jobs'):
                 classifier.set_params(n_jobs=1)
