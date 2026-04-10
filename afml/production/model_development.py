@@ -112,16 +112,7 @@ from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
 from ..cache import cacheable, get_cache_monitor, log_data_access, print_contamination_report
-from ..calibration.calibration import CalibratorCV
-from ..cross_validation.hyper_fit import clf_hyper_fit_cached
 from ..cross_validation.cross_validation import PurgedKFold, ml_cross_val_score
-from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
-from ..cross_validation.optuna_hyper_fit import (
-    optimize_trading_model,
-    optuna_to_cv_results,
-    print_best_trial,
-    check_for_overfitting,
-)
 from ..data_structures.bars import calculate_ticks_per_period, make_bars
 from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
 from ..features.trading_session import get_time_features
@@ -132,7 +123,6 @@ from ..strategies.signal_processing import get_entries
 from ..strategies.trading_strategies import BaseStrategy
 from ..util.misc import date_conversion, value_counts_data
 from ..util.pipelines import make_custom_pipeline, set_pipeline_params, MyPipeline
-from .file_manager import ModelFileManager
 
 
 # ============================================================================
@@ -622,6 +612,16 @@ class ModelDevelopmentPipeline:
     - strategy=None instructs the pipeline to use every bar as a candidate
       entry point with no directional signal (symmetric barriers).
     """
+    from .file_manager import ModelFileManager
+    from ..calibration.calibration import CalibratorCV
+    from ..cross_validation.hyper_fit import clf_hyper_fit_cached
+    from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
+    from ..cross_validation.optuna_hyper_fit import (
+        optimize_trading_model,
+        optuna_to_cv_results,
+        print_best_trial,
+        check_for_overfitting,
+    )   
 
     def __init__(
         self,
