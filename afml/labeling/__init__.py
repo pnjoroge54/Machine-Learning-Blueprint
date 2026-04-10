@@ -8,7 +8,6 @@ from .tail_sets import TailSetLabels
 from .trend_scanning import plot_trend_labels, trend_scanning_labels
 from .triple_barrier import (
     add_vertical_barrier,
-    apply_pt_sl_on_t1,
     drop_labels,
     get_bins,
     get_event_weights,
