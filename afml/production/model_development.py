@@ -859,8 +859,6 @@ class ModelDevelopmentPipeline:
         tuple
             (best_model, feature_columns, metrics, config)
         """
-        from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
-        
         time0      = time.time()
         use_optuna = self.model_params.get("use_optuna", False)
 
@@ -1575,6 +1573,8 @@ class ModelDevelopmentPipeline:
         matplotlib "autodetected range of [nan, nan]" error when param_grid
         contains heterogeneous search spaces.
         """
+        from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
+        
         try:
             if self.cv_results and "cv_results" in self.cv_results:
                 cv_df = pd.DataFrame(self.cv_results["cv_results"])
