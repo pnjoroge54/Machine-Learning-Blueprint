@@ -166,14 +166,15 @@ class FinancialModelSuggester:
         """Returns curated parameter distributions for financial models."""
         spaces = {
             "random_forest": {
-                "n_estimators": range(100, 1000),
-                "max_depth": range(3, 12),
+                "n_estimators": range(50, 1001),
+                "max_depth": range(3, 21),
                 "min_weight_fraction_leaf": stats.uniform(0.025, 0.475),
                 "max_features": ["sqrt", "log2", 0.5, 0.7, 1.0],
+                "max_samples": np.arange(0.5, 1.1, 0.1).round(1).tolist(),
                 "ccp_alpha": stats.loguniform(1e-5, 1e-2),
             },
             "decision_tree": {
-                "max_depth": range(3, 12),
+                "max_depth": range(3, 21),
                 "min_weight_fraction_leaf": stats.uniform(0.025, 0.475),
                 "max_features": ["sqrt", "log2", 0.5, 0.7, 1.0],
                 "ccp_alpha": stats.loguniform(1e-5, 1e-2),
