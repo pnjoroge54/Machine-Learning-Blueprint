@@ -13,7 +13,7 @@ import sqlite3
 from loguru import logger
 from optuna import TrialPruned, create_study
 from optuna.exceptions import StorageInternalError
-from optuna.pruners import HyperbandPruner, MedianPruner, SuccessiveHalvingPruner
+from optuna.pruners import HyperbandPruner, MedianPruner
 from optuna.samplers import TPESampler
 
 from sklearn.base import clone
@@ -381,36 +381,33 @@ def optimize_trading_model(
             f"   Study: {study_name}"
         )
 
-        if len(study.trials) >= n_trials and not contine_study:
-            cv_results = optuna_to_cv_results(study)
-            return study, cv_results
+        if len(study.trials) < n_trials and contine_study:
+            # Force single-threaded inside CV to prevent oversubscription
+            if hasattr(classifier, 'n_jobs'):
+                classifier.set_params(n_jobs=1)
         
-        # Force single-threaded inside CV to prevent oversubscription
-        if hasattr(classifier, 'n_jobs'):
-            classifier.set_params(n_jobs=1)
+            # Ensure reproducibility
+            if hasattr(classifier, 'random_state'):
+                classifier.set_params(random_state=random_state)
+        
+            def objective(trial):
+                return optimize_trading_model_with_pruning(
+                    trial, X, y, events, data_index, classifier,
+                    param_distributions, n_splits, metric
+                )
+            
+            callbacks = [*callbacks]
+            if reports_path:
+                study.path = reports_path
+                callbacks += [save_intermediate_results]
     
-        # Ensure reproducibility
-        if hasattr(classifier, 'random_state'):
-            classifier.set_params(random_state=random_state)
-    
-        def objective(trial):
-            return optimize_trading_model_with_pruning(
-                trial, X, y, events, data_index, classifier,
-                param_distributions, n_splits, metric
+            study.optimize(
+                objective, 
+                n_trials=n_trials, 
+                timeout=timeout, 
+                callbacks=callbacks
             )
-        
-        callbacks = [*callbacks]
-        if reports_path:
-            study.path = reports_path
-            callbacks += [save_intermediate_results]
-
-        study.optimize(
-            objective, 
-            n_trials=n_trials, 
-            timeout=timeout, 
-            callbacks=callbacks
-        )
-        
+            
         # Reconstruct best model from best params
         if refit:
             best_trial = study.best_trial
