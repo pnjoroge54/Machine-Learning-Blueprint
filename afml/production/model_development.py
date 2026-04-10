@@ -1371,6 +1371,7 @@ class ModelDevelopmentPipeline:
             "cv": cv_config,
             "metric": metric,
             "role": "primary" if self.is_primary else "secondary",
+            "data": self.data_config,
             "label": label_cfg_serial,
             "target": target_cfg_serial,
         }
