@@ -685,7 +685,6 @@ class ModelDevelopmentPipeline:
             Root directory for saved artifacts.
         """
         from .file_manager import ModelFileManager
-        from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
         
         self.data_config    = data_config
         self.symbol         = data_config["symbol"]
@@ -889,6 +888,7 @@ class ModelDevelopmentPipeline:
             self._compile_metrics()
 
             if generate_reports:
+                from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
                 self._generate_analysis_reports(display=display)
             if cache_reports:
                 self._display_cache_reports()
