@@ -1,3 +1,4 @@
+from .file_manager import ModelFileManager
 from .model_export import (
     complete_export_workflow,
     export_model_to_onnx,
