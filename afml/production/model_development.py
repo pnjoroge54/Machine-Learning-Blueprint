@@ -685,15 +685,7 @@ class ModelDevelopmentPipeline:
             Root directory for saved artifacts.
         """
         from .file_manager import ModelFileManager
-        from ..calibration.calibration import CalibratorCV
-        from ..cross_validation.hyper_fit import clf_hyper_fit_cached
         from ..cross_validation.hyper_fit_analysis import generate_complete_hyperparameter_report
-        from ..cross_validation.optuna_hyper_fit import (
-            optimize_trading_model,
-            optuna_to_cv_results,
-            print_best_trial,
-            check_for_overfitting,
-        )
         
         self.data_config    = data_config
         self.symbol         = data_config["symbol"]
@@ -1060,6 +1052,8 @@ class ModelDevelopmentPipeline:
         _save_all_artifacts() unwraps the calibrator and exports the inner
         estimator (self.calibrator_.estimator_).
         """
+        from ..calibration.calibration import CalibratorCV
+        
         X             = self.preprocessed_features.loc[self.events.index]
         y             = self.events["bin"]
         sample_weight = self.sample_weight.loc[self.events.index]
@@ -1148,6 +1142,8 @@ class ModelDevelopmentPipeline:
     # ── Private training backends ─────────────────────────────────────────────
 
     def _train_model_sklearn(self):
+        from ..cross_validation.hyper_fit import clf_hyper_fit_cached
+        
         bagging_sequential = self.model_params.get("bagging_sequential", False)
         bagging_n          = self.model_params.get("bagging_n_estimators", 0)
         sample_weight_train = self.sample_weight.loc[self.events.index]
@@ -1181,6 +1177,13 @@ class ModelDevelopmentPipeline:
             )
 
     def _train_model_optuna(self, contine_study):
+        from ..cross_validation.optuna_hyper_fit import (
+            optimize_trading_model,
+            optuna_to_cv_results,
+            print_best_trial,
+            check_for_overfitting,
+        )
+        
         X, y = self.preprocessed_features, self.events["bin"]
         base_clf = self.model_params["pipe_clf"].steps[-1][1]
         metric = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
