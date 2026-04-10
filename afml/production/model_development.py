@@ -909,7 +909,7 @@ class ModelDevelopmentPipeline:
 
             if verbose:
                 elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
-                print(f"\n✓ Completed in {str(elapsed).replace('0 days ', ''}")
+                print(f"\n✓ Completed in {str(elapsed).replace('0 days ', '')}")
 
             return self.best_model, self._get_feature_names(), self.metrics, self.config
 
