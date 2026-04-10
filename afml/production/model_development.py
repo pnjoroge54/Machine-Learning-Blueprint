@@ -537,14 +537,13 @@ def get_optimal_sample_weight(
     cv_results = pd.DataFrame()
     scoring    = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
     
-    pbar1 = tqdm(weights.items(), total=len(weights), mininterval=1.0)
+    pbar1 = tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights), mininterval=1.0)
     for i, (scheme, weight) in enumerate(pbar1, 1):
-        pbar1.set_description(f"Analyzing {scheme} weighting scheme")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
-        pbar1.set_postfix({"scoring": scoring, "score": f"{cv_results[scheme].mean():.4f}"})
+        pbar1.set_postfix({"scheme": scheme, "scoring": scoring, "score": f"{cv_results[scheme].mean():.4f}"})
         if i == len(weights):
             pbar1.set_postfix({
                 "best": best_scheme,
@@ -567,14 +566,13 @@ def get_optimal_sample_weight(
             scheme = f"{best_scheme}_{'linear' if lin else 'exp'}_{decay}"
             time_decay_weights[scheme] = best_weight * decay_vec
 
-    pbar2 = tqdm(time_decay_weights.items(), total=len(time_decay_weights), mininterval=1.0)
+    pbar2 = tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay", total=len(time_decay_weights), mininterval=1.0)
     for i, (scheme, weight) in enumerate(pbar2, 1):
-        pbar2.set_description(f"Analyzing time-decay {scheme}")
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
             scheme, best_score, best_scheme, cv_results,
         )
-        pbar2.set_postfix({"scoring": scoring, "score": f"{cv_results[scheme].mean():.4f}"})
+        pbar2.set_postfix({"scheme": scheme, "scoring": scoring, "score": f"{cv_results[scheme].mean():.4f}"})
         if i == len(time_decay_weights):
             pbar2.set_postfix({
                 "best": best_scheme,
