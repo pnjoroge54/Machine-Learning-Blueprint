@@ -409,7 +409,7 @@ def optimize_trading_model(
         study.optimize(
             objective, 
             n_trials=remaining, 
-            timeout=timeout,
+            timeout=(timeout if remaining > 0 else None),
             callbacks=callbacks
         )
         
