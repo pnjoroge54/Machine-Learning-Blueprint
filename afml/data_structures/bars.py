@@ -1,5 +1,3 @@
-# src/bars/bars.py
-
 from typing import Literal, Union
 
 import numpy as np
