@@ -101,7 +101,7 @@ def simulate_path(
     y:             pd.Series,
     events:        pd.DataFrame,
     price_returns: pd.Series,
-    estimator:     
+    estimator,
     sizer:         PropFirmAwareSizer,
     cfg:           BacktestConfig,
     primary_sides: pd.Series,
