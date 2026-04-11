@@ -900,8 +900,8 @@ class ModelDevelopmentPipeline:
                     raise
 
             if verbose:
-                elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
-                print(f"\n✓ Completed in {str(elapsed).replace('0 days ', '')}")
+                elapsed = str(pd.Timedelta(seconds=time.time() - time0).round("1s")).replace('0 days ', '')
+                print(f"\n✓ Completed in {elapsed}")
 
             return self.best_model, self._get_feature_names(), self.metrics, self.config
 
@@ -1270,7 +1270,7 @@ class ModelDevelopmentPipeline:
             )
             bag.fit(X, y, sample_weight=self.study.best_estimator_.sample_weight_)
             self.best_model = Pipeline([("bag", bag)])
-            elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
+            elapsed = str(pd.Timedelta(seconds=time.time() - time0).round("1s")).replace('0 days ', '')
             logger.info(f"\n✓ BaggingClassifier fitted in {elapsed}")
         else:
             self.best_model = best_estimator
@@ -1426,8 +1426,8 @@ class ModelDevelopmentPipeline:
             if hasattr(bag, attr):
                 setattr(standard_bag, attr, getattr(bag, attr))
         
-        elapsed = pd.Timedelta(seconds=time.time() - time0).round("1s")
-        logger.info(f"\n✓ Sequential bootstrap fitted in {str(elapsed).replace('0 days ', '')}")
+        elapsed = str(pd.Timedelta(seconds=time.time() - time0).round("1s")).replace('0 days ', '')
+        logger.info(f"\n✓ Sequential bootstrap fitted in {elapsed}")
 
         return Pipeline([("seq_bag", standard_bag)])
 
