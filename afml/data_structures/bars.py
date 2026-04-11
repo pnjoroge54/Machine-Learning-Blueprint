@@ -1,266 +1,621 @@
-from typing import Union
+# src/bars/information_bars.py
+
+from typing import Literal, Union
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..util.misc import (
-    flatten_column_names,
-    log_df_info,
-    optimize_dtypes,
-    set_resampling_freq,
-)
+from ..util.misc import log_df_info, optimize_dtypes
 
 
-def calculate_ticks_per_period(
-    df: pd.DataFrame,
-    timeframe: str = "M1",
-    method: str = "median",
-    verbose: bool = True,
-) -> int:
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
+
+BarInfoType = Literal[
+    "tick_imbalance",
+    "volume_imbalance",
+    "dollar_imbalance",
+    "tick_runs",
+    "volume_runs",
+    "dollar_runs",
+]
+
+
+# ---------------------------------------------------------------------------
+# Tick rule
+# ---------------------------------------------------------------------------
+
+
+def _tick_rule(prices: np.ndarray) -> np.ndarray:
     """
-    Compute the number of ticks per period for dynamic bar sizing using either mean or median.
+    Apply the tick rule to produce a directional series b_t ∈ {-1, +1}.
 
-    Args:
-        df (pd.DataFrame): Tick data with a datetime index.
-        timeframe (str): Timeframe using MetaTrader5 convention (e.g., 'M1').
-        method (str): Calculation method from ['median', 'mean']
-        verbose (bool): Whether to log the result.
+    Rule (AFML Ch. 1):
+        b_t = sign(Δp_t)   if Δp_t ≠ 0
+        b_t = b_{t-1}       otherwise  (carry forward)
 
-    Returns:
-        int: Rounded number of ticks per period.
+    The first tick defaults to +1 when Δp_0 = 0.
+
+    Parameters
+    ----------
+    prices : np.ndarray
+        1-D array of prices in chronological order.
+
+    Returns
+    -------
+    np.ndarray
+        Array of tick directions (+1.0 / -1.0), same length as prices.
     """
-    freq = set_resampling_freq(timeframe)
-    resampled = (
-        df.resample(freq).size().values
-    )  # Count all rows, not just non-NaN values
-    fn = getattr(np, method)  # function used for getting ticks in period
-    num_ticks = fn(resampled)
-    num_rounded = int(round(num_ticks))
+    diff = np.diff(prices, prepend=prices[0])   # Δp_t; first diff = 0
+    signed = np.sign(diff).astype(float)
 
-    # Round dynamically based on magnitude
-    num_digits = min(2, len(str(num_rounded)) - 1)
-    rounded_ticks = int(round(num_rounded, -num_digits))
-    rounded_ticks = max(10, rounded_ticks)  # Make 10 ticks the minimum bar size
+    # Replace zeros with NaN so ffill carries the last non-zero sign forward
+    signed[signed == 0.0] = np.nan
 
-    if verbose:
-        t0, t1 = (x.date() for x in df.index[[0, -1]])
-        logger.info(
-            f"{method.title()} {timeframe} ticks = {num_rounded:,} -> "
-            f"{rounded_ticks:,} ({t0} to {t1})"
-        )
-
-    return rounded_ticks
+    b = (
+        pd.Series(signed)
+        .ffill()
+        .fillna(1.0)    # First tick defaults to buy when no prior direction exists
+        .to_numpy()
+    )
+    return b
 
 
-def _make_bar_type_grouper(
-    df: pd.DataFrame,
-    bar_type: str = "tick",
-    bar_size: Union[int, str] = 100,
-) -> tuple[pd.DataFrame.groupby, int]:
+# ---------------------------------------------------------------------------
+# EWM helper
+# ---------------------------------------------------------------------------
+
+
+def _ewm_scalar(values: list[float], span: int) -> float:
     """
-    Create a grouped object for aggregating tick data into time/tick/dollar/volume bars.
+    Compute the last value of an EWM mean over a list of scalars.
 
-    Args:
-        df: DataFrame with tick data (index should be datetime for time bars).
-        bar_type: Type of bar ('time', 'tick', 'dollar', 'volume').
-        bar_size:
-            - Timeframe for resampling (e.g., 'H1', 'D1', 'W1') for time bars.
-            - Number of ticks/dollars/volume per bar (ignored for time bars).
+    Used to update E_0[T] and E_0[|θ|] after each completed bar,
+    matching the adaptive threshold update in AFML Ch. 1.
 
-    Returns:
-        - GroupBy object for aggregation
-        - Calculated bar_size (for tick/dollar/volume bars)
-        - Bar ids
+    Parameters
+    ----------
+    values : list of float
+        Historical observations (e.g., bar tick counts or imbalance magnitudes).
+    span : int
+        EWM span parameter (controls decay rate; larger = slower adaptation).
+
+    Returns
+    -------
+    float
+        The final EWM mean value.
     """
-    df = df.copy(deep=False)
+    if not values:
+        return 0.0
+    return float(
+        pd.Series(values, dtype=float)
+        .ewm(span=span, adjust=False)
+        .mean()
+        .iloc[-1]
+    )
 
-    # Ensure DatetimeIndex
-    if not isinstance(df.index, pd.DatetimeIndex):
-        try:
-            df.set_index("time", inplace=True)
-        except KeyError as e:
-            raise TypeError("Could not set 'time' as index") from e
 
-    # Sort if needed
-    if not df.index.is_monotonic_increasing:
-        df.sort_index(inplace=True)
+# ---------------------------------------------------------------------------
+# Per-tick metric
+# ---------------------------------------------------------------------------
 
-    # Time bars
-    if bar_type == "time":
-        freq = set_resampling_freq(bar_size)
-        bar_group = (
-            df.resample(freq, closed="left", label="right")
-            if not freq.startswith(("B", "W"))
-            else df.resample(freq)
-        )
-        return bar_group, bar_size, None
 
-    # Dynamic bar sizing
-    if bar_type == "tick" and isinstance(bar_size, str):
-        bar_size = calculate_ticks_per_period(df, bar_size)
+def _compute_metric(
+    b: np.ndarray,
+    volumes: np.ndarray,
+    dollar_values: np.ndarray,
+    bar_info_type: BarInfoType,
+) -> np.ndarray:
+    """
+    Compute the signed per-tick metric used to accumulate θ_T.
 
-    if not isinstance(bar_size, int):
-        raise NotImplementedError(
-            f"{bar_type} bars require integer bar_size, but you input '{bar_size}'"
-        )
-    elif bar_size == 0:
-        raise NotImplementedError(f"{bar_type} bars require non-zero bar_size")
+    Maps each bar type to its corresponding AFML formulation:
 
-    # Non-time bars
-    df["time"] = df.index  # Add without copying
+        tick_imbalance / tick_runs      : b_t
+        volume_imbalance / volume_runs  : b_t · v_t
+        dollar_imbalance / dollar_runs  : b_t · p_t · v_t
 
-    if bar_type == "tick":
-        bar_id = np.arange(len(df)) // bar_size
-    elif bar_type in ("volume", "dollar"):
-        if "volume" not in df.columns:
-            raise KeyError(f"'volume' column required for {bar_type} bars")
+    Parameters
+    ----------
+    b            : tick directions (+1/-1), shape (n,)
+    volumes      : tick volumes,            shape (n,)
+    dollar_values: pre-computed p_t * v_t,  shape (n,)
+    bar_info_type: one of the six information bar types
 
-        # Optimized cumulative sum
-        cum_metric = df["volume"] * df["bid"] if bar_type == "dollar" else df["volume"]
-        cumsum = cum_metric.cumsum()
-        bar_id = (cumsum // bar_size).astype(int)
+    Returns
+    -------
+    np.ndarray
+        Signed metric per tick, shape (n,).
+    """
+    if bar_info_type in ("tick_imbalance", "tick_runs"):
+        return b
+    elif bar_info_type in ("volume_imbalance", "volume_runs"):
+        return b * volumes
+    elif bar_info_type in ("dollar_imbalance", "dollar_runs"):
+        return b * dollar_values
     else:
-        raise NotImplementedError(f"{bar_type} bars not implemented")
-
-    return df.groupby(bar_id), bar_size, bar_id
+        raise NotImplementedError(f"Unknown bar_info_type: '{bar_info_type}'")
 
 
-def make_bars(
+# ---------------------------------------------------------------------------
+# Boundary detection — imbalance bars
+# ---------------------------------------------------------------------------
+
+
+def _detect_imbalance_boundaries(
+    metric: np.ndarray,
+    exp_ticks_init: float,
+    exp_imbalance_init: float,
+    ewm_span: int,
+) -> np.ndarray:
+    """
+    Detect bar boundaries for tick / volume / dollar imbalance bars.
+
+    A bar closes at tick T when (AFML Eq. 1.1):
+
+        |θ_T| ≥ E_0[T] · |E_0[imbalance per tick]|
+
+    Both expectations are updated after each completed bar using EWM over
+    the history of observed bar tick counts and |θ_T| values.
+
+    Parameters
+    ----------
+    metric             : signed metric per tick (b_t, b_t·v_t, or b_t·d_t)
+    exp_ticks_init     : initial E_0[T]  — expected ticks per bar
+    exp_imbalance_init : initial E_0[|imbalance per tick|]
+                         For tick bars: E_0[|2·P[b=1] - 1|] ∈ (0, 1]
+    ewm_span           : EWM span (in bars) for updating both expectations
+
+    Returns
+    -------
+    np.ndarray of int
+        Indices (0-based, inclusive) of the last tick in each completed bar.
+        Incomplete trailing bars are excluded.
+    """
+    boundaries: list[int] = []
+
+    theta = 0.0
+    bar_start = 0
+
+    # Seed history with initial guesses so EWM is well-defined from bar 1
+    tick_count_history: list[float] = [exp_ticks_init]
+    imbalance_history: list[float] = [abs(exp_imbalance_init) * exp_ticks_init]
+
+    exp_T = exp_ticks_init
+    exp_abs_imb = abs(exp_imbalance_init)   # per-tick imbalance expectation
+
+    for t, m in enumerate(metric):
+        theta += m
+
+        threshold = exp_T * exp_abs_imb
+
+        if abs(theta) >= threshold:
+            boundaries.append(t)
+
+            # --- Update expectations with EWM over bar history ---
+            bar_len = float(t - bar_start + 1)
+            tick_count_history.append(bar_len)
+            imbalance_history.append(abs(theta))
+
+            exp_T = _ewm_scalar(tick_count_history, ewm_span)
+            # Normalise: E[|θ_T|] / E[T] ≈ E[|imbalance per tick|]
+            exp_abs_imb = _ewm_scalar(imbalance_history, ewm_span) / max(exp_T, 1.0)
+
+            # Reset accumulator for next bar
+            theta = 0.0
+            bar_start = t + 1
+
+    return np.array(boundaries, dtype=np.intp)
+
+
+# ---------------------------------------------------------------------------
+# Boundary detection — runs bars
+# ---------------------------------------------------------------------------
+
+
+def _detect_runs_boundaries(
+    metric: np.ndarray,
+    b: np.ndarray,
+    exp_ticks_init: float,
+    exp_runs_init: float,
+    ewm_span: int,
+) -> np.ndarray:
+    """
+    Detect bar boundaries for tick / volume / dollar runs bars.
+
+    A bar closes at tick T when (AFML Eq. 1.2):
+
+        θ_T = max(Σ_{b=+1} q_t, Σ_{b=-1} q_t) ≥ E_0[T] · max_run_expectation
+
+    Where q_t = |metric_t| (the unsigned magnitude of the per-tick metric).
+
+    The max_run_expectation is updated after each bar using EWM over the
+    history of observed θ_T values.
+
+    Parameters
+    ----------
+    metric         : signed metric per tick; sign encodes direction
+    b              : tick directions (+1/-1), used to split buy / sell
+    exp_ticks_init : initial E_0[T]
+    exp_runs_init  : initial E_0[max run component per tick]
+                     For tick bars this is E_0[max(P[b=+1], P[b=-1])] ∈ (0.5, 1]
+    ewm_span       : EWM span (in bars) for updating expectations
+
+    Returns
+    -------
+    np.ndarray of int
+        0-based inclusive indices of the last tick in each completed bar.
+    """
+    boundaries: list[int] = []
+
+    buy_sum = 0.0
+    sell_sum = 0.0
+    bar_start = 0
+
+    tick_count_history: list[float] = [exp_ticks_init]
+    runs_history: list[float] = [abs(exp_runs_init) * exp_ticks_init]
+
+    exp_T = exp_ticks_init
+    exp_run = abs(exp_runs_init)
+
+    for t in range(len(metric)):
+        q = abs(metric[t])      # Unsigned magnitude
+        if b[t] > 0:
+            buy_sum += q
+        else:
+            sell_sum += q
+
+        theta = max(buy_sum, sell_sum)
+        threshold = exp_T * exp_run
+
+        if theta >= threshold:
+            boundaries.append(t)
+
+            bar_len = float(t - bar_start + 1)
+            tick_count_history.append(bar_len)
+            runs_history.append(theta)
+
+            exp_T = _ewm_scalar(tick_count_history, ewm_span)
+            exp_run = _ewm_scalar(runs_history, ewm_span) / max(exp_T, 1.0)
+
+            buy_sum = 0.0
+            sell_sum = 0.0
+            bar_start = t + 1
+
+    return np.array(boundaries, dtype=np.intp)
+
+
+# ---------------------------------------------------------------------------
+# OHLC aggregation
+# ---------------------------------------------------------------------------
+
+
+def _aggregate_bars(
     tick_df: pd.DataFrame,
-    bar_type: str = "tick",
-    bar_size: Union[int, str] = 100,
+    boundaries: np.ndarray,
+    price_col: str,
+    tick_num: bool,
+) -> pd.DataFrame:
+    """
+    Aggregate tick data into OHLC bars using pre-detected bar boundaries.
+
+    Each bar spans tick_df.iloc[prev_end : end_idx + 1].  The bar's timestamp
+    is the last tick's time + 1 µs, consistent with the convention in make_bars.
+
+    Parameters
+    ----------
+    tick_df   : tick DataFrame with DatetimeIndex and required columns
+    boundaries: 0-based inclusive last-tick indices per bar
+    price_col : price column used for OHLC ('mid_price', 'bid', 'ask')
+    tick_num  : if True, record the 1-based global tick index at bar formation
+
+    Returns
+    -------
+    pd.DataFrame
+        OHLC bars indexed by bar-close time.  Empty DataFrame if no boundaries.
+    """
+    if len(boundaries) == 0:
+        logger.warning("No bar boundaries detected — returning empty DataFrame.")
+        return pd.DataFrame()
+
+    has_volume = "volume" in tick_df.columns
+    records: list[dict] = []
+    prev_end = 0
+
+    for end_idx in boundaries:
+        chunk = tick_df.iloc[prev_end : end_idx + 1]
+
+        if chunk.empty:
+            prev_end = end_idx + 1
+            continue
+
+        prices = chunk[price_col].to_numpy()
+
+        row: dict = {
+            # +1 µs so the bar timestamp is strictly after the last tick,
+            # matching the convention used in make_bars for non-time bars
+            "time":        chunk.index[-1] + pd.Timedelta(microseconds=1),
+            "open":        prices[0],
+            "high":        prices.max(),
+            "low":         prices.min(),
+            "close":       prices[-1],
+            "spread":      chunk["spread"].mean(),
+            "spread_bps":  chunk["spread_bps"].mean(),
+            "tick_volume": len(chunk),
+        }
+
+        if has_volume:
+            row["volume"] = chunk["volume"].sum()
+
+        if tick_num:
+            row["tick_num"] = end_idx + 1      # 1-based global tick index
+
+        records.append(row)
+        prev_end = end_idx + 1
+
+    bars = pd.DataFrame(records).set_index("time")
+    bars.index.name = "time"
+    return bars
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def make_information_bars(
+    tick_df: pd.DataFrame,
+    bar_info_type: BarInfoType = "tick_imbalance",
+    exp_ticks_init: Union[int, float] = 1_000,
+    exp_imbalance_init: float = 0.1,
+    ewm_span: int = 20,
     price: str = "mid_price",
     tick_num: bool = True,
     verbose: bool = False,
-):
+) -> pd.DataFrame:
     """
-    Constructs OHLC bars from tick data.
+    Construct information bars (imbalance or runs) from tick data.
 
-    Args:
-        tick_df (pd.DataFrame): Tick data.
-        bar_type (str): Bar type ('tick', 'time', 'volume', 'dollar').
-        bar_size (int | str): For non-time bars; if str, dynamic calculation is used.
-        timeframe (str): Timeframe for calculation.
-        price (str): Price field strategy ('bid', 'ask', 'mid_price', 'bid_ask').
-        tick_num (bool): Add column with index of which tick where each bar was formed if True.
-        verbose (bool): Prints runtime details if True.
+    Implements the framework from:
+        López de Prado, M. (2018).
+        *Advances in Financial Machine Learning*, Ch. 1.
 
-    Returns:
-        pd.DataFrame: OHLC bars with additional metrics.
-    """
-    tick_df["mid_price"] = (tick_df["bid"] + tick_df["ask"]) / 2
-    if "spread" not in tick_df.columns:
-        tick_df["spread"] = tick_df["ask"] - tick_df["bid"]
-        tick_df["spread_bps"] = tick_df["spread"] / tick_df["mid_price"] * 10000
+    Bar Types
+    ---------
+    **Imbalance bars** close when the cumulative signed imbalance |θ_T| exceeds
+    a dynamically updated threshold:
 
-    price_cols = ["bid", "ask"] if price == "bid_ask" else [price]
-    price_cols += ["spread", "spread_bps"]
-    if bar_type in ("volume", "dollar"):
-        if "volume" not in tick_df:
-            raise KeyError(f"'volume' column required for {bar_type} bars")
-        price_cols.append("volume")  # Add volume for dollar- and volume- bars
+        |θ_T| ≥ E_0[T] · |E_0[imbalance per tick]|
 
-    bar_group, bar_size, bar_id = _make_bar_type_grouper(
-        tick_df[price_cols], bar_type, bar_size
-    )
+    **Runs bars** close when the dominant directional run exceeds a threshold:
 
-    if price != "bid_ask":
-        ohlc_df = bar_group[price].ohlc()
-    else:
-        ohlc_df = bar_group.agg({k: "ohlc" for k in ("bid", "ask")})
-        ohlc_df.columns = flatten_column_names(ohlc_df)
-        # Make OHLC using mid-price
-        for col in ["open", "high", "low", "close"]:
-            ohlc_df[col] = ohlc_df.filter(regex=col).sum(axis=1).div(2)
+        max(Σ_{b=+1} q_t, Σ_{b=-1} q_t) ≥ E_0[T] · E_0[max run per tick]
 
-    ohlc_df["spread"] = bar_group["spread"].mean()
-    ohlc_df["spread_bps"] = bar_group["spread_bps"].mean()
-    ohlc_df["tick_volume"] = bar_group.size() if bar_type != "tick" else bar_size
+    Both thresholds adapt after each completed bar via EWM over bar history.
 
-    if "volume" in tick_df.columns:
-        ohlc_df["volume"] = bar_group["volume"].sum()
+    The per-tick metric q_t differs by bar type:
 
-    if bar_type == "time":
-        eq_zero = ohlc_df["tick_volume"] == 0
-        ohlc_df = ohlc_df[~eq_zero]
-
-        nzeros = eq_zero.sum()
-        if nzeros > 0:
-            nrows = ohlc_df.shape[0]
-            msg = f"{nzeros:,} of {nrows:,} ({nzeros / nrows:.2%}) rows with zero tick volume."
-            logger.info(f"Dropped {msg}")
-
-        if tick_num:
-            ohlc_df["tick_num"] = ohlc_df["tick_volume"].cumsum()  # 1-based index
-
-    else:
-        ohlc_df.index = bar_group["time"].last() + pd.Timedelta(
-            microseconds=1
-        )  # Ensure end time is after last tick
-
-        if len(tick_df) % bar_size > 0:
-            ohlc_df = ohlc_df.iloc[:-1]
-
-        if tick_num:
-            ohlc_df["tick_num"] = _get_bar_tick_indices(tick_df, bar_size, bar_id)
-
-    try:
-        ohlc_df = ohlc_df.tz_convert(None)  # Remove timezone information from index
-    except TypeError:
-        logger.warning(
-            "The tick data used to construct 'ohlc_df' lacks timezone information; skipping tz conversion. \
-                Ensure source data is timezone-aware to avoid downstream ambiguity."
-        )
-
-    ohlc_df = optimize_dtypes(ohlc_df)  # Save memory
-
-    if verbose:
-        bar_info = (
-            f"{bar_type}-{bar_size:,}"
-            if (bar_type != "time")
-            else f"{bar_size.upper()}"
-        )
-        logger.info(f"{bar_info} bars contain {ohlc_df.shape[0]:,} rows.")
-        logger.info(f"Tick data contains {tick_df.shape[0]:,} rows.")
-        log_df_info(ohlc_df)
-
-    return ohlc_df
-
-
-def _get_bar_tick_indices(tick_df, bar_size, bar_id) -> pd.Series:
-    """
-    Return the tick indices that form each bar.
+    +-----------------------+------------------+
+    | bar_info_type         | metric q_t       |
+    +=======================+==================+
+    | tick_imbalance/runs   | b_t              |
+    +-----------------------+------------------+
+    | volume_imbalance/runs | b_t · v_t        |
+    +-----------------------+------------------+
+    | dollar_imbalance/runs | b_t · v_t · p_t  |
+    +-----------------------+------------------+
 
     Parameters
     ----------
     tick_df : pd.DataFrame
-        Tick data with datetime index (or 'time' column).
-    bar_type : str, default 'tick'
-        Bar type ('tick', 'time', 'volume', 'dollar').
-    bar_size : int or str, default 100
-        Bar size. If str and bar_type='tick', dynamic calculation is used.
+        Tick data with DatetimeIndex.  Required columns:
+
+            bid, ask            (always required)
+            volume              (required for volume_* and dollar_* bar types)
+
+        Optional pre-computed columns (computed here if absent):
+            mid_price, spread, spread_bps
+
+    bar_info_type : str
+        One of:
+            'tick_imbalance'   | 'tick_runs'
+            'volume_imbalance' | 'volume_runs'
+            'dollar_imbalance' | 'dollar_runs'
+
+    exp_ticks_init : int or float
+        Initial guess for E_0[T] — expected number of ticks per bar.
+        Use ``calculate_ticks_per_period`` from the standard bars module
+        to derive a data-driven estimate.
+
+    exp_imbalance_init : float
+        Initial guess for the expected signed imbalance per tick (imbalance bars)
+        or the expected max run component per tick (runs bars).
+
+        Guidance by bar type:
+            tick_imbalance / tick_runs:
+                ≈ E_0[|2·P[b=+1] - 1|] or E_0[max(P[b=+1], P[b=-1])]
+                Typical range: 0.01 – 0.5
+            volume / dollar variants:
+                Same interpretation but scaled by average tick volume or
+                average dollar value; tune empirically.
+
+    ewm_span : int
+        EWM span (in completed bars) controlling how quickly thresholds adapt.
+        Smaller → faster adaptation; larger → more stable thresholds.
+        Typical range: 5 – 50.
+
+    price : str
+        Price column used for OHLC construction.
+        One of: 'mid_price' (default), 'bid', 'ask'.
+
+    tick_num : bool
+        If True, adds a 'tick_num' column containing the 1-based global tick
+        index at which each bar closed.
+
+    verbose : bool
+        If True, logs bar count, tick count, and DataFrame structure.
 
     Returns
     -------
-    pd.Series
-        Series indexed by bar end time with tick number on which bar was formed
+    pd.DataFrame
+        OHLC bars indexed by bar-close time (last tick + 1 µs) with columns:
+
+            open, high, low, close      OHLC prices
+            spread                      mean bid-ask spread per bar
+            spread_bps                  mean spread in basis points per bar
+            tick_volume                 number of ticks in bar
+            volume                      sum of tick volumes (if available)
+            tick_num                    global tick index at bar close (if tick_num=True)
+
+    Raises
+    ------
+    NotImplementedError
+        If bar_info_type is not one of the six supported types.
+    KeyError
+        If 'volume' column is missing for volume_* or dollar_* bar types.
+    TypeError
+        If a DatetimeIndex cannot be established from tick_df.
+
+    Examples
+    --------
+    >>> from src.bars.bars import calculate_ticks_per_period
+    >>> from src.bars.information_bars import make_information_bars
+
+    >>> # Estimate a sensible starting point
+    >>> exp_T = calculate_ticks_per_period(tick_df, timeframe="M5", method="median")
+
+    >>> bars = make_information_bars(
+    ...     tick_df,
+    ...     bar_info_type="dollar_imbalance",
+    ...     exp_ticks_init=exp_T,
+    ...     exp_imbalance_init=0.05,
+    ...     ewm_span=20,
+    ...     verbose=True,
+    ... )
     """
+    # ------------------------------------------------------------------
+    # 1. Validate bar_info_type
+    # ------------------------------------------------------------------
+    _VALID_BAR_INFO_TYPES: set[str] = {
+        "tick_imbalance", "volume_imbalance", "dollar_imbalance",
+        "tick_runs",      "volume_runs",      "dollar_runs",
+    }
+    if bar_info_type not in _VALID_BAR_INFO_TYPES:
+        raise NotImplementedError(
+            f"bar_info_type must be one of {_VALID_BAR_INFO_TYPES}, "
+            f"got '{bar_info_type}'"
+        )
+
+    needs_volume = bar_info_type not in ("tick_imbalance", "tick_runs")
+    if needs_volume and "volume" not in tick_df.columns:
+        raise KeyError(
+            f"'volume' column is required for '{bar_info_type}' bars."
+        )
+
+    # ------------------------------------------------------------------
+    # 2. Prepare tick DataFrame
+    # ------------------------------------------------------------------
+    tick_df = tick_df.copy(deep=False)
+
+    if not isinstance(tick_df.index, pd.DatetimeIndex):
+        try:
+            tick_df.set_index("time", inplace=True)
+        except KeyError as e:
+            raise TypeError("Could not set 'time' as index.") from e
+
+    if not tick_df.index.is_monotonic_increasing:
+        tick_df.sort_index(inplace=True)
+
+    # Compute derived price columns only when absent
+    if "mid_price" not in tick_df.columns:
+        tick_df["mid_price"] = (tick_df["bid"] + tick_df["ask"]) / 2
+    if "spread" not in tick_df.columns:
+        tick_df["spread"] = tick_df["ask"] - tick_df["bid"]
+    if "spread_bps" not in tick_df.columns:
+        tick_df["spread_bps"] = (
+            tick_df["spread"] / tick_df["mid_price"] * 10_000
+        )
+
+    # ------------------------------------------------------------------
+    # 3. Tick rule → direction series b_t
+    # ------------------------------------------------------------------
+    prices = tick_df[price].to_numpy()
+    b = _tick_rule(prices)
+
+    # ------------------------------------------------------------------
+    # 4. Per-tick metric
+    # ------------------------------------------------------------------
+    if needs_volume:
+        volumes = tick_df["volume"].to_numpy()
+        dollar_values = volumes * tick_df["mid_price"].to_numpy()
+    else:
+        n = len(tick_df)
+        volumes = np.ones(n)
+        dollar_values = np.ones(n)
+
+    metric = _compute_metric(b, volumes, dollar_values, bar_info_type)
+
+    # ------------------------------------------------------------------
+    # 5. Detect bar boundaries
+    # ------------------------------------------------------------------
+    is_runs_bar = bar_info_type.endswith("runs")
+
+    if is_runs_bar:
+        boundaries = _detect_runs_boundaries(
+            metric=metric,
+            b=b,
+            exp_ticks_init=float(exp_ticks_init),
+            exp_runs_init=exp_imbalance_init,
+            ewm_span=ewm_span,
+        )
+    else:
+        boundaries = _detect_imbalance_boundaries(
+            metric=metric,
+            exp_ticks_init=float(exp_ticks_init),
+            exp_imbalance_init=exp_imbalance_init,
+            ewm_span=ewm_span,
+        )
+
+    n_bars = len(boundaries)
     n_ticks = len(tick_df)
+    avg_ticks = n_ticks / max(n_bars, 1)
+    logger.info(
+        f"{bar_info_type}: {n_bars:,} bars from {n_ticks:,} ticks "
+        f"(avg {avg_ticks:.0f} ticks/bar)"
+    )
 
-    # Find where bar_id changes (new bar starts)
-    # diff > 0 indicates a bar boundary
-    diff = np.diff(bar_id, prepend=-1)
-    boundary_indices = np.where(diff > 0)[0]
+    # ------------------------------------------------------------------
+    # 6. Aggregate ticks → OHLC
+    # ------------------------------------------------------------------
+    ohlc_df = _aggregate_bars(
+        tick_df=tick_df,
+        boundaries=boundaries,
+        price_col=price,
+        tick_num=tick_num,
+    )
 
-    # Last tick indices are one before each boundary
-    last_indices = boundary_indices - 1
+    if ohlc_df.empty:
+        return ohlc_df
 
-    # Add final bar if complete
-    if n_ticks % bar_size == 0 and n_ticks > 0:
-        last_indices = np.append(last_indices, n_ticks - 1)
+    # ------------------------------------------------------------------
+    # 7. Post-processing  (mirrors make_bars)
+    # ------------------------------------------------------------------
+    try:
+        ohlc_df = ohlc_df.tz_convert(None)
+    except TypeError:
+        logger.warning(
+            "Tick data lacks timezone information; skipping tz conversion. "
+            "Ensure source data is timezone-aware to avoid downstream ambiguity."
+        )
 
-    # Filter valid indices and set to 1-based index
-    last_indices = last_indices[last_indices >= 0] + 1
+    # verbose=False: optimize_dtypes prints to stdout by default — suppress here
+    ohlc_df = optimize_dtypes(ohlc_df, verbose=False)
 
-    return last_indices
+    if verbose:
+        logger.info(f"{bar_info_type} bars contain {ohlc_df.shape[0]:,} rows.")
+        logger.info(f"Tick data contains {tick_df.shape[0]:,} rows.")
+        log_df_info(ohlc_df)
+
+    return ohlc_df
