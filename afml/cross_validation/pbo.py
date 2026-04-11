@@ -106,8 +106,10 @@ def compute_pbo(
             below_median += 1
 
         # Logit-transformed OOS score (if in (0,1)) for the best-IS strategy
-        oos_sr = float(oos_scores[best_is_col])
-        logit_sr.append(np.log(oos_sr / (1 - oos_sr)) if 0 < oos_sr < 1 else np.nan)
+        if 0 < norm_rank < 1:
+            logit_sr.append(np.log(norm_rank / (1 - norm_rank)))
+        else:
+            logit_sr.append(np.nan)
 
     n_splits = cv.n_splits
     pbo = below_median / n_splits
