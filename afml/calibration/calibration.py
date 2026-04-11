@@ -352,6 +352,8 @@ class CalibratorCV(BaseEstimator, ClassifierMixin):
             
 
         X_, y_ = X, y
+        if isinstance(X, pd.Series):
+            X = X.to_frame()         
         X = check_array(X, ensure_min_samples=2)
         y = check_array(y, ensure_min_samples=2, ensure_2d=False, dtype="int").ravel()
 
