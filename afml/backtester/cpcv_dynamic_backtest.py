@@ -133,6 +133,9 @@ def simulate_path(
     -------
     PathResult
     """
+    if isinstance(X, pd.Series):
+        X = X.to_frame()
+        
     state = PropFirmAccountState(
         initial_balance=cfg.initial_balance,
         phase=cfg.phase,
