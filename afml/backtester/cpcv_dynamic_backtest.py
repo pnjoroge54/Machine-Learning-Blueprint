@@ -30,7 +30,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from sklearn.base import BaseEstimator, clone
+from sklearn.base import clone
 
 from ..cross_validation.combinatorial import CombinatorialPurgedCV
 from ..bet_sizing.prop_firm_sizer import PropFirmAccountState, PropFirmAwareSizer, Phase
@@ -101,7 +101,7 @@ def simulate_path(
     y:             pd.Series,
     events:        pd.DataFrame,
     price_returns: pd.Series,
-    estimator:     BaseEstimator,
+    estimator:     
     sizer:         PropFirmAwareSizer,
     cfg:           BacktestConfig,
     primary_sides: pd.Series,
@@ -308,7 +308,7 @@ class CPCVDynamicBacktest:
     def __init__(
         self,
         cv_gen:        CombinatorialPurgedCV,
-        estimator,     BaseEstimator,
+        estimator,     
         sizer:         PropFirmAwareSizer,
         cfg:           BacktestConfig,
         close_prices:  pd.Series,
