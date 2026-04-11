@@ -406,12 +406,13 @@ def optimize_trading_model(
             study.path = reports_path
             callbacks += [save_intermediate_results]
 
-        study.optimize(
-            objective, 
-            n_trials=remaining, 
-            timeout=(timeout if remaining > 0 else None),
-            callbacks=callbacks
-        )
+        if remaining > 0:
+            study.optimize(
+                objective, 
+                n_trials=remaining, 
+                timeout=timeout,
+                callbacks=callbacks
+            )
         
         # Reconstruct best model from best params
         if refit:
