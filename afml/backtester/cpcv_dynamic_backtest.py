@@ -1,30 +1,35 @@
 """
 CPCV dynamic backtest orchestrator with fresh account state per path.
 
-Each of the φ[N, k] combinatorial paths receives:
-  - A fresh PropFirmAccountState (same initial balance and limits)
-  - A distinct sequence of OOF predictions (from a different training fold combination)
-  - A bar-by-bar simulation loop that updates account state at each step
+Architecture (three-phase)
+──────────────────────────
+  Phase 1 — Train:  Fit the estimator on every C(N, k) combinatorial split
+                     produced by CombinatorialPurgedCV.split().  Each split
+                     yields purged+embargoed train indices and a list of test
+                     fold arrays.  Training is parallelised across splits.
 
-Paths are simulated in parallel via joblib.Parallel.
+  Phase 2 — Assemble:  Recombine per-split OOF predictions into the φ[N, k]
+                        backtest paths via recombine_test_predictions().
 
-The output is a distribution of equity curves and per-path metrics from
-which the PBO audit (CSCV) can be computed via the Unified Validation
-Pipeline's compute_pbo function.
+  Phase 3 — Simulate:  Run a bar-by-bar P&L simulation on each assembled
+                        path with a fresh PropFirmAccountState.
+
+This mirrors the CPCVAnalyzer pattern: training is per-split, path assembly
+uses CombinatorialPurgedCV's own recombination logic, and simulation
+consumes the fully-assembled path predictions.
 
 Dependencies
 ────────────
-    afml.cross_validation.cross_validation : PurgedKFold
-    afml.cross_validation.combinatorial    : CombinatorialPurgedCV,
-                                             optimal_folds_number
-    prop_firm_sizer                        : PropFirmAwareSizer,
-                                             PropFirmAccountState, Phase
+    afml.cross_validation.combinatorial : CombinatorialPurgedCV,
+                                          optimal_folds_number
+    afml.bet_sizing.prop_firm_sizer     : PropFirmAwareSizer,
+                                          PropFirmAccountState, Phase
     joblib, numpy, pandas, sklearn
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -48,29 +53,29 @@ class BacktestConfig:
     initial_balance : float
         Starting account balance for every path simulation.
     phase : Phase
-        Prop firm phase. Determines profit target and rule set.
+        Prop firm phase.  Determines profit target and rule set.
     pip_value : float
         Dollar value of one pip per standard lot.
     lot_size : float
         Lot size used to translate bet size fractions into notional positions.
     commission_per_lot : float
-        Commission per lot (both sides). Counts against the daily limit.
+        Commission per lot (both sides).  Counts against the daily limit.
     slippage_pips : float
-        Assumed slippage per trade in pips. Applied to each entry and exit.
+        Assumed slippage per trade in pips.  Applied to each entry and exit.
     n_jobs : int
-        Number of parallel workers. -1 = all physical cores.
+        Number of parallel workers.  -1 = all physical cores.
     random_state : int
         Seed for any stochastic components.
     """
 
-    initial_balance:    float = 100_000.0
-    phase:              Phase = Phase.CHALLENGE_PHASE_1
-    pip_value:          float = 10.0
-    lot_size:           float = 0.01
+    initial_balance: float = 100_000.0
+    phase: Phase = Phase.CHALLENGE_PHASE_1
+    pip_value: float = 10.0
+    lot_size: float = 0.01
     commission_per_lot: float = 5.0
-    slippage_pips:      float = 0.5
-    n_jobs:             int   = -1
-    random_state:       int   = 42
+    slippage_pips: float = 0.5
+    n_jobs: int = -1
+    random_state: int = 42
 
 
 # ── Per-path result container ─────────────────────────────────────────────────
@@ -79,85 +84,110 @@ class BacktestConfig:
 class PathResult:
     """Result of a single CPCV path simulation."""
 
-    path_id:        int
-    equity_curve:   pd.Series          # bar-by-bar equity indexed by timestamp
-    returns:        pd.Series          # bar-by-bar returns
-    sharpe:         float
-    max_drawdown:   float
-    daily_breaches: int                # number of bars where daily limit was breached
-    overall_breach: bool               # whether overall floor was ever breached
-    trading_days:   int
-    hit_target:     bool               # whether phase profit target was reached
-    final_equity:   float
+    path_id: int
+    equity_curve: pd.Series
+    returns: pd.Series
+    sharpe: float
+    max_drawdown: float
+    daily_breaches: int
+    overall_breach: bool
+    trading_days: int
+    hit_target: bool
+    final_equity: float
 
 
-# ── Path simulation (runs in a single worker) ─────────────────────────────────
+# ── Phase 1 helper: fit one split ─────────────────────────────────────────────
 
-def simulate_path(
-    path_id:       int,
-    train_indices: list[np.ndarray],
-    test_indices:  list[np.ndarray],
-    X:             pd.DataFrame,
-    y:             pd.Series,
-    events:        pd.DataFrame,
-    price_returns: pd.Series,
+def _fit_predict_split(
     estimator,
-    sizer:         PropFirmAwareSizer,
-    cfg:           BacktestConfig,
+    X: pd.DataFrame,
+    y: pd.Series,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    sample_weight: pd.Series | None = None,
+) -> np.ndarray:
+    """
+    Fit the estimator on one split's training set and return test predictions.
+
+    Parameters
+    ----------
+    estimator : sklearn-compatible estimator
+        Will be cloned before fitting.
+    X, y : pd.DataFrame, pd.Series
+        Full feature matrix and labels.
+    train_idx, test_idx : np.ndarray
+        Positional indices for this split's training and (concatenated) test set.
+    sample_weight : pd.Series, optional
+        Per-observation sample weights aligned with X.
+
+    Returns
+    -------
+    np.ndarray
+        Predicted probabilities (class 1) for the test observations, ordered
+        to match test_idx.
+    """
+    model = clone(estimator)
+
+    if sample_weight is not None:
+        model.fit(
+            X.iloc[train_idx],
+            y.iloc[train_idx],
+            sample_weight=sample_weight.iloc[train_idx],
+        )
+    else:
+        model.fit(X.iloc[train_idx], y.iloc[train_idx])
+
+    return model.predict_proba(X.iloc[test_idx])[:, 1]
+
+
+# ── Phase 3 helper: simulate one assembled path ──────────────────────────────
+
+def _simulate_path(
+    path_id: int,
+    oof_probs: pd.Series,
+    events: pd.DataFrame,
+    price_returns: pd.Series,
+    sizer: PropFirmAwareSizer,
+    cfg: BacktestConfig,
     primary_sides: pd.Series,
 ) -> PathResult:
     """
-    Simulate one CPCV path bar-by-bar with a fresh account state.
+    Simulate one fully-assembled backtest path bar-by-bar.
 
     Parameters
     ----------
     path_id : int
         Index of this combinatorial path.
-    train_indices, test_indices : list of np.ndarray
-        Index arrays for each fold's training and test sets on this path.
-        Produced by CombinatorialPurgedCV.
-    X, y, events : pd.DataFrame, pd.Series, pd.DataFrame
-        Full feature matrix, labels, and events aligned by DatetimeIndex.
+    oof_probs : pd.Series
+        Out-of-fold predicted probabilities for every observation on this path,
+        produced by recombine_test_predictions().
+    events : pd.DataFrame
+        Events table aligned with X.
     price_returns : pd.Series
-        Bar-level returns (close-to-close), aligned with X.
-    estimator : sklearn-compatible estimator
-        Base classifier. Cloned and retrained on each fold's training set.
+        Bar-level close-to-close returns aligned with X.
     sizer : PropFirmAwareSizer
-        Fully configured sizer. The same sizer instance is used across all
-        paths; account state is provided fresh per path.
+        Fully configured sizer.
     cfg : BacktestConfig
     primary_sides : pd.Series
-        Side predictions (+1/-1), aligned with X.
+        Side predictions (+1/-1) aligned with X.
 
     Returns
     -------
     PathResult
     """
-    if isinstance(X, pd.Series):
-        X = X.to_frame()
-        
+    # Drop bars with no prediction (purged/embargoed gaps)
+    valid = oof_probs.notna()
+    oof_probs = oof_probs.loc[valid]
+    sides_valid = primary_sides.loc[oof_probs.index]
+    events_valid = events.loc[oof_probs.index]
+    ret_valid = price_returns.loc[oof_probs.index]
+
     state = PropFirmAccountState(
         initial_balance=cfg.initial_balance,
         phase=cfg.phase,
     )
 
-    # -- Collect OOF predictions across folds for this path ------------------
-    oof_probs = pd.Series(np.nan, index=X.index)
-
-    for tr_idx, te_idx in zip(train_indices, test_indices):
-        model = clone(estimator)
-        model.fit(X.iloc[tr_idx], y.iloc[tr_idx])
-        probs = model.predict_proba(X.iloc[te_idx])[:, 1]
-        oof_probs.iloc[te_idx] = probs
-
-    # Drop bars with no OOF prediction (purged/embargoed bars between folds)
-    valid_mask  = oof_probs.notna().index
-    oof_probs = oof_probs.loc[valid_mask]
-    sides_valid = primary_sides.loc[valid_mask]
-    events_valid = events.loc[valid_mask]
-    ret_valid = price_returns.loc[valid_mask]
-
-    # -- Size positions from OOF predictions ----------------------------------
+    # Size positions from OOF predictions
     sizing_result = sizer.size(
         events=events_valid,
         prob=oof_probs,
@@ -165,28 +195,30 @@ def simulate_path(
         state=state,
         average_active=True,
     )
-
     position_sizes = sizing_result["final_size"]
 
-    # -- Bar-by-bar P&L simulation --------------------------------------------
+    # Bar-by-bar P&L simulation
     equity_values = []
     daily_breaches = 0
-    current_day    = None
+    current_day = None
 
     for ts in position_sizes.index:
-        pos  = position_sizes.loc[ts]
-        ret  = ret_valid.loc[ts]
+        pos = position_sizes.loc[ts]
+        ret = ret_valid.loc[ts]
 
-        # Gross bar P&L from position × price return
+        # Gross bar P&L
         gross_pnl = pos * ret * cfg.lot_size * cfg.pip_value
 
-        # Transaction costs: commission + slippage (applied on position change)
-        prev_pos     = position_sizes.shift(1).loc[ts] if ts != position_sizes.index[0] else 0.0
-        position_chg = abs(pos - prev_pos)
-        commission   = position_chg * cfg.commission_per_lot
-        slippage     = position_chg * cfg.slippage_pips * cfg.pip_value
-        total_cost   = commission + slippage
+        # Transaction costs on position change
+        if ts == position_sizes.index[0]:
+            prev_pos = 0.0
+        else:
+            prev_pos = position_sizes.shift(1).loc[ts]
 
+        position_chg = abs(pos - prev_pos)
+        commission = position_chg * cfg.commission_per_lot
+        slippage = position_chg * cfg.slippage_pips * cfg.pip_value
+        total_cost = commission + slippage
         realized_delta = gross_pnl - total_cost
 
         # Daily reset
@@ -207,24 +239,25 @@ def simulate_path(
         equity_values.append(state.current_equity)
 
     equity_curve = pd.Series(equity_values, index=position_sizes.index)
-    returns      = equity_curve.pct_change().fillna(0.0)
+    returns = equity_curve.pct_change().fillna(0.0)
 
-    # -- Path metrics ---------------------------------------------------------
+    # Path metrics
     sharpe = (
         returns.mean() / returns.std() * np.sqrt(252)
-        if returns.std() > 1e-9 else 0.0
+        if returns.std() > 1e-9
+        else 0.0
     )
 
-    rolling_max  = equity_curve.cummax()
-    drawdown     = (equity_curve - rolling_max) / rolling_max
+    rolling_max = equity_curve.cummax()
+    drawdown = (equity_curve - rolling_max) / rolling_max
     max_drawdown = float(drawdown.min())
 
     overall_breach = bool((equity_curve < state.overall_floor).any())
 
-    target_pct = (
-        (state.phase_profit_pct >= state.initial_balance * 0.08 / state.initial_balance)
+    hit_target = (
+        (state.phase_profit_pct >= 0.08)
         if cfg.phase == Phase.CHALLENGE_PHASE_1
-        else (state.phase_profit_pct >= state.initial_balance * 0.05 / state.initial_balance)
+        else (state.phase_profit_pct >= 0.05)
     )
 
     return PathResult(
@@ -236,7 +269,7 @@ def simulate_path(
         daily_breaches=daily_breaches,
         overall_breach=overall_breach,
         trading_days=state.trading_days_completed,
-        hit_target=target_pct,
+        hit_target=hit_target,
         final_equity=float(equity_curve.iloc[-1]),
     )
 
@@ -247,32 +280,36 @@ class CPCVDynamicBacktest:
     """
     CPCV dynamic backtest with fresh account state per path.
 
-    Generates all φ[N, k] combinatorial paths from CombinatorialPurgedCV,
-    simulates each in parallel, and aggregates the path distribution.
+    Follows the same two-phase pattern as CPCVAnalyzer:
+
+    1. **Train** across all C(N, k) combinatorial splits in parallel.
+    2. **Recombine** per-split OOF predictions into φ backtest paths via
+       ``CombinatorialPurgedCV.recombine_test_predictions()``.
+    3. **Simulate** each assembled path bar-by-bar with a fresh account state.
 
     Parameters
     ----------
     cv_gen : CombinatorialPurgedCV
-        Configured combinatorial CV generator. N and k should be chosen
-        with optimal_folds_number to produce the desired number of paths.
+        Configured combinatorial CV generator.
     estimator : sklearn-compatible estimator
-        Base classifier. Cloned and retrained for every fold on every path.
+        Base classifier.  Cloned and retrained for every split.
     sizer : PropFirmAwareSizer
         Fully configured sizer.
     cfg : BacktestConfig
     close_prices : pd.Series
-        Bar-level close prices, aligned with X. Used to compute price_returns
-        if not provided to run().
+        Bar-level close prices aligned with X.
     primary_sides : pd.Series
-        Side predictions (+1 long, -1 short), aligned with X.
+        Side predictions (+1 long, -1 short) aligned with X.
 
     Example
     -------
     >>> from afml.cross_validation.combinatorial import (
     ...     CombinatorialPurgedCV, optimal_folds_number
     ... )
-    >>> from prop_firm_sizer import Phase, make_stellar_2step_sizer
-    >>> from cpcv_dynamic_backtest import CPCVDynamicBacktest, BacktestConfig
+    >>> from afml.bet_sizing.prop_firm_sizer import Phase, make_stellar_2step_sizer
+    >>> from afml.backtester.cpcv_dynamic_backtest import (
+    ...     CPCVDynamicBacktest, BacktestConfig
+    ... )
     >>>
     >>> N, k = optimal_folds_number(
     ...     n_observations=len(X),
@@ -310,64 +347,81 @@ class CPCVDynamicBacktest:
 
     def __init__(
         self,
-        cv_gen:        CombinatorialPurgedCV,
-        estimator,     
-        sizer:         PropFirmAwareSizer,
-        cfg:           BacktestConfig,
-        close_prices:  pd.Series,
+        cv_gen: CombinatorialPurgedCV,
+        estimator,
+        sizer: PropFirmAwareSizer,
+        cfg: BacktestConfig,
+        close_prices: pd.Series,
         primary_sides: pd.Series,
     ) -> None:
-        self.cv_gen        = cv_gen
-        self.estimator     = estimator
-        self.sizer         = sizer
-        self.cfg           = cfg
-        self.close_prices  = close_prices
+        self.cv_gen = cv_gen
+        self.estimator = estimator
+        self.sizer = sizer
+        self.cfg = cfg
+        self.close_prices = close_prices
         self.primary_sides = primary_sides
         self.results_: list[PathResult] = []
 
     def run(
         self,
-        X:             pd.DataFrame,
-        y:             pd.Series,
-        events:        pd.DataFrame,
+        X: pd.DataFrame,
+        y: pd.Series,
+        events: pd.DataFrame,
         price_returns: pd.Series | None = None,
+        sample_weight: pd.Series | None = None,
     ) -> None:
         """
-        Simulate all φ[N, k] paths and store results.
+        Train, recombine, and simulate all φ[N, k] paths.
 
         Parameters
         ----------
         X, y, events : pd.DataFrame, pd.Series, pd.DataFrame
             Full feature matrix, labels, and events.
         price_returns : pd.Series, optional
-            Bar-level returns. Computed from close_prices if not provided.
+            Bar-level returns.  Computed from close_prices if not provided.
+        sample_weight : pd.Series, optional
+            Per-observation sample weights for training.
         """
         if price_returns is None:
             price_returns = self.close_prices.pct_change().fillna(0.0)
 
-        # Collect all (train_indices, test_indices) pairs across paths.
-        # CombinatorialPurgedCV.split() yields one split per fold;
-        # the φ paths are reconstructed by recombining fold OOF predictions.
-        # Each element of paths is a list of (train_idx, test_idx) tuples —
-        # one per fold within that path.
-        paths = list(self.cv_gen.split(X, y))
+        # ── Phase 1: Train across all C(N, k) splits ────────────────────
+        # Exhaust the generator eagerly so cv_gen stores index_train_test_
+        # and _fold_index_num, which recombine_test_predictions requires.
+        splits = [
+            (train, np.concatenate(test_list))
+            for train, test_list in self.cv_gen.split(X, y)
+        ]
 
-        self.results_ = Parallel(n_jobs=self.cfg.n_jobs)(
-            delayed(simulate_path)(
+        split_predictions = Parallel(n_jobs=self.cfg.n_jobs)(
+            delayed(_fit_predict_split)(
+                self.estimator, X, y, train, test, sample_weight
+            )
+            for train, test in splits
+        )
+
+        # ── Phase 2: Recombine into φ backtest paths ────────────────────
+        path_predictions = self.cv_gen.recombine_test_predictions(
+            split_predictions
+        )
+
+        # ── Phase 3: Simulate each assembled path ───────────────────────
+        self.results_ = [
+            _simulate_path(
                 path_id=pid,
-                train_indices=[s[0] for s in path_splits],
-                test_indices=[s[1] for s in path_splits],
-                X=X,
-                y=y,
+                oof_probs=pd.Series(preds, index=X.index, name=f"path_{pid}"),
                 events=events,
                 price_returns=price_returns,
-                estimator=self.estimator,
                 sizer=self.sizer,
                 cfg=self.cfg,
                 primary_sides=self.primary_sides,
             )
-            for pid, path_splits in enumerate(paths)
-        )
+            for pid, preds in enumerate(path_predictions)
+        ]
+
+    # ------------------------------------------------------------------
+    # Reports
+    # ------------------------------------------------------------------
 
     def distribution_report(self) -> pd.DataFrame:
         """
@@ -376,23 +430,22 @@ class CPCVDynamicBacktest:
         Returns
         -------
         pd.DataFrame
-            One row per path with: path_id, sharpe, max_drawdown,
-            daily_breaches, overall_breach, trading_days, hit_target,
-            final_equity.
+            One row per path with sharpe, max_drawdown, daily_breaches,
+            overall_breach, trading_days, hit_target, final_equity.
         """
         if not self.results_:
             raise RuntimeError("Call run() before distribution_report().")
 
         rows = [
             {
-                "path_id":        r.path_id,
-                "sharpe":         r.sharpe,
-                "max_drawdown":   r.max_drawdown,
+                "path_id": r.path_id,
+                "sharpe": r.sharpe,
+                "max_drawdown": r.max_drawdown,
                 "daily_breaches": r.daily_breaches,
                 "overall_breach": r.overall_breach,
-                "trading_days":   r.trading_days,
-                "hit_target":     r.hit_target,
-                "final_equity":   r.final_equity,
+                "trading_days": r.trading_days,
+                "hit_target": r.hit_target,
+                "final_equity": r.final_equity,
             }
             for r in self.results_
         ]
@@ -413,52 +466,48 @@ class CPCVDynamicBacktest:
         return df
 
     def pbo_audit(self, n_folds: int = 8) -> float:
-      """
-      Compute the Probability of Backtest Overfitting (CSCV) from path returns.
-  
-      Delegates to compute_pbo from the Unified Validation Pipeline module.
-  
-      Parameters
-      ----------
-      n_folds : int
-          Number of subsets S for CSCV (typically 8–16).
-  
-      Returns
-      -------
-      float
-          PBO in [0, 1]. Values near 0 indicate low overfitting risk;
-          values near 0.5 indicate the result is consistent with chance.
-      """
-      try:
-          from ..cross_validation.pbo import compute_pbo
-      except ImportError:
-          raise ImportError(
-              "compute_pbo not found. Ensure the Unified Validation Pipeline "
-              "module is installed in afml.cross_validation.combinatorial."
-          )
-  
-      if not self.results_:
-          raise RuntimeError("Call run() before pbo_audit().")
-  
-      # Build returns matrix: columns = paths, rows = bars
-      returns_matrix = pd.concat(
-          [r.returns.rename(r.path_id) for r in self.results_],
-          axis=1,
-      ).fillna(0.0)
-  
-      # Create a neutral t1 series aligned with the returns_matrix index.
-      # This satisfies the interface requirement; pct_embargo is set to 0.0 inside compute_pbo.
-      t1_neutral = pd.Series(returns_matrix.index, index=returns_matrix.index)
-  
-      result = compute_pbo(returns_matrix, t1=t1_neutral, n_folds=n_folds)
-      pbo = result["pbo"]
-      print(f"\n  PBO (CSCV, S={n_folds}): {pbo:.4f}")
-      return pbo
-      
+        """
+        Compute the Probability of Backtest Overfitting (CSCV) from path returns.
+
+        Parameters
+        ----------
+        n_folds : int
+            Number of subsets S for CSCV (typically 8-16).
+
+        Returns
+        -------
+        float
+            PBO in [0, 1].
+        """
+        try:
+            from ..cross_validation.pbo import compute_pbo
+        except ImportError:
+            raise ImportError(
+                "compute_pbo not found. Ensure the Unified Validation Pipeline "
+                "module is installed in afml.cross_validation.pbo."
+            )
+
+        if not self.results_:
+            raise RuntimeError("Call run() before pbo_audit().")
+
+        returns_matrix = pd.concat(
+            [r.returns.rename(r.path_id) for r in self.results_],
+            axis=1,
+        ).fillna(0.0)
+
+        t1_neutral = pd.Series(
+            returns_matrix.index, index=returns_matrix.index
+        )
+
+        result = compute_pbo(returns_matrix, t1=t1_neutral, n_folds=n_folds)
+        pbo = result["pbo"]
+        print(f"\n  PBO (CSCV, S={n_folds}): {pbo:.4f}")
+        return pbo
+
     def plot_equity_distribution(
         self,
         figsize: tuple[float, float] = (7.5, 4.5),
-        alpha:   float = 0.25,
+        alpha: float = 0.25,
     ) -> None:
         """
         Plot all φ equity curves on a single normalized axis.
@@ -478,23 +527,33 @@ class CPCVDynamicBacktest:
 
         for r in self.results_:
             normalized = r.equity_curve / r.equity_curve.iloc[0]
-            ax.plot(normalized.index, normalized.values, alpha=alpha,
-                    linewidth=0.8, color="#58a6ff")
+            ax.plot(
+                normalized.index, normalized.values,
+                alpha=alpha, linewidth=0.8, color="#58a6ff",
+            )
 
         # Median path
         all_curves = pd.concat(
-            [r.equity_curve.rename(r.path_id) / r.equity_curve.iloc[0]
-             for r in self.results_],
+            [
+                r.equity_curve.rename(r.path_id) / r.equity_curve.iloc[0]
+                for r in self.results_
+            ],
             axis=1,
-        ).fillna(method="ffill")
+        ).ffill()
 
         median_curve = all_curves.median(axis=1)
-        ax.plot(median_curve.index, median_curve.values,
-                color="#e6edf3", linewidth=2.0, label="Median path")
+        ax.plot(
+            median_curve.index, median_curve.values,
+            color="#e6edf3", linewidth=2.0, label="Median path",
+        )
 
-        ax.axhline(1.0, color="#8b949e", linestyle="--", linewidth=0.8, alpha=0.6)
-        ax.set_title(f"CPCV Equity Distribution — {len(self.results_)} paths",
-                     fontsize=10)
+        ax.axhline(
+            1.0, color="#8b949e", linestyle="--", linewidth=0.8, alpha=0.6,
+        )
+        ax.set_title(
+            f"CPCV Equity Distribution — {len(self.results_)} paths",
+            fontsize=10,
+        )
         ax.set_xlabel("Date", fontsize=8)
         ax.set_ylabel("Normalized equity", fontsize=8)
         ax.legend(fontsize=8)
