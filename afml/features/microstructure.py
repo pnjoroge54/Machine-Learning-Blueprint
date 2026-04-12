@@ -1,7 +1,7 @@
 # src/features/microstructure.py
 
 """
-Market Microstructure Features — AFML Chapter 2.
+Market Microstructure Features — AFML Chapter 19.
 
 Implements:
     1.  Tick rule (already in information_bars.py — re-exported here)
@@ -20,7 +20,7 @@ Performance strategy:
     - Memory: float32 used throughout; arrays pre-allocated; no intermediate copies.
 
 References:
-    López de Prado (2018), AFML Ch. 2
+    López de Prado (2018), AFML Ch. 19
     mlfinlab: https://github.com/hudson-and-thames/mlfinlab
 """
 
@@ -33,7 +33,7 @@ import pandas as pd
 from loguru import logger
 from numba import njit, prange
 
-from ..bars.information_bars import _tick_rule
+from ..data_structures.information_bars import _tick_rule
 
 
 # ---------------------------------------------------------------------------
