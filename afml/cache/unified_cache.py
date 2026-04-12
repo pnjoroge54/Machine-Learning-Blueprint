@@ -7,7 +7,7 @@ import hashlib
 import inspect
 import json
 import os
-import pickle
+import cloudpickle
 import threading
 import time
 from collections import defaultdict
@@ -304,44 +304,56 @@ def cacheable(
         @wraps(func)
         def wrapper(*args, **kwargs):
             key = UnifiedCacheKeyGenerator.generate_key(
-                func, args, kwargs, time_aware=time_aware, auto_versioning=auto_versioning
+                func, args, kwargs,
+                time_aware=time_aware,
+                auto_versioning=auto_versioning,
             )
             func_name = func.__qualname__
-
-            # Check joblib first (fastest)
-            try:
-                cached = memory.cache(func)(*args, **kwargs)  # joblib handles it internally
-                cache_stats.record_hit(func_name)
-                return cached
-            except Exception:
-                pass  # fallback to manual if needed
-
-            # Manual custom cache (for full control)
+        
+            # --- Check manual pickle cache first ---
             cache_path = CACHE_DIRS["base"] / f"{key}.pkl"
             if cache_path.exists():
                 try:
                     with open(cache_path, "rb") as f:
                         result = pickle.load(f)
                     cache_stats.record_hit(func_name)
-                    logger.debug(f"Cache hit: {func_name} ({key[:8]})")
+                    logger.debug(
+                        f"CACHE HIT  | {func_name} | key={key[:12]}"
+                    )
                     return result
                 except Exception:
-                    pass
-
-            # Miss
+                    logger.debug(f"CACHE CORRUPT | {func_name} | key={key[:12]}")
+        
+            # --- Miss: compute and time it ---
             cache_stats.record_miss(func_name)
+            t0 = time.perf_counter()
             result = func(*args, **kwargs)
-
+            elapsed = time.perf_counter() - t0
+            logger.debug(
+                f"CACHE MISS | {func_name} | key={key[:12]} | "
+                f"computed in {elapsed:.2f}s"
+            )
+        
+            # Store in CacheMonitor's computation_times if available
+            # (imported at module level from cache_monitoring)
+            try:
+                from .cache_monitoring import _global_monitor
+                if _global_monitor is not None:
+                    _global_monitor.computation_times[func_name].append(elapsed)
+            except Exception:
+                pass
+        
+            # Persist
             try:
                 with open(cache_path, "wb") as f:
                     pickle.dump(result, f, protocol=pickle.HIGHEST_PROTOCOL)
             except Exception as e:
                 logger.warning(f"Failed to cache {func_name}: {e}")
-
+        
             return result
 
         return wrapper
-
+        
     return decorator(_func) if _func is not None else decorator
 
 
