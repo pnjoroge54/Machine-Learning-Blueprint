@@ -1,22 +1,25 @@
 """
 CPCV dynamic backtest orchestrator with fresh account state per path.
 
-Architecture (three-phase)
-──────────────────────────
-  Phase 1 — Train:  Fit the estimator on every C(N, k) combinatorial split
-                     produced by CombinatorialPurgedCV.split().  Each split
-                     yields purged+embargoed train indices and a list of test
-                     fold arrays.  Training is parallelised across splits.
+Architecture (four-phase)
+─────────────────────────
+  Phase 1 — Train:      Fit the base estimator on every C(N, k) split.
+                          The estimator must be a plain classifier, NOT a
+                          CalibratorCV (which carries an internal PurgedKFold
+                          with a full-length t1 that breaks on subsets).
 
-  Phase 2 — Assemble:  Recombine per-split OOF predictions into the φ[N, k]
-                        backtest paths via recombine_test_predictions().
+  Phase 2 — Assemble:   Recombine per-split OOF predictions into φ[N, k]
+                          backtest paths via recombine_test_predictions().
 
-  Phase 3 — Simulate:  Run a bar-by-bar P&L simulation on each assembled
-                        path with a fresh PropFirmAccountState.
+  Phase 2.5 — Calibrate: Optionally fit an isotonic or Platt calibration map
+                          on the pooled OOF predictions and apply it to each
+                          path.  This replaces CalibratorCV's internal CV loop
+                          while using the same OOF predictions that CPCV
+                          already produced.
 
-This mirrors the CPCVAnalyzer pattern: training is per-split, path assembly
-uses CombinatorialPurgedCV's own recombination logic, and simulation
-consumes the fully-assembled path predictions.
+  Phase 3 — Simulate:   Run a bar-by-bar P&L simulation on each assembled
+                          (and optionally calibrated) path with a fresh
+                          PropFirmAccountState.
 
 Dependencies
 ────────────
@@ -36,6 +39,8 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.base import clone
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 
 from ..cross_validation.combinatorial import CombinatorialPurgedCV
 from ..bet_sizing.prop_firm_sizer import PropFirmAccountState, PropFirmAwareSizer, Phase
@@ -112,7 +117,7 @@ def _fit_predict_split(
     Parameters
     ----------
     estimator : sklearn-compatible estimator
-        Will be cloned before fitting.
+        Must be a plain classifier (not CalibratorCV).  Will be cloned.
     X, y : pd.DataFrame, pd.Series
         Full feature matrix and labels.
     train_idx, test_idx : np.ndarray
@@ -123,8 +128,7 @@ def _fit_predict_split(
     Returns
     -------
     np.ndarray
-        Predicted probabilities (class 1) for the test observations, ordered
-        to match test_idx.
+        Predicted probabilities (class 1) for the test observations.
     """
     model = clone(estimator)
 
@@ -138,6 +142,71 @@ def _fit_predict_split(
         model.fit(X.iloc[train_idx], y.iloc[train_idx])
 
     return model.predict_proba(X.iloc[test_idx])[:, 1]
+
+
+# ── Phase 2.5 helper: calibrate path predictions ─────────────────────────────
+
+def _fit_calibrator(
+    path_predictions: list[np.ndarray],
+    y: pd.Series,
+    method: str,
+) -> IsotonicRegression | LogisticRegression:
+    """
+    Fit a calibration map on pooled OOF predictions from all paths.
+
+    Each observation appears in exactly one path, so pooling all path
+    predictions produces a full-length OOF probability array suitable
+    for fitting the calibration map without data leakage.
+
+    Parameters
+    ----------
+    path_predictions : list of np.ndarray
+        Raw OOF probabilities per path (from recombine_test_predictions).
+    y : pd.Series
+        True labels aligned with X.
+    method : str
+        'isotonic' or 'platt'.
+
+    Returns
+    -------
+    calibrator : fitted IsotonicRegression or LogisticRegression
+    """
+    # Pool: average across paths at each observation.
+    # recombine_test_predictions returns one array per path, each of length
+    # n_observations.  At each index the observation appeared OOS in exactly
+    # one path, so averaging recovers the single OOF prediction per bar.
+    stacked = np.column_stack(path_predictions)  # (n_obs, n_paths)
+    pooled = np.nanmean(stacked, axis=1)
+
+    valid = ~np.isnan(pooled)
+    y_arr = y.values[valid].astype(int)
+    p_arr = pooled[valid]
+
+    if method == "isotonic":
+        cal = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+        cal.fit(p_arr, y_arr)
+    elif method == "platt":
+        cal = LogisticRegression(solver="lbfgs", max_iter=1000)
+        cal.fit(p_arr.reshape(-1, 1), y_arr)
+    else:
+        raise ValueError(
+            f"Unknown calibration method: {method!r}. "
+            "Use 'isotonic' or 'platt'."
+        )
+
+    return cal
+
+
+def _apply_calibrator(
+    probs: np.ndarray,
+    calibrator: IsotonicRegression | LogisticRegression,
+    method: str,
+) -> np.ndarray:
+    """Apply a fitted calibrator to raw probabilities."""
+    if method == "isotonic":
+        return calibrator.transform(probs)
+    else:
+        return calibrator.predict_proba(probs.reshape(-1, 1))[:, 1]
 
 
 # ── Phase 3 helper: simulate one assembled path ──────────────────────────────
@@ -159,8 +228,7 @@ def _simulate_path(
     path_id : int
         Index of this combinatorial path.
     oof_probs : pd.Series
-        Out-of-fold predicted probabilities for every observation on this path,
-        produced by recombine_test_predictions().
+        Out-of-fold predicted probabilities (raw or calibrated).
     events : pd.DataFrame
         Events table aligned with X.
     price_returns : pd.Series
@@ -202,6 +270,9 @@ def _simulate_path(
     daily_breaches = 0
     current_day = None
 
+    # Pre-compute shifted positions to avoid repeated .shift() calls
+    prev_positions = position_sizes.shift(1).fillna(0.0)
+
     for ts in position_sizes.index:
         pos = position_sizes.loc[ts]
         ret = ret_valid.loc[ts]
@@ -210,12 +281,7 @@ def _simulate_path(
         gross_pnl = pos * ret * cfg.lot_size * cfg.pip_value
 
         # Transaction costs on position change
-        if ts == position_sizes.index[0]:
-            prev_pos = 0.0
-        else:
-            prev_pos = position_sizes.shift(1).loc[ts]
-
-        position_chg = abs(pos - prev_pos)
+        position_chg = abs(pos - prev_positions.loc[ts])
         commission = position_chg * cfg.commission_per_lot
         slippage = position_chg * cfg.slippage_pips * cfg.pip_value
         total_cost = commission + slippage
@@ -280,12 +346,21 @@ class CPCVDynamicBacktest:
     """
     CPCV dynamic backtest with fresh account state per path.
 
-    Follows the same two-phase pattern as CPCVAnalyzer:
+    Four-phase architecture:
 
     1. **Train** across all C(N, k) combinatorial splits in parallel.
     2. **Recombine** per-split OOF predictions into φ backtest paths via
        ``CombinatorialPurgedCV.recombine_test_predictions()``.
-    3. **Simulate** each assembled path bar-by-bar with a fresh account state.
+    3. **Calibrate** (optional) — fit an isotonic or Platt calibration map
+       on the pooled OOF predictions and apply it to each path.
+    4. **Simulate** each assembled path bar-by-bar with a fresh account state.
+
+    .. warning::
+       The ``estimator`` must be a plain classifier (e.g. ``BaggingClassifier``,
+       ``RandomForestClassifier``).  Do **not** pass a ``CalibratorCV`` — it
+       carries an internal ``PurgedKFold`` whose ``t1`` is bound to the full
+       dataset and will raise ``ValueError: Lengths must match`` when fitted
+       on a CPCV training subset.  Use ``calibration_method`` instead.
 
     Parameters
     ----------
@@ -300,6 +375,11 @@ class CPCVDynamicBacktest:
         Bar-level close prices aligned with X.
     primary_sides : pd.Series
         Side predictions (+1 long, -1 short) aligned with X.
+    calibration_method : str or None, default=None
+        If set, calibrate OOF probabilities before simulation.
+        ``'isotonic'`` — non-parametric; requires ~200+ OOF observations.
+        ``'platt'`` — logistic (Platt scaling); stable on small sets.
+        ``None`` — skip calibration; use raw probabilities.
 
     Example
     -------
@@ -333,13 +413,14 @@ class CPCVDynamicBacktest:
     ... )
     >>> backtest = CPCVDynamicBacktest(
     ...     cv_gen=cv_gen,
-    ...     estimator=clf,
+    ...     estimator=clf,         # plain classifier, NOT CalibratorCV
     ...     sizer=sizer,
     ...     cfg=cfg,
     ...     close_prices=close_prices,
     ...     primary_sides=sides,
+    ...     calibration_method='isotonic',
     ... )
-    >>> backtest.run(X=X, y=y, events=events)
+    >>> backtest.run(X=X, y=y, events=events, sample_weight=sw)
     >>> backtest.distribution_report()
     >>> backtest.pbo_audit(n_folds=8)
     >>> backtest.plot_equity_distribution()
@@ -353,14 +434,35 @@ class CPCVDynamicBacktest:
         cfg: BacktestConfig,
         close_prices: pd.Series,
         primary_sides: pd.Series,
+        calibration_method: str | None = None,
     ) -> None:
+        # Guard against passing CalibratorCV
+        est_class = type(estimator).__name__
+        if est_class == "CalibratorCV":
+            raise TypeError(
+                "Do not pass a CalibratorCV as the estimator — its internal "
+                "PurgedKFold carries a full-length t1 that breaks on CPCV "
+                "training subsets.  Pass the base classifier and set "
+                "calibration_method='isotonic' or 'platt' instead."
+            )
+
+        if calibration_method is not None and calibration_method not in (
+            "isotonic", "platt",
+        ):
+            raise ValueError(
+                f"calibration_method must be 'isotonic', 'platt', or None; "
+                f"got {calibration_method!r}."
+            )
+
         self.cv_gen = cv_gen
         self.estimator = estimator
         self.sizer = sizer
         self.cfg = cfg
         self.close_prices = close_prices
         self.primary_sides = primary_sides
+        self.calibration_method = calibration_method
         self.results_: list[PathResult] = []
+        self.calibrator_ = None
 
     def run(
         self,
@@ -371,7 +473,7 @@ class CPCVDynamicBacktest:
         sample_weight: pd.Series | None = None,
     ) -> None:
         """
-        Train, recombine, and simulate all φ[N, k] paths.
+        Train, recombine, calibrate (optional), and simulate all φ[N, k] paths.
 
         Parameters
         ----------
@@ -386,8 +488,6 @@ class CPCVDynamicBacktest:
             price_returns = self.close_prices.pct_change().fillna(0.0)
 
         # ── Phase 1: Train across all C(N, k) splits ────────────────────
-        # Exhaust the generator eagerly so cv_gen stores index_train_test_
-        # and _fold_index_num, which recombine_test_predictions requires.
         splits = [
             (train, np.concatenate(test_list))
             for train, test_list in self.cv_gen.split(X, y)
@@ -404,6 +504,18 @@ class CPCVDynamicBacktest:
         path_predictions = self.cv_gen.recombine_test_predictions(
             split_predictions
         )
+
+        # ── Phase 2.5: Calibrate (optional) ─────────────────────────────
+        if self.calibration_method is not None:
+            self.calibrator_ = _fit_calibrator(
+                path_predictions, y, self.calibration_method
+            )
+            path_predictions = [
+                _apply_calibrator(
+                    preds, self.calibrator_, self.calibration_method
+                )
+                for preds in path_predictions
+            ]
 
         # ── Phase 3: Simulate each assembled path ───────────────────────
         self.results_ = [
