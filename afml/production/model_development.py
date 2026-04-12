@@ -1009,7 +1009,7 @@ class ModelDevelopmentPipeline:
         bagging_n_estimators = self.model_params.get("bagging_n_estimators", 0)
         if bagging_n_estimators > 0:
             if self.model_params.get("bagging_max_samples") is None:
-                av_uniqueness = self.events["tW"].mean().round(2)
+                av_uniqueness = float(self.events["tW"].mean().round(2))
                 self.model_params["bagging_max_samples"] = av_uniqueness
                 logger.info(
                     f"bagging_max_samples set to average uniqueness ({av_uniqueness:.4f})"
@@ -1364,7 +1364,7 @@ class ModelDevelopmentPipeline:
         return digest[:8]
 
     # ── Bagging helpers ───────────────────────────────────────────────────────
-    @cacheable(time_aware=True)
+
     def _apply_sequential_bagging(
         self,
         X: pd.DataFrame,
@@ -1380,6 +1380,8 @@ class ModelDevelopmentPipeline:
         available without requiring the events index at deployment time.
         """
         time0 = time.time()
+        logger.info("\nSequential bootstrap is being fitted...")
+        
         bagging_n = self.model_params.get("bagging_n_estimators", 0)
         bagging_samples = self.model_params.get("bagging_max_samples", 1.0)
         bagging_feats = self.model_params.get("bagging_max_features", 1.0)
@@ -1387,7 +1389,9 @@ class ModelDevelopmentPipeline:
 
         base_est = set_pipeline_params(tuned_pipeline, n_jobs=1)
 
-        bag = SequentiallyBootstrappedBaggingClassifier(
+        bag = apply_seq_bootstrap(
+            X=X,
+            y=y,
             estimator=MyPipeline(base_est.steps),
             n_estimators=int(bagging_n),
             max_samples=bagging_samples,
@@ -1395,12 +1399,8 @@ class ModelDevelopmentPipeline:
             samples_info_sets=self.events["t1"],
             price_bars_index=self.bar_data.index,
             random_state=random_state,
+            sample_weight=sample_weight
         )
-
-        if sample_weight is not None:
-            bag.fit(X, y, sample_weight=sample_weight)
-        else:
-            bag.fit(X, y)
 
         # Transfer fitted estimators to a standard BaggingClassifier for
         # deployment — SequentiallyBootstrappedBaggingClassifier requires
@@ -1426,7 +1426,7 @@ class ModelDevelopmentPipeline:
                 setattr(standard_bag, attr, getattr(bag, attr))
         
         elapsed = str(pd.Timedelta(seconds=time.time() - time0).round("1s")).replace('0 days ', '')
-        logger.info(f"\n✓ Sequential bootstrap fitted in {elapsed}")
+        logger.info(f"✓ Sequential bootstrap fitted in {elapsed}")
 
         return Pipeline([("seq_bag", standard_bag)])
 
@@ -1865,3 +1865,34 @@ def get_model_type(model) -> str:
 
 def is_tree(estimator) -> bool:
     return isinstance(estimator, (RandomForestClassifier, DecisionTreeClassifier))
+
+
+@cacheable(time_aware=True)
+def apply_seq_bootstrap(
+    X,
+    y,
+    estimator,
+    n_estimators,
+    max_samples,
+    max_features,
+    samples_info_sets,
+    price_bars_index,
+    random_state,
+    sample_weight
+):
+    bag = SequentiallyBootstrappedBaggingClassifier(
+            estimator=estimator,
+            n_estimators=n_estimators,
+            max_samples=max_samples,
+            max_features=max_features,
+            samples_info_sets=samples_info_sets,
+            price_bars_index=price_bars_index,
+            random_state=random_state,
+    )
+    
+    if sample_weight is not None:
+        bag.fit(X, y, sample_weight=sample_weight)
+    else:
+        bag.fit(X, y)
+
+    return bag
