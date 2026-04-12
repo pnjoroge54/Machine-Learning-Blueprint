@@ -559,12 +559,12 @@ def get_optimal_sample_weight(
         )
         pbar2.set_postfix({"scheme": scheme, "scoring": scoring, "score": f"{cv_results[scheme].mean():.4f}"})
 
-    logger.info(f'{pformat(
-        {"best": best_scheme,
-         "scoring": scoring,
-         "score": float(best_score.round(4))
-        })'
-    )
+    res = pformat({
+        "best": best_scheme,
+        "scoring": scoring,
+        "score": float(best_score.round(4))
+    })
+    logger.info(f"{res}")
         
     weights.update(time_decay_weights)
     cv_results_dict = {
