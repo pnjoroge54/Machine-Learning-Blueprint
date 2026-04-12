@@ -3,7 +3,7 @@ High-level Backtest Cache using the unified system.
 """
 
 import hashlib
-import cloudpickle
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
