@@ -1426,7 +1426,7 @@ class ModelDevelopmentPipeline:
                 setattr(standard_bag, attr, getattr(bag, attr))
         
         elapsed = str(pd.Timedelta(seconds=time.time() - time0).round("1s")).replace('0 days ', '')
-        logger.info(f"✓ Sequential bootstrap fitted in {elapsed}")
+        logger.info(f"\n✓ Sequential bootstrap fitted in {elapsed}")
 
         return Pipeline([("seq_bag", standard_bag)])
 
