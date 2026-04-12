@@ -7,7 +7,7 @@ import hashlib
 import inspect
 import json
 import os
-import cloudpickle
+import pickle
 import threading
 import time
 from collections import defaultdict
