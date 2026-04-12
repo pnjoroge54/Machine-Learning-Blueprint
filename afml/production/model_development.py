@@ -528,7 +528,7 @@ def get_optimal_sample_weight(
     cv_results = pd.DataFrame()
     scoring    = "f1" if set(y.unique()) == {0, 1} else "neg_log_loss"
     
-    pbar1 = tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights), mininterval=1.0)
+    pbar1 = tqdm(weights.items(), desc="Analyzing weighting schemes", total=len(weights), mininterval=0.5)
     for i, (scheme, weight) in enumerate(pbar1, 1):
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
@@ -557,7 +557,7 @@ def get_optimal_sample_weight(
             scheme = f"{best_scheme}_{'linear' if lin else 'exp'}_{decay}"
             time_decay_weights[scheme] = best_weight * decay_vec
 
-    pbar2 = tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay", total=len(time_decay_weights), mininterval=1.0)
+    pbar2 = tqdm(time_decay_weights.items(), desc=f"Analyzing time-decay", total=len(time_decay_weights), mininterval=0.5)
     for i, (scheme, weight) in enumerate(pbar2, 1):
         best_score, best_scheme, cv_results = best_weighting_scheme(
             clone(classifier), X, y, cv_gen, scoring, weight, weights["return"],
