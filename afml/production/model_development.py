@@ -326,14 +326,13 @@ def generate_events_triple_barrier(
         side     = None
         t_events = close.index
     else:
-        if strategy.get_objective() == "mean_reversion":
-            filter_threshold = target if filter_as_series else target.mean()
+        if filter_as_series is None:
+            filter_threshold = None    
         else:
-            filter_threshold = None
+            filter_threshold = target if filter_as_series else target.mean()           
         side, t_events = get_entries(strategy, data, filter_threshold)
 
     vb = add_vertical_barrier(t_events, close, **max_holding_period)
-
     events = triple_barrier_labels(
         close, target, t_events,
         vertical_barrier_times=vb,
