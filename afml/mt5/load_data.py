@@ -28,9 +28,10 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+import dask as dd
 import numpy as np
 import pandas as pd
-from dask import dataframe as dd
+import polars as pl
 from dotenv import load_dotenv
 from loguru import logger
 from tqdm import tqdm
@@ -58,12 +59,8 @@ def get_credentials_from_env(account):
     server = os.environ.get(f"{prefix}_SERVER")
 
     if not all([login, password, server]):
-        logger.error(
-            f"Missing one or more environment variables for account '{account}'."
-        )
-        logger.error(
-            f"Please set {prefix}_LOGIN, {prefix}_PASSWORD, and {prefix}_SERVER."
-        )
+        logger.error(f"Missing one or more environment variables for account '{account}'.")
+        logger.error(f"Please set {prefix}_LOGIN, {prefix}_PASSWORD, and {prefix}_SERVER.")
         return None, None, None
 
     if login.isnumeric():
@@ -92,12 +89,8 @@ def login_mt5(account, timeout=60000, verbose=True):
     if not login:
         return None
 
-    if not mt5.initialize(
-        login=login, password=password, server=server, timeout=timeout
-    ):
-        logger.error(
-            f"MT5 initialize() failed for account {account}. Error: {mt5.last_error()}"
-        )
+    if not mt5.initialize(login=login, password=password, server=server, timeout=timeout):
+        logger.error(f"MT5 initialize() failed for account {account}. Error: {mt5.last_error()}")
         mt5.shutdown()
         return
 
@@ -147,9 +140,7 @@ def verify_or_create_account_info(data_path, current_account_name):
                 return False
             elif not stored_name:
                 # File exists but is malformed, so we fix it.
-                logger.warning(
-                    "Account info file is malformed. Overwriting with current account."
-                )
+                logger.warning("Account info file is malformed. Overwriting with current account.")
                 with open(account_info_file, "w") as f:
                     json.dump({"account_name": current_account_name}, f, indent=4)
 
@@ -226,9 +217,7 @@ def get_ticks(symbol, start_date, end_date, datetime_index=True, verbose=True):
         return pd.DataFrame()
 
 
-def get_bars(
-    symbol, timeframe, start_date, end_date, datetime_index=True, verbose=True
-):
+def get_bars(symbol, timeframe, start_date, end_date, datetime_index=True, verbose=True):
     """
     Downloads bar (OHLCV) data from the MT5 terminal for a given period.
 
@@ -291,6 +280,8 @@ def get_bars(
 
 def process_symbol(symbol, start_dt, end_dt, data_path, account_name):
     """Worker function to download data for a single symbol."""
+    import MetaTrader5 as mt5
+
     try:
         login_mt5(account_name)  # Each worker needs its own login
     except Exception as e:
@@ -298,9 +289,7 @@ def process_symbol(symbol, start_dt, end_dt, data_path, account_name):
 
     symbol_path = data_path / symbol
     dates_from = pd.date_range(start=start_dt, end=end_dt, freq="MS", tz="UTC")
-    dates_to = pd.date_range(
-        start=start_dt, end=end_dt, freq="ME", tz="UTC"
-    ) + pd.Timedelta(days=1)
+    dates_to = pd.date_range(start=start_dt, end=end_dt, freq="ME", tz="UTC") + pd.Timedelta(days=1)
 
     missing_data = []
 
@@ -319,9 +308,7 @@ def process_symbol(symbol, start_dt, end_dt, data_path, account_name):
                     logger.info(f"{log_msg_prefix} Exists—Skipping download")
                     continue
                 else:
-                    logger.info(
-                        f"{log_msg_prefix} Exists—Appending from {start} to {end}"
-                    )
+                    logger.info(f"{log_msg_prefix} Exists—Appending from {start} to {end}")
         else:
             df0 = pd.DataFrame()
 
@@ -379,9 +366,7 @@ def save_data_to_parquet(symbols, start_date, end_date, account_name, path=None)
             for symbol in symbols
         }
 
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Downloading symbols"
-        ):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading symbols"):
             symbol = futures[future]
             try:
                 result = future.result()
@@ -410,11 +395,52 @@ def load_tick_data(
     path=None,
     columns=None,
     verbose=True,
+    distributed=False,
+):
+    """
+    Loads tick data from a partitioned Parquet structure using Polars.
+
+    Automatically detects the datetime column (works for raw 'time' column,
+    Pandas-saved index '__index_level_0__', or any other datetime column).
+    Partition columns 'year' and 'month' are silently dropped.
+
+    Args:
+        path (Union[str, Path]): Root folder where data is stored.
+        symbol (str): Financial instrument symbol.
+        start_date (Union[str, dt, pd.Timestamp]): Start of desired range.
+        end_date (Union[str, dt, pd.Timestamp]): End of desired range.
+        account_name (str): Account name to verify.
+        columns (Optional[list]): Columns to load. Loads all if None.
+        verbose (bool): If True, logs detailed DataFrame info.
+        distributed (bool): If True (distributed computing), uses Dask for loading; otherwise uses Polars.
+
+    Returns:
+        Union([pl.DataFrame, pd.DataFrame]): DataFrame with tick data, or an empty DataFrame on failure.
+    """
+    if distributed:
+        return load_tick_data_dask(
+            symbol, start_date, end_date, account_name, path, columns, verbose
+        )
+    else:
+        return load_tick_data_polars(
+            symbol, start_date, end_date, account_name, path, columns, verbose
+        )
+
+
+def load_tick_data_dask(
+    symbol,
+    start_date,
+    end_date,
+    account_name,
+    path=None,
+    columns=None,
+    verbose=True,
 ):
     """
     Loads tick data from a partitioned Parquet structure after verifying account.
 
     Args:
+
         path (Union[str, Path]): The root folder where the data is stored.
         symbol (str): The financial instrument symbol to load.
         start_date (Union[str, dt, pd.Timestamp]): The start date of the desired data range.
@@ -436,6 +462,7 @@ def load_tick_data(
         return pd.DataFrame()
 
     date_range = date_conversion(start_date, end_date)
+
     if date_range:
         start_dt, end_dt = date_range
         fname = root_path / symbol.upper()
@@ -444,7 +471,6 @@ def load_tick_data(
 
     try:
         filters = [("time", ">=", start_dt), ("time", "<=", end_dt)]
-
         if not fname.exists():
             logger.error(f"Data directory {fname} not found for {symbol}")
             return pd.DataFrame()
@@ -469,11 +495,13 @@ def load_tick_data(
             # Drop columns
             if any(np.isnan(df[col].unique())):
                 to_drop.append(col)
+
             # Optimise dtype of flags column for memory
             if col == "flags":
                 mem = df.memory_usage(deep=True).sum()  # memory before downcasting
                 dtype_orig = df["flags"].dtype
                 limit = df["flags"].max()
+
                 for x in (8, 16, 32):
                     dtype = f"uint{x}"
                     if dtype_orig != dtype and np.iinfo(dtype).max >= limit:
@@ -498,13 +526,172 @@ def load_tick_data(
 
     except Exception as e:
         logger.error(f"Failed to load data for {symbol}. Error: {e}")
+
+        return pd.DataFrame()
+
+
+def load_tick_data_polars(
+    symbol,
+    start_date,
+    end_date,
+    account_name,
+    path=None,
+    columns=None,
+    verbose=True,
+):
+    """
+    Loads tick data from a partitioned Parquet structure using Polars,
+    then returns a pandas DataFrame with a DatetimeIndex (time column).
+
+    Automatically detects the datetime column (works for raw 'time' column,
+    Pandas-saved index '__index_level_0__', or any other datetime column).
+    Partition columns 'year' and 'month' are silently dropped.
+
+    Args:
+        path (Union[str, Path]): Root folder where data is stored.
+        symbol (str): Financial instrument symbol.
+        start_date (Union[str, dt, pd.Timestamp]): Start of desired range.
+        end_date (Union[str, dt, pd.Timestamp]): End of desired range.
+        account_name (str): Account name to verify.
+        columns (Optional[list]): Columns to load. Loads all if None.
+        verbose (bool): If True, logs detailed DataFrame info.
+
+    Returns:
+        pd.DataFrame: DataFrame with tick data and DatetimeIndex, or an empty DataFrame on failure.
+    """
+    # Root path
+    if path is None:
+        root_path = Path.home() / "tick_data_parquet"
+    else:
+        root_path = Path(path)
+
+    # Account verification
+    if not verify_or_create_account_info(root_path, account_name):
+        return pd.DataFrame()
+
+    # Date range parsing
+    date_range = date_conversion(start_date, end_date)
+    if date_range is None:
+        return pd.DataFrame()
+    start_dt, end_dt = date_range
+
+    fname = root_path / symbol.upper()
+    if not fname.exists():
+        logger.error(f"Data directory {fname} not found for {symbol}")
+        return pd.DataFrame()
+
+    try:
+        lazy = pl.scan_parquet(fname, hive_partitioning=True).with_columns(
+            pl.col("bid", "ask").cast(pl.Float32)
+        )
+
+        # ---------- Detect datetime column ----------
+        schema = lazy.collect_schema()
+        time_col = None
+        for col_name, dtype in schema.items():
+            if isinstance(dtype, pl.Datetime):
+                time_col = col_name
+                break
+        if time_col is None:
+            logger.error(f"No datetime column found in {symbol}. Schema: {list(schema.keys())}")
+            return pd.DataFrame()
+        logger.debug(f"Detected time column: '{time_col}'")
+
+        # ---------- Apply time filter ----------
+        lazy = lazy.filter((pl.col(time_col) >= start_dt) & (pl.col(time_col) <= end_dt))
+
+        # ---------- Select desired columns ----------
+        if columns is not None:
+            cols_to_select = list(columns)
+            if time_col not in cols_to_select:
+                cols_to_select.append(time_col)  # always keep for filtering+index
+            lazy = lazy.select(cols_to_select)
+
+        # Collect into memory
+        df = lazy.collect()
+
+        # Drop partition leakage columns if present
+        for part_col in ("year", "month"):
+            if part_col in df.columns:
+                df = df.drop(part_col)
+
+        # Rename time column to 'time' for consistency
+        if time_col != "time":
+            df = df.rename({time_col: "time"})
+            time_col = "time"
+
+        if df.is_empty():
+            logger.warning(
+                f"No tick data found for {symbol} between {start_dt} and {end_dt} "
+                f"in account {account_name}"
+            )
+            return pd.DataFrame()
+
+        # ---------- Drop columns containing nulls ----------
+        null_counts = df.null_count()
+        to_drop = [c for c in df.columns if null_counts[c][0] > 0]
+        if to_drop:
+            df = df.drop(to_drop)
+            logger.info(f"Dropped columns with nulls: {to_drop}")
+
+        # ---------- Downcast flags column ----------
+        if "flags" in df.columns:
+            max_val = df["flags"].max()
+            if max_val is not None:
+                mem_before = df.estimated_size()
+                for limit, dtype in [
+                    (255, pl.UInt8),
+                    (65535, pl.UInt16),
+                    (4294967295, pl.UInt32),
+                ]:
+                    if max_val <= limit:
+                        df = df.with_columns(pl.col("flags").cast(dtype))
+                        mem_saved = (mem_before - df.estimated_size()) / 1024**2
+                        logger.info(
+                            f"Downcasted 'flags' to {dtype.__name__}, saved {mem_saved:,.1f} MB"
+                        )
+                        break
+
+        # ---------- Sort by time ----------
+        df = df.sort("time")
+
+        # ---------- Log success ----------
+        size_mb = df.estimated_size() / 1024**2
+        logger.success(
+            f"Loaded {len(df):,} rows of {symbol} ({size_mb:,.2f} MB) "
+            f"tick data for account {account_name}"
+        )
+
+        # ---------- Convert to pandas with DatetimeIndex ----------
+        pdf = df.to_pandas()
+        # Set the 'time' column as index, dropping it from columns
+        if "time" in pdf.columns:
+            pdf = pdf.set_index("time")
+        else:
+            # Should not happen, but fallback: try to parse index column
+            logger.warning(
+                "'time' column missing after processing. Attempting to set index from first datetime column."
+            )
+            dt_cols = [c for c in pdf.columns if pd.api.types.is_datetime64_any_dtype(pdf[c])]
+            if dt_cols:
+                pdf = pdf.set_index(dt_cols[0])
+            else:
+                logger.error("No datetime column available for index.")
+
+        if verbose:
+            log_df_info(pdf)  # ensure it accepts pl.DataFrame or replace with pandas info
+
+        return pdf
+
+    except Exception as e:
+        logger.error(f"Failed to load data for {symbol}. Error: {e}")
         return pd.DataFrame()
 
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
     import MetaTrader5 as mt5
-    
+
     MAJORS = [
         "EURUSD",
         "USDJPY",
@@ -566,9 +753,7 @@ if __name__ == "__main__":
     logger.info("--- Starting New Data Download Session ---")
 
     # --- 3. Login to MT5 ---
-    logged_in_account = login_mt5(
-        account=CONFIG["account_to_use"], verbose=CONFIG["verbose_login"]
-    )
+    logged_in_account = login_mt5(account=CONFIG["account_to_use"], verbose=CONFIG["verbose_login"])
 
     # --- 4. Run Downloader ---
     if logged_in_account:
