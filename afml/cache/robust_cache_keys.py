@@ -278,6 +278,78 @@ class TimeSeriesCacheKey(CacheKeyGenerator):
 
 
 # =============================================================================
+# Stable joblib hashing of pandas arguments
+# =============================================================================
+
+
+def _clear_lazy_cache(obj: Any) -> None:
+    """
+    Remove the lazily created ``_cache`` dict of an extension array
+    (DatetimeArray, TimedeltaArray, ...). The array has none until a cached
+    property such as ``unit`` is read, and its presence alone changes the pickle.
+    """
+    d = getattr(obj, "__dict__", None)
+    if isinstance(d, dict) and isinstance(d.get("_cache"), dict):
+        del d["_cache"]
+
+
+def _stabilize_index(idx: pd.Index) -> None:
+    # An Index always owns a ``_cache`` dict that other pandas code expects to exist,
+    # so empty it instead of removing it
+    if isinstance(getattr(idx, "_cache", None), dict):
+        idx._cache.clear()
+    if isinstance(idx, pd.MultiIndex):
+        for level in idx.levels:
+            _stabilize_index(level)
+    else:
+        _clear_lazy_cache(getattr(idx, "_data", None))
+
+
+def _stabilize(obj: Any, depth: int = 0) -> None:
+    if depth > 4:
+        return
+    if isinstance(obj, pd.DataFrame):
+        obj._consolidate_inplace()
+        _stabilize_index(obj.index)
+        _stabilize_index(obj.columns)
+        for blk in obj._mgr.blocks:
+            _clear_lazy_cache(blk.values)
+    elif isinstance(obj, pd.Series):
+        _stabilize_index(obj.index)
+        _clear_lazy_cache(obj._values)
+    elif isinstance(obj, pd.Index):
+        _stabilize_index(obj)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            _stabilize(item, depth + 1)
+    elif isinstance(obj, dict):
+        for item in obj.values():
+            _stabilize(item, depth + 1)
+
+
+def stabilize_pandas_args(args: tuple, kwargs: dict) -> None:
+    """
+    Put pandas arguments into a canonical in-memory state before joblib hashes them.
+
+    joblib keys a call on the pickled arguments. A pandas object's pickle also
+    carries state that changes without any change in values: the lazily filled
+    ``_cache`` of an Index and of its DatetimeArray (``searchsorted``, ``.loc`` or
+    ``index[0]`` are enough to fill it), and the block layout (consolidated or not).
+    Without this, the same data misses the cache depending on what touched it first.
+
+    Works in place and leaves values, dtypes, index and freq unchanged; pandas
+    rebuilds the caches on demand. Uses pandas internals, so any failure is
+    swallowed: the worst case is the old behaviour (a spurious miss), never a
+    wrong hit.
+    """
+    try:
+        _stabilize(args)
+        _stabilize(kwargs)
+    except Exception as e:  # pragma: no cover - pandas internals changed
+        logger.debug(f"Could not stabilize pandas arguments for hashing: {e}")
+
+
+# =============================================================================
 # Integration with existing cacheable decorator
 # =============================================================================
 
@@ -328,15 +400,19 @@ def create_robust_cacheable(
                 else:
                     cache_key = CacheKeyGenerator.generate_key(func, args, kwargs)
 
-                # Track hit/miss
+                # Track hit/miss. check_call_in_cache returns a bool; it does not
+                # raise on a miss. Key generation above reads the index, so restore
+                # a canonical pandas state before joblib hashes the arguments.
+                stabilize_pandas_args(args, kwargs)
                 try:
-                    cached_func.check_call_in_cache(*args, **kwargs)
-                    is_hit = True
+                    is_hit = bool(cached_func.check_call_in_cache(*args, **kwargs))
+                except Exception:
+                    is_hit = False
+                if is_hit:
                     cache_stats.record_hit(func_name)
                     logger.debug(f"Cache HIT for {func_name}")
-                except:
+                else:
                     cache_stats.record_miss(func_name)
-                    is_hit = False
                     computation_start = time.time()  # Start timing for misses
                     logger.debug(f"Cache MISS for {func_name}")
 
@@ -358,6 +434,9 @@ def create_robust_cacheable(
                     _track_dataframe_access(get_data_tracker(), args, kwargs, dataset_name, purpose)
                 except Exception as e:
                     logger.warning(f"Data tracking failed for {func_name}: {e}")
+
+            # Data tracking reads the index too; hash the same state the check saw
+            stabilize_pandas_args(args, kwargs)
 
             # Execute function
             try:

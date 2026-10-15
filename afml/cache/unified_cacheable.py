@@ -15,6 +15,7 @@ from scipy.stats import randint, rv_continuous, rv_discrete, uniform
 
 from . import cache_stats, memory
 from .cache_monitoring import get_cache_monitor
+from .robust_cache_keys import stabilize_pandas_args
 
 
 class UnifiedCacheKeyGenerator:
@@ -292,11 +293,13 @@ def unified_cacheable(
             is_hit = False
             computation_time = None
 
+            # check_call_in_cache returns a bool; it does not raise on a miss.
+            # Key generation reads the index, so restore a canonical pandas state
+            # before joblib hashes the arguments (see stabilize_pandas_args).
+            stabilize_pandas_args(args, kwargs)
             try:
-                # Try to check cache without executing
-                cached_func.check_call_in_cache(*args, **kwargs)
-                is_hit = True
-            except:
+                is_hit = bool(cached_func.check_call_in_cache(*args, **kwargs))
+            except Exception:
                 is_hit = False
 
             # Track the call
@@ -304,6 +307,7 @@ def unified_cacheable(
 
             # Execute (from cache or compute)
             try:
+                stabilize_pandas_args(args, kwargs)
                 result = cached_func(*args, **kwargs)
 
                 # Calculate computation time if it was a miss
