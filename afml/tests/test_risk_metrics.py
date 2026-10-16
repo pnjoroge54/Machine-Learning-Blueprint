@@ -1,7 +1,9 @@
 # pylint: disable=missing-module-docstring
-import unittest
 import os
+import unittest
+
 import pandas as pd
+
 from ..portfolio_optimization.risk_metrics import RiskMetrics
 
 
@@ -15,7 +17,7 @@ class TestRiskMetrics(unittest.TestCase):
         Set the file path for the tick data csv.
         """
         project_path = os.path.dirname(__file__)
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date")
 
     def test_variance_calculation(self):

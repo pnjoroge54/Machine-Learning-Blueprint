@@ -3,15 +3,12 @@ Implementation of Trend-Scanning labels described in `Advances in Financial Mach
 <https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2708678>`_
 """
 
-from typing import List, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 from numba import njit, prange
-
-from ..cache import robust_cacheable
 
 
 @njit(parallel=True, cache=True)
@@ -66,10 +63,9 @@ def _window_stats_numba(y, window_length):
     return t_values, slopes, r_squared
 
 
-@robust_cacheable
 def trend_scanning_labels(
     close: pd.Series,
-    span: Union[List[int], Tuple[int, int]] = (5, 20),
+    span: list[int] | tuple[int, int] = (5, 20),
     volatility_threshold: float = 0.0,
     lookforward: bool = True,
     use_log: bool = True,
@@ -222,6 +218,14 @@ def trend_scanning_labels(
         index=pd.Index(valid_indices),
     )
 
+    _LABEL_ONLY_COLUMNS = ["t1", "ret", "bin"]
+    # measured against a reversed time axis and must be negated to read as
+    # true chronological direction. rsquared and window are sign-invariant.
+    if not lookforward:
+        df.drop(columns=_LABEL_ONLY_COLUMNS, inplace=True)
+        df["slope"] = -df["slope"]
+        df["t_value"] = -df["t_value"]
+
     return df
 
 
@@ -294,13 +298,21 @@ def plot_event_tvalues(df, event_start, span, symbol, timeframe):
     plt.style.use("dark_background")
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 6), dpi=100)
     y.iloc[: max(span)].plot(
-        ax=ax1, lw=1.5, legend=True, xlabel="", ylabel="Close", label=f"{symbol} {timeframe}"
+        ax=ax1,
+        lw=1.5,
+        legend=True,
+        xlabel="",
+        ylabel="Close",
+        label=f"{symbol} {timeframe}",
     )
 
     ax2.plot(hrzns, t_values, marker="o")
     ax2.axhline(0, color="white", lw=1)
     ax2.axvline(
-        best_h, color="red", linestyle="--", label=f"Best horizon = {best_h}, t={best_t:.2f}"
+        best_h,
+        color="red",
+        linestyle="--",
+        label=f"Best horizon = {best_h}, t={best_t:.2f}",
     )
     ax2.set_xlabel("Horizon (bars)")
     ax2.set_ylabel("t-value")

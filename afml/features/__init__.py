@@ -20,6 +20,14 @@ from .fractals import (
     generate_fractal_signals,
     get_fractal_features,
 )
+from .global_liquidity_pipeline import (
+    CompositeLiquidityIndex,
+    ForexLiquidityForecaster,
+    GlobalLiquidityMiner,
+    TradingIntegration,
+)
+from .meta_label_features import add_meta_label_features
+from .microstructure import compute_all_microfeatures
 from .moving_averages import calculate_ma_differences, get_ma_crossovers
 from .returns import (
     get_lagged_returns,
@@ -29,7 +37,7 @@ from .returns import (
     rolling_autocorr_numba,
 )
 from .stationary import is_stationary
-from .time import (
+from .trading_session import (
     encode_cyclical_features,
     get_time_features,
     trading_session_encoded_features,

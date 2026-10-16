@@ -2,8 +2,9 @@
 Tests the financial data structures
 """
 
-import unittest
 import os
+import unittest
+
 import numpy as np
 import pandas as pd
 
@@ -23,13 +24,13 @@ class TestETFTrick(unittest.TestCase):
         Set the file path for the tick data csv
         """
         project_path = os.path.dirname(__file__)
-        path = project_path + '/test_data'
+        path = project_path + "/test_data"
 
-        self.open_df_path = '{}/open_df.csv'.format(path)
-        self.close_df_path = '{}/close_df.csv'.format(path)
-        self.alloc_df_path = '{}/alloc_df.csv'.format(path)
-        self.costs_df_path = '{}/costs_df.csv'.format(path)
-        self.rates_df_path = '{}/rates_df.csv'.format(path)
+        self.open_df_path = f"{path}/open_df.csv"
+        self.close_df_path = f"{path}/close_df.csv"
+        self.alloc_df_path = f"{path}/alloc_df.csv"
+        self.costs_df_path = f"{path}/costs_df.csv"
+        self.rates_df_path = f"{path}/rates_df.csv"
 
         self.open_df = pd.read_csv(self.open_df_path, index_col=0, parse_dates=[0])
         self.close_df = pd.read_csv(self.close_df_path, index_col=0, parse_dates=[0])
@@ -42,9 +43,16 @@ class TestETFTrick(unittest.TestCase):
         Tests in-memory and csv ETF trick implementation, when costs_df is defined
         """
 
-        csv_etf_trick = ETFTrick(self.open_df_path, self.close_df_path, self.alloc_df_path, self.costs_df_path,
-                                 self.rates_df_path)
-        in_memory_etf_trick = ETFTrick(self.open_df, self.close_df, self.alloc_df, self.costs_df, self.rates_df)
+        csv_etf_trick = ETFTrick(
+            self.open_df_path,
+            self.close_df_path,
+            self.alloc_df_path,
+            self.costs_df_path,
+            self.rates_df_path,
+        )
+        in_memory_etf_trick = ETFTrick(
+            self.open_df, self.close_df, self.alloc_df, self.costs_df, self.rates_df
+        )
         in_memory_trick_series = in_memory_etf_trick.get_etf_series()
         csv_trick_series_4 = csv_etf_trick.get_etf_series(batch_size=4)
         csv_etf_trick.reset()
@@ -80,8 +88,16 @@ class TestETFTrick(unittest.TestCase):
         Tests in-memory and csv ETF trick implementation, when costs_df is not defined (should be set trivial)
         """
 
-        csv_etf_trick = ETFTrick(self.open_df_path, self.close_df_path, self.alloc_df_path, self.costs_df_path, None)
-        in_memory_etf_trick = ETFTrick(self.open_df, self.close_df, self.alloc_df, self.costs_df, None)
+        csv_etf_trick = ETFTrick(
+            self.open_df_path,
+            self.close_df_path,
+            self.alloc_df_path,
+            self.costs_df_path,
+            None,
+        )
+        in_memory_etf_trick = ETFTrick(
+            self.open_df, self.close_df, self.alloc_df, self.costs_df, None
+        )
         in_memory_trick_series = in_memory_etf_trick.get_etf_series()
         csv_trick_series_4 = csv_etf_trick.get_etf_series(batch_size=4)
         csv_etf_trick.reset()
@@ -129,7 +145,13 @@ class TestETFTrick(unittest.TestCase):
         except ValueError:
             pass
 
-        csv_etf_trick = ETFTrick(self.open_df_path, self.close_df_path, self.alloc_df_path, self.costs_df_path, None)
+        csv_etf_trick = ETFTrick(
+            self.open_df_path,
+            self.close_df_path,
+            self.alloc_df_path,
+            self.costs_df_path,
+            None,
+        )
         try:
             csv_etf_trick.get_etf_series(batch_size=2)
         except ValueError:

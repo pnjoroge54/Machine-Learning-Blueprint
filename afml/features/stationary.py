@@ -1,10 +1,10 @@
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller
 
-from ..cache import smart_cacheable
+from ..cache import cacheable
 
 
-@smart_cacheable
+@cacheable()
 def is_stationary(df: pd.DataFrame, alpha: float = 0.05, verbose: bool = True):
     not_stationary = []
     for col in df:

@@ -36,19 +36,20 @@ def get_signal(prob, num_classes, pred=None):
     bet_sizes = (prob - 1 / num_classes) / (prob * (1 - prob)) ** 0.5
 
     # Allow for bet size to be returned with or without side.
-    if not isinstance(pred, type(None)):
+    if not (pred is None):
         # signal = side * size
         bet_sizes = pred * (2 * norm.cdf(bet_sizes) - 1)
     else:
         # signal = size only
         bet_sizes = pd.Series(2 * norm.cdf(bet_sizes) - 1, index=prob.index)
 
-    # Note 1: In the book, this function contains a conditional statement checking for a column named 'side',
-    # then executes what is essentially the above line. This has been removed as it appears to be redundant
-    # and simplifies the function.
+    # Note 1: In the book, this function contains a conditional statement checking for a
+    # column named 'side', then executes what is essentially the above line. This has
+    # been removed as it appears to be redundant and simplifies the function.
 
-    # Note 2: In the book, this function includes the averaging and discretization steps, which are omitted here.
-    # The functions for performing these are included in this file, and can be applied as options in the user-level
+    # Note 2: In the book, this function includes the averaging and discretization
+    # steps, which are omitted here. The functions for performing these are included
+    # in this file, and can be applied as options in the user-level
     # functions in bet_sizing.py.
 
     return bet_sizes
@@ -57,7 +58,8 @@ def get_signal(prob, num_classes, pred=None):
 def avg_active_signals(signals):
     """
     SNIPPET 10.2 - BETS ARE AVERAGED AS LONG AS THEY ARE STILL ACTIVE
-    Function averages the bet sizes of all concurrently active bets. This function makes use of multiprocessing.
+    Function averages the bet sizes of all concurrently active bets. This function makes
+    use of multiprocessing.
 
     :param signals: (pandas.DataFrame) Contains at least the following columns:
     - **signal** - the bet size
@@ -68,15 +70,21 @@ def avg_active_signals(signals):
     :return: (pandas.Series) The averaged bet sizes
     """
     # Convert datetimes to nanoseconds
+    signals = signals.copy()
+    signals.index = signals.index.as_unit("ns")
+    signals["t1"] = signals["t1"].dt.as_unit("ns")
+
     signal_times = signals.index.view(np.int64)
     signal_values = signals["signal"].to_numpy()
 
     # Convert end times, handling NaT as maximum time
     MAX_TIME = np.iinfo(np.int64).max
-    end_times = np.where(signals["t1"].isna(), MAX_TIME, signals["t1"].view(np.int64))
+    end_times = np.where(signals["t1"].isna(), MAX_TIME, signals["t1"].to_numpy(np.int64))
 
     # Get all unique evaluation times
-    eval_times = np.unique(np.concatenate((signal_times, signals["t1"].dropna().view(np.int64))))
+    eval_times = np.unique(
+        np.concatenate((signal_times, signals["t1"].dropna().to_numpy(np.int64)))
+    )
 
     # Calculate results
     results = _calculate_active_signals(signal_times, end_times, signal_values, eval_times)
@@ -106,7 +114,7 @@ def _calculate_active_signals(signal_times, end_times, signal_values, eval_times
 
         for j in range(len(signal_times)):
             # Check if signal is active at time t
-            if signal_times[j] <= t and t < end_times[j]:
+            if signal_times[j] <= t < end_times[j]:
                 total += signal_values[j]
                 count += 1
 

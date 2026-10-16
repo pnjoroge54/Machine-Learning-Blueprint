@@ -129,13 +129,16 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
             X.loc[index, "label_prob_0.2"] = _generate_label_with_prob(value, 0.2)
             X.loc[index, "label_prob_0.1"] = _generate_label_with_prob(value, 0.1)
 
-        features = ["label_prob_0.6", "label_prob_0.2"]  # Two super-informative features
+        features = [
+            "label_prob_0.6",
+            "label_prob_0.2",
+        ]  # Two super-informative features
         for prob in [0.5, 0.3, 0.2, 0.1]:
             for window in [2, 5, 10]:
-                X["label_prob_{}_sma_{}".format(prob, window)] = (
-                    X["label_prob_{}".format(prob)].rolling(window=window).mean()
+                X[f"label_prob_{prob}_sma_{window}"] = (
+                    X[f"label_prob_{prob}"].rolling(window=window).mean()
                 )
-                features.append("label_prob_{}_sma_{}".format(prob, window))
+                features.append(f"label_prob_{prob}_sma_{window}")
         X.dropna(inplace=True)
         y = X.pop("y")
 
@@ -217,7 +220,9 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
         with self.assertWarns(UserWarning):
             sb_clf.fit(
-                self.X_train, self.y_train_clf, sample_weight=np.ones((self.X_train.shape[0],))
+                self.X_train,
+                self.y_train_clf,
+                sample_weight=np.ones((self.X_train.shape[0],)),
             )
         self.assertTrue(
             (sb_clf.predict(self.X_train)[:10] == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])).all
@@ -278,7 +283,9 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         """
         clf = KNeighborsClassifier()
         bagging_clf_1 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf, samples_info_sets=self.samples_info_sets, price_bars=self.data
+            base_estimator=clf,
+            samples_info_sets=self.samples_info_sets,
+            price_bars=self.data,
         )
         bagging_clf_2 = SequentiallyBootstrappedBaggingClassifier(
             base_estimator=clf,
@@ -371,7 +378,10 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
 
         # Init classifiers
         clf_base = RandomForestClassifier(
-            n_estimators=1, criterion="entropy", bootstrap=False, class_weight="balanced_subsample"
+            n_estimators=1,
+            criterion="entropy",
+            bootstrap=False,
+            class_weight="balanced_subsample",
         )
 
         sb_clf = SequentiallyBootstrappedBaggingClassifier(

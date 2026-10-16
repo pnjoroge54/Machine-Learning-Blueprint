@@ -74,7 +74,7 @@ def _compute_return_weights_numba(
         start_idx = start_indices[i]
         end_idx = end_indices[i]
 
-        if start_idx < end_idx and end_idx <= len(log_returns):
+        if start_idx < end_idx <= len(log_returns):
             weight_sum = 0.0
 
             # Sum weighted returns over event duration
@@ -316,7 +316,7 @@ def get_weights_by_return_optimized(
         # Verify index compatibility
         missing_in_close = processed_ce.index.difference(close.index)
         assert missing_in_close.empty, (
-            f"num_conc_events contains {len(missing_in_close)} " "indices not in close"
+            f"num_conc_events contains {len(missing_in_close)} indices not in close"
         )
 
     # Compute weights using optimized parallel processing

@@ -21,6 +21,21 @@ from numba import njit, prange
 # =============================================================================
 
 
+def _to_ns_int64(values):
+    """Convert a datetime64 Index/Series/array to int64 *nanoseconds*, unit-safe.
+
+    ``pandas``' ``.to_numpy(np.int64)`` returns the raw integer in the array's own
+    resolution (us, ms, ns, ...). When a bar index is ``datetime64[us]`` (as
+    produced by some resampled time bars) but the ``t1`` column is
+    ``datetime64[ns]``, the two int64 arrays land on different time scales: every
+    ``t1`` looks ~1000x further in the future than the entire grid, so every label
+    is counted as open through the end of the series and uniqueness collapses
+    (``tW`` ≈ ln(N)/N … 1/N). Casting to ns first makes the integers comparable
+    regardless of source resolution; for ns-native inputs this is a no-op.
+    """
+    return np.asarray(values).astype("datetime64[ns]").astype(np.int64)
+
+
 @njit(parallel=True, fastmath=True, cache=True)
 def _compute_concurrent_events_numba(start_times, end_times, time_index, start_idx, end_idx):
     """
@@ -122,7 +137,7 @@ def _compute_uniqueness_numba(start_indices, end_indices, concurrent_counts, n_e
         start_idx = start_indices[i]
         end_idx = end_indices[i]
 
-        if start_idx < end_idx and end_idx <= len(concurrent_counts):
+        if start_idx < end_idx <= len(concurrent_counts):
             inverse_sum = 0.0
             count = 0
 
@@ -254,18 +269,27 @@ def get_num_conc_events_optimized(
     if verbose:
         time0 = time.perf_counter()
 
+    # Normalize datetime resolution to ns so a [us] grid and a [ns] t1 (as can
+    # arise with resampled time bars) cannot land on different integer scales,
+    # which would otherwise treat every label as open through the end of series.
+    close_index = pd.DatetimeIndex(close_index).astype("datetime64[ns]")
+    label_endtime = label_endtime.copy()
+    label_endtime.index = pd.DatetimeIndex(label_endtime.index).astype("datetime64[ns]")
+    label_endtime = label_endtime.astype("datetime64[ns]")
+
     # Handle missing values efficiently using vectorized operations
     relevant_events = label_endtime.fillna(close_index[-1])
 
     max_end_time = relevant_events.max()
     relevant_events = relevant_events.loc[:max_end_time]
 
-    # Convert to numpy arrays for Numba processing
-    start_times = relevant_events.index.to_numpy(np.int64)
-    end_times = relevant_events.to_numpy(np.int64)
+    # Convert to numpy arrays for Numba processing.
+    # Normalize to ns so a [us] grid and a [ns] t1 cannot land on different scales.
+    start_times = _to_ns_int64(relevant_events.index)
+    end_times = _to_ns_int64(relevant_events)
 
     # Find the relevant time range for counting using efficient search
-    time_index = close_index.to_numpy(np.int64)
+    time_index = _to_ns_int64(close_index)
     start_idx = 0
     end_idx = close_index.searchsorted(max_end_time, side="right")
 
@@ -352,6 +376,19 @@ def get_av_uniqueness_from_triple_barrier_optimized(
 
     out = pd.DataFrame()
 
+    # Normalize datetime resolution to ns (see get_num_conc_events_optimized).
+    # Keeps the grid index and t1 on the same scale so reindex/get_loc below
+    # cannot silently mismatch a [us] bar index against a [ns] t1.
+    close_index = pd.DatetimeIndex(close_index).astype("datetime64[ns]")
+    triple_barrier_events = triple_barrier_events.copy()
+    triple_barrier_events.index = pd.DatetimeIndex(triple_barrier_events.index).astype(
+        "datetime64[ns]"
+    )
+    triple_barrier_events["t1"] = triple_barrier_events["t1"].astype("datetime64[ns]")
+    if num_conc_events is not None:
+        num_conc_events = num_conc_events.copy()
+        num_conc_events.index = pd.DatetimeIndex(num_conc_events.index).astype("datetime64[ns]")
+
     # Create processing pipeline for num_conc_events
     def process_concurrent_events(ce):
         """Process concurrent events to ensure proper format and indexing."""
@@ -374,9 +411,9 @@ def get_av_uniqueness_from_triple_barrier_optimized(
 
     # Verify index compatibility
     missing_in_close = processed_ce.index.difference(close_index)
-    assert (
-        missing_in_close.empty
-    ), f"num_conc_events contains {len(missing_in_close)} indices not in close"
+    assert missing_in_close.empty, (
+        f"num_conc_events contains {len(missing_in_close)} indices not in close"
+    )
 
     # Compute average uniqueness using optimized function
     out["tW"] = _get_average_uniqueness_optimized(

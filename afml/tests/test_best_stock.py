@@ -1,10 +1,13 @@
 """
 Tests Best Stock.
 """
-from unittest import TestCase
+
 import os
+from unittest import TestCase
+
 import numpy as np
 import pandas as pd
+
 from ..online_portfolio_selection import BestStock
 
 
@@ -22,7 +25,7 @@ class TestBestStock(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
         self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
 

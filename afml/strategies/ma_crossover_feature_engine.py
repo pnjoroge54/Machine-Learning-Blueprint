@@ -1,22 +1,17 @@
 from datetime import timedelta
-from itertools import combinations
-from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 
-from ..cache import apply_decorator_to_methods, smart_cacheable
 from ..features.fractals import (
     calculate_enhanced_fractals,
     calculate_fractal_trend_features,
 )
-from ..features.time import get_time_features
+from ..features.trading_session import get_time_features
 from ..labeling.trend_scanning import trend_scanning_labels
-from ..util.misc import optimize_dtypes, set_resampling_freq
+from ..util.misc import optimize_dtypes
 
 
-@apply_decorator_to_methods(smart_cacheable)
 class ForexFeatureEngine:
     """
     Feature engineering specifically designed for forex MA crossover strategies
@@ -32,9 +27,9 @@ class ForexFeatureEngine:
         self,
         price_data: pd.DataFrame,
         timeframe: str,
-        lr_period: Tuple[int] = (5, 20),
-        volume_data: Optional[pd.Series] = None,
-        additional_pairs: Optional[Dict[str, pd.DataFrame]] = None,
+        lr_period: tuple[int] = (5, 20),
+        volume_data: pd.Series | None = None,
+        additional_pairs: dict[str, pd.DataFrame] | None = None,
     ) -> pd.DataFrame:
         """
         Calculate all forex-relevant features for MA crossover strategy
@@ -184,7 +179,7 @@ class ForexFeatureEngine:
         return features
 
     def _calculate_trend_features(
-        self, price_data: pd.DataFrame, lr_period: Tuple[int]
+        self, price_data: pd.DataFrame, lr_period: tuple[int]
     ) -> pd.DataFrame:
         """Trend strength and quality features"""
         features = pd.DataFrame(index=price_data.index)
@@ -225,7 +220,7 @@ class ForexFeatureEngine:
         return features
 
     def _calculate_currency_strength_features(
-        self, close: pd.Series, additional_pairs: Dict[str, pd.DataFrame]
+        self, close: pd.Series, additional_pairs: dict[str, pd.DataFrame]
     ) -> pd.DataFrame:
         """Currency strength analysis using multiple pairs"""
         features = pd.DataFrame(index=close.index)
@@ -341,7 +336,7 @@ class ForexFeatureEngine:
         return direction / volatility
 
     def _calculate_linear_regression_features(
-        self, close: pd.Series, period: Tuple[int]
+        self, close: pd.Series, period: tuple[int]
     ) -> pd.DataFrame:
         lr_results = trend_scanning_labels(close, span=period, lookforward=False).drop(
             columns=["t1", "bin"]
@@ -419,14 +414,15 @@ class ForexFeatureEngine:
         # Only add HTF features where multiplier makes sense (>= 2)
         for htf_name, multiplier in htf_multipliers.items():
             if multiplier >= 2:  # Must be at least 2x the base timeframe
-
                 # Simulate HTF moving averages
                 features[f"htf_{htf_name}_ma_20"] = price_data.ta.sma(20 * multiplier)
                 features[f"htf_{htf_name}_ma_50"] = price_data.ta.sma(50 * multiplier)
 
                 # HTF trend direction
                 features[f"htf_{htf_name}_trend"] = np.where(
-                    features[f"htf_{htf_name}_ma_20"] > features[f"htf_{htf_name}_ma_50"], 1, -1
+                    features[f"htf_{htf_name}_ma_20"] > features[f"htf_{htf_name}_ma_50"],
+                    1,
+                    -1,
                 )
 
                 # HTF trend strength (ribbon alignment)
@@ -435,7 +431,9 @@ class ForexFeatureEngine:
 
                 htf_alignment = np.where(htf_ma_10 > features[f"htf_{htf_name}_ma_20"], 1, -1)
                 htf_alignment *= np.where(
-                    features[f"htf_{htf_name}_ma_20"] > features[f"htf_{htf_name}_ma_50"], 1, -1
+                    features[f"htf_{htf_name}_ma_20"] > features[f"htf_{htf_name}_ma_50"],
+                    1,
+                    -1,
                 )
                 htf_alignment *= np.where(features[f"htf_{htf_name}_ma_50"] > htf_ma_100, 1, -1)
 

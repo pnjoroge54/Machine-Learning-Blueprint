@@ -2,12 +2,11 @@
 Second generation models features: Kyle lambda, Amihud Lambda, Hasbrouck lambda (bar and trade based)
 """
 
-from typing import List
 
 import numpy as np
 import pandas as pd
 
-from ..structural_breaks.sadf import get_betas
+from ..structural_breaks import get_betas
 
 
 # pylint: disable=invalid-name
@@ -68,7 +67,7 @@ def get_bar_based_hasbrouck_lambda(
 
 def get_trades_based_kyle_lambda(
     price_diff: list, volume: list, aggressor_flags: list
-) -> List[float]:
+) -> list[float]:
     """
     Advances in Financial Machine Learning, p.286-288.
 
@@ -87,7 +86,7 @@ def get_trades_based_kyle_lambda(
     return [coef[0], t_value[0]]
 
 
-def get_trades_based_amihud_lambda(log_ret: list, dollar_volume: list) -> List[float]:
+def get_trades_based_amihud_lambda(log_ret: list, dollar_volume: list) -> list[float]:
     """
     Advances in Financial Machine Learning, p.288-289.
 
@@ -106,7 +105,7 @@ def get_trades_based_amihud_lambda(log_ret: list, dollar_volume: list) -> List[f
 
 def get_trades_based_hasbrouck_lambda(
     log_ret: list, dollar_volume: list, aggressor_flags: list
-) -> List[float]:
+) -> list[float]:
     """
     Advances in Financial Machine Learning, p.289-290.
 

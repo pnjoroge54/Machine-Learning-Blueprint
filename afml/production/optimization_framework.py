@@ -14,15 +14,12 @@ the optimization process.
 import itertools
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from tqdm import tqdm
 
-from afml.cache import cv_cacheable, robust_cacheable, time_aware_cacheable
 from afml.cross_validation import PurgedKFold, analyze_cross_val_scores
 
 
@@ -123,13 +120,13 @@ class ParameterOptimizer:
 
     def define_parameter_grid(
         self,
-        bb_windows: List[int] = None,
-        bb_stds: List[float] = None,
-        vol_multipliers: List[float] = None,
-        barrier_ratios: List[Tuple[float, float]] = None,
-        model_depths: List[int] = None,
-        model_min_weights: List[float] = None,
-    ) -> List[StrategyConfig]:
+        bb_windows: list[int] = None,
+        bb_stds: list[float] = None,
+        vol_multipliers: list[float] = None,
+        barrier_ratios: list[tuple[float, float]] = None,
+        model_depths: list[int] = None,
+        model_min_weights: list[float] = None,
+    ) -> list[StrategyConfig]:
         """
         Define the parameter grid to explore.
 
@@ -155,7 +152,12 @@ class ParameterOptimizer:
 
         configs = []
         for bb_w, bb_s, vol_m, (pt, sl), depth, min_w in itertools.product(
-            bb_windows, bb_stds, vol_multipliers, barrier_ratios, model_depths, model_min_weights
+            bb_windows,
+            bb_stds,
+            vol_multipliers,
+            barrier_ratios,
+            model_depths,
+            model_min_weights,
         ):
             config = StrategyConfig(
                 bb_window=bb_w,
@@ -172,7 +174,7 @@ class ParameterOptimizer:
 
     def evaluate_configuration(
         self, config: StrategyConfig, weighting_scheme: str = "uniqueness"
-    ) -> Dict:
+    ) -> dict:
         """
         Evaluate a single configuration.
 
@@ -294,7 +296,7 @@ class ParameterOptimizer:
 
     def run_optimization(
         self,
-        configs: List[StrategyConfig] = None,
+        configs: list[StrategyConfig] = None,
         weighting_scheme: str = "uniqueness",
         early_stopping: bool = True,
         min_f1_threshold: float = 0.50,
@@ -316,7 +318,7 @@ class ParameterOptimizer:
 
         print(f"Starting optimization of {len(configs)} configurations...")
         print(f"Estimated time without caching: {len(configs) * 5 / 60:.1f} minutes")
-        print(f"With caching: Much faster! ⚡\n")
+        print("With caching: Much faster! ⚡\n")
 
         self.results = []
 
@@ -371,14 +373,14 @@ class ParameterOptimizer:
         print("\n" + "=" * 80)
         print("OPTIMIZATION COMPLETE")
         print("=" * 80)
-        print(f"\nBest configuration:")
+        print("\nBest configuration:")
         print(f"  {self.best_config}")
-        print(f"\nBest scores:")
+        print("\nBest scores:")
         print(
             f"  CV F1: {results_df.iloc[0]['cv_f1_mean']:.4f} (±{results_df.iloc[0]['cv_f1_std']:.4f})"
         )
         print(f"  OOS F1: {results_df.iloc[0]['oos_f1']:.4f}")
-        print(f"\nTop 5 configurations:")
+        print("\nTop 5 configurations:")
         print(
             results_df.head()[
                 [
@@ -396,7 +398,7 @@ class ParameterOptimizer:
 
         return results_df
 
-    def analyze_results(self, results_df: pd.DataFrame) -> Dict:
+    def analyze_results(self, results_df: pd.DataFrame) -> dict:
         """
         Analyze optimization results to identify patterns.
 
@@ -435,7 +437,7 @@ class ParameterOptimizer:
         return insights
 
 
-def print_optimization_insights(insights: Dict):
+def print_optimization_insights(insights: dict):
     """Pretty print optimization insights."""
     print("\n" + "=" * 80)
     print("OPTIMIZATION INSIGHTS")

@@ -4,8 +4,10 @@ Tests the Nested Clustered Optimization (NCO) algorithm.
 """
 
 import unittest
+
 import numpy as np
 import pandas as pd
+
 from ..portfolio_optimization.nco import NCO
 
 
@@ -29,10 +31,14 @@ class TestNCO(unittest.TestCase):
 
         # Real values used for deriving empirical ones
         mu_vec = np.array([0, 0.1, 0.2, 0.3])
-        cov_mat = np.array([[1, 0.1, 0.2, 0.3],
-                            [0.1, 1, 0.1, 0.2],
-                            [0.2, 0.1, 1, 0.1],
-                            [0.3, 0.2, 0.1, 1]])
+        cov_mat = np.array(
+            [
+                [1, 0.1, 0.2, 0.3],
+                [0.1, 1, 0.1, 0.2],
+                [0.2, 0.1, 1, 0.1],
+                [0.3, 0.2, 0.1, 1],
+            ]
+        )
         num_obs = 100000
 
         # Using the function
@@ -56,17 +62,13 @@ class TestNCO(unittest.TestCase):
 
         # Correlation matrix and parameters used in the K-Means algorithm.
         np.random.seed(0)
-        corr_matrix = pd.DataFrame([[1, 0.1, -0.1],
-                                    [0.1, 1, -0.3],
-                                    [-0.1, -0.3, 1]])
+        corr_matrix = pd.DataFrame([[1, 0.1, -0.1], [0.1, 1, -0.3], [-0.1, -0.3, 1]])
 
         max_num_clusters = 2
         n_init = 10
 
         # Expected correlation matrix of clustered elements, clusters and, Silhouette Coefficient series
-        expected_corr = pd.DataFrame([[1, 0.1, -0.1],
-                                      [0.1, 1, -0.3],
-                                      [-0.1, - 0.3, 1]])
+        expected_corr = pd.DataFrame([[1, 0.1, -0.1], [0.1, 1, -0.3], [-0.1, -0.3, 1]])
         expected_clust = {0: [0, 1], 1: [2]}
         expected_silh_coef = pd.Series([0.100834, 0.167626, 0], index=[0, 1, 2])
 
@@ -91,16 +93,14 @@ class TestNCO(unittest.TestCase):
         nco = NCO()
 
         # Covariance matrix and the desired mu vector
-        cov_matrix = np.array([[0.01, 0.002, -0.001],
-                               [0.002, 0.04, -0.006],
-                               [-0.001, -0.006, 0.01]])
+        cov_matrix = np.array(
+            [[0.01, 0.002, -0.001], [0.002, 0.04, -0.006], [-0.001, -0.006, 0.01]]
+        )
 
         mu_vec = np.array([1, 1, 1]).reshape(-1, 1)
 
         # Expected weights for minimum variance allocation
-        w_expected = np.array([[0.37686939],
-                               [0.14257228],
-                               [0.48055833]])
+        w_expected = np.array([[0.37686939], [0.14257228], [0.48055833]])
 
         # Finding the optimal weights
         w_cvo = nco.allocate_cvo(cov_matrix, mu_vec=None)
@@ -122,16 +122,14 @@ class TestNCO(unittest.TestCase):
 
         # Covariance matrix and the custom mu vector
         np.random.seed(0)
-        cov_matrix = np.array([[0.01, 0.002, -0.001],
-                               [0.002, 0.04, -0.006],
-                               [-0.001, -0.006, 0.01]])
+        cov_matrix = np.array(
+            [[0.01, 0.002, -0.001], [0.002, 0.04, -0.006], [-0.001, -0.006, 0.01]]
+        )
 
         mu_vec = np.array([1, 1, 1]).reshape(-1, 1)
 
         # Expected weights for minimum variance allocation
-        w_expected = np.array([[0.43875825],
-                               [0.09237016],
-                               [0.4688716]])
+        w_expected = np.array([[0.43875825], [0.09237016], [0.4688716]])
         max_num_clusters = 2
 
         # Finding the optimal weights
@@ -155,10 +153,14 @@ class TestNCO(unittest.TestCase):
         # Covariance matrix, mean vector and other variables for the method
         np.random.seed(0)
         mu_vec = np.array([0, 0.1, 0.2, 0.3])
-        cov_mat = np.array([[1, 0.1, 0.2, 0.3],
-                            [0.1, 1, 0.1, 0.2],
-                            [0.2, 0.1, 1, 0.1],
-                            [0.3, 0.2, 0.1, 1]])
+        cov_mat = np.array(
+            [
+                [1, 0.1, 0.2, 0.3],
+                [0.1, 1, 0.1, 0.2],
+                [0.2, 0.1, 1, 0.1],
+                [0.3, 0.2, 0.1, 1],
+            ]
+        )
         num_obs = 100
         num_sims = 2
         kde_bwidth = 0.25
@@ -173,14 +175,22 @@ class TestNCO(unittest.TestCase):
         # Second line in the below test was changed after v.0.11.3 from [0.257547, 0.265450, 0.242453, 0.234551]
         #                                                          to   [0.273299, 0.242542, 0.241464, 0.242696]
         # due to scikit-learn changing np.random outputs
-        w_cvo_expected = pd.DataFrame([[0.249287, 0.256002, 0.242593, 0.252118],
-                                       [0.273299, 0.242542, 0.241464, 0.242696]])
+        w_cvo_expected = pd.DataFrame(
+            [
+                [0.249287, 0.256002, 0.242593, 0.252118],
+                [0.273299, 0.242542, 0.241464, 0.242696],
+            ]
+        )
 
         # Second line in the below test was changed after v.0.11.3 from [0.257547, 0.265450, 0.242453, 0.234551]
         #                                                          to   [0.273299, 0.242542, 0.241464, 0.242696]
         # due to scikit-learn changing np.random outputs
-        w_nco_expected = pd.DataFrame([[0.248396, 0.243172, 0.250751, 0.257680],
-                                       [0.273299, 0.242542, 0.241464, 0.242696]])
+        w_nco_expected = pd.DataFrame(
+            [
+                [0.248396, 0.243172, 0.250751, 0.257680],
+                [0.273299, 0.242542, 0.241464, 0.242696],
+            ]
+        )
 
         # Expected weights for maximum Sharpe ratio allocation
         # Values in the below test was changed after v.0.11.3 from [[-1.081719, 1.810936, 1.218067, 3.978880]
@@ -188,22 +198,40 @@ class TestNCO(unittest.TestCase):
         #                                                     to   [[-0.128849, -0.326671,  0.870183,  2.020053]
         #                                                           [-3.786126, -0.881858,  1.418773,  3.062546]]
         # due to scikit-learn changing np.random outputs
-        w_cvo_sr_expected = pd.DataFrame([[-0.128849, -0.326671, 0.870183, 2.020053],
-                                          [-3.786126, -0.881858, 1.418773, 3.062546]])
+        w_cvo_sr_expected = pd.DataFrame(
+            [
+                [-0.128849, -0.326671, 0.870183, 2.020053],
+                [-3.786126, -0.881858, 1.418773, 3.062546],
+            ]
+        )
 
         # Values in the below test was changed after v.0.11.3 from [[-1.060835, 1.910503, 1.315026, 3.908128]
         #                                                           [-0.937168, 1.886158, -0.389275, 4.884809]]
         #                                                     to   [[-0.204089, -0.050088,  0.912494,  1.983382]
         #                                                           [-3.723231, -1.809242,  1.862001,  2.61035]]
         # due to scikit-learn changing np.random outputs
-        w_nco_sr_expected = pd.DataFrame([[-0.204089, -0.050088, 0.912494, 1.983382],
-                                          [-3.723231, -1.809242, 1.862001, 2.61035]])
+        w_nco_sr_expected = pd.DataFrame(
+            [
+                [-0.204089, -0.050088, 0.912494, 1.983382],
+                [-3.723231, -1.809242, 1.862001, 2.61035],
+            ]
+        )
 
         # Finding the optimal weights for minimum variance
-        w_cvo, w_nco = nco.allocate_mcos(mu_vec, cov_mat, num_obs, num_sims, kde_bwidth, min_var_portf, lw_shrinkage)
+        w_cvo, w_nco = nco.allocate_mcos(
+            mu_vec, cov_mat, num_obs, num_sims, kde_bwidth, min_var_portf, lw_shrinkage
+        )
 
         # Finding the optimal weights for maximum Sharpe ratio
-        w_cvo_sr, w_nco_sr = nco.allocate_mcos(mu_vec, cov_mat, num_obs, num_sims, kde_bwidth_alt, min_var_portf_alt, lw_shrinkage)
+        w_cvo_sr, w_nco_sr = nco.allocate_mcos(
+            mu_vec,
+            cov_mat,
+            num_obs,
+            num_sims,
+            kde_bwidth_alt,
+            min_var_portf_alt,
+            lw_shrinkage,
+        )
 
         # Testing if the optimal allocation simulations are right
         np.testing.assert_almost_equal(np.array(w_cvo), np.array(w_cvo_expected), decimal=6)
@@ -222,17 +250,29 @@ class TestNCO(unittest.TestCase):
 
         # Weights from CVO and NCO, and data to estimate the true optimal weights
         np.random.seed(0)
-        w_cvo = pd.DataFrame([[0.249287, 0.256002, 0.242593, 0.252118],
-                              [0.257547, 0.265450, 0.242453, 0.234551]])
+        w_cvo = pd.DataFrame(
+            [
+                [0.249287, 0.256002, 0.242593, 0.252118],
+                [0.257547, 0.265450, 0.242453, 0.234551],
+            ]
+        )
 
-        w_nco = pd.DataFrame([[0.248396, 0.243172, 0.250751, 0.257680],
-                              [0.257547, 0.265450, 0.242453, 0.234551]])
+        w_nco = pd.DataFrame(
+            [
+                [0.248396, 0.243172, 0.250751, 0.257680],
+                [0.257547, 0.265450, 0.242453, 0.234551],
+            ]
+        )
 
         mu_vec = np.array([0, 0.1, 0.2, 0.3])
-        cov_mat = np.array([[1, 0.1, 0.2, 0.3],
-                            [0.1, 1, 0.1, 0.2],
-                            [0.2, 0.1, 1, 0.1],
-                            [0.3, 0.2, 0.1, 1]])
+        cov_mat = np.array(
+            [
+                [1, 0.1, 0.2, 0.3],
+                [0.1, 1, 0.1, 0.2],
+                [0.2, 0.1, 1, 0.1],
+                [0.3, 0.2, 0.1, 1],
+            ]
+        )
         min_var_portf = True
 
         # Expected errors
@@ -260,10 +300,7 @@ class TestNCO(unittest.TestCase):
         block_corr = 0.3
 
         # Expected corr matrix
-        corr_expected = np.array([[1, 0.3, 0, 0],
-                                  [0.3, 1, 0, 0],
-                                  [0, 0, 1, 0.3],
-                                  [0, 0, 0.3, 1]])
+        corr_expected = np.array([[1, 0.3, 0, 0], [0.3, 1, 0, 0], [0, 0, 1, 0.3], [0, 0, 0.3, 1]])
 
         # Finding the errors in estimations
         corr_matrix = nco._form_block_matrix(num_blocks, block_size, block_corr)
@@ -290,20 +327,18 @@ class TestNCO(unittest.TestCase):
         std_alt = None
 
         # Expected vector of means and covariance matrix
-        mu_expected = np.array([[0.5936214],
-                                [0.97226796],
-                                [0.8602674],
-                                [0.00681664]])
+        mu_expected = np.array([[0.5936214], [0.97226796], [0.8602674], [0.00681664]])
 
-        cov_expected = pd.DataFrame([[0.09, 0.027, 0, 0],
-                                     [0.027, 0.09, 0, 0],
-                                     [0, 0, 0.09, 0.027],
-                                     [0, 0, 0.027, 0.09]])
+        cov_expected = pd.DataFrame(
+            [
+                [0.09, 0.027, 0, 0],
+                [0.027, 0.09, 0, 0],
+                [0, 0, 0.09, 0.027],
+                [0, 0, 0.027, 0.09],
+            ]
+        )
 
-        mu_alt_expected = np.array([[0.34260886],
-                                    [0.12059827],
-                                    [0.24366456],
-                                    [0.17248975]])
+        mu_alt_expected = np.array([[0.34260886], [0.12059827], [0.24366456], [0.17248975]])
 
         # Finding the random vector of means and covariance matrix
         mu_vec, cov_matrix = nco.form_true_matrix(num_blocks, block_size, block_corr, std)

@@ -1,10 +1,13 @@
 """
 Tests Constant Rebalanced Portfolio.
 """
-from unittest import TestCase
+
 import os
+from unittest import TestCase
+
 import numpy as np
 import pandas as pd
+
 from ..online_portfolio_selection import CRP
 
 
@@ -22,7 +25,7 @@ class TestConstantRebalancedPortfolio(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
         self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
 
@@ -33,7 +36,7 @@ class TestConstantRebalancedPortfolio(TestCase):
         # Initialize CRP.
         crp = CRP()
         # Allocates asset prices to CRP.
-        crp.allocate(self.data, resample_by='M')
+        crp.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(crp.all_weights)
         # All weights for the strategy have to be the same.
@@ -57,7 +60,7 @@ class TestConstantRebalancedPortfolio(TestCase):
         # Initialize CRP.
         crp = CRP(weights)
         # Allocates asset prices to CRP.
-        crp.allocate(self.data, resample_by='M')
+        crp.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(crp.all_weights)
         # All weights for the strategy have to be the same.
@@ -81,7 +84,7 @@ class TestConstantRebalancedPortfolio(TestCase):
         # Initialize CRP.
         crp = CRP()
         # Allocates asset prices to CRP.
-        crp.allocate(self.data, weights, resample_by='M')
+        crp.allocate(self.data, weights, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(crp.all_weights)
         # All weights for the strategy have to be the same.

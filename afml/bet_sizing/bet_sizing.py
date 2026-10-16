@@ -1,5 +1,6 @@
 """
-This module contains functionality for determining bet sizes for investments based on machine learning predictions.
+This module contains functionality for determining bet sizes for investments based on
+machine learning predictions.
 These implementations are based on bet sizing approaches described in Chapter 10.
 """
 
@@ -81,7 +82,12 @@ def bet_size_dynamic(
     :return: (pandas.DataFrame) Bet size (bet_size), target position (t_pos), and limit price (l_p).
     """
     # Create a dictionary of bet size variables for easier handling.
-    d_vars = {"pos": current_pos, "max_pos": max_pos, "m_p": market_price, "f": forecast_price}
+    d_vars = {
+        "pos": current_pos,
+        "max_pos": max_pos,
+        "m_p": market_price,
+        "f": forecast_price,
+    }
     events_0 = confirm_and_cast_to_df(d_vars)
 
     # Calibrate w.
@@ -135,7 +141,7 @@ def bet_size_reserve(
     factor=5,
     variant=2,
     max_iter=10_000,
-    num_workers=1,
+    num_workers=-1,
     return_parameters=False,
 ):
     """
@@ -145,9 +151,9 @@ def bet_size_reserve(
     strategy results in a sigmoid-shaped bet sizing response aligned to the expected number of concurrent long
     and short bets in the dataset.
 
-    Note that this function creates a <mlfinlab.bet_sizing.ef3m.M2N> object and makes use of the parallel fitting
+    Note that this function creates a <afml.bet_sizing.ef3m.M2N> object and makes use of the parallel fitting
     functionality. As such, this function accepts and passes fitting parameters to the
-    mlfinlab.bet_sizing.ef3m.M2N.mp_fit() method.
+    afml.bet_sizing.ef3m.M2N.mp_fit() method.
 
     :param events_t1: (pandas.Series) The end datetime of the position with the start datetime as the index.
     :param sides: (pandas.Series) The side of the bet with the start datetime as index. Index must match the
@@ -156,10 +162,10 @@ def bet_size_reserve(
     :param fit_runs: (int) Number of runs to execute when trying to fit the distribution.
     :param epsilon: (float) Error tolerance.
     :param factor: (float) Lambda factor from equations.
-    :param variant: (int) Which algorithm variant to use, 1 or 2.
+    :param variant: (int) The EF3M variant to execute, options are 1: EF3M using first 4 moments, 2: EF3M using first 5 moments.
     :param max_iter: (int) Maximum number of iterations after which to terminate loop.
     :param num_workers: (int) Number of CPU cores to use for multiprocessing execution, set to -1 to use all
-     CPU cores. Default is 1.
+     CPU cores. Default is -1.
     :param return_parameters: (bool) If True, function also returns a dictionary of the fited mixture parameters.
     :return: (pandas.DataFrame) The 'events_t1' and 'sides' arguments as columns, with the number of concurrent
      active long, short bets, the difference between long and short, and the bet size in additional columns.
@@ -209,7 +215,7 @@ def confirm_and_cast_to_df(d_vars):
     any_series = False  # Are any variables a pandas.Series?
     all_series = True  # Are all variables a pandas.Series?
     ser_len = 0
-    for var in d_vars.values():
+    for var in d_vars.to_numpy()():
         any_series = any_series or isinstance(var, pd.Series)
         all_series = all_series and isinstance(var, pd.Series)
 
@@ -229,7 +235,7 @@ def confirm_and_cast_to_df(d_vars):
                 d_vars[k] = pd.Series(data=np.array([d_vars[k] for i in range(ser_len)]), index=idx)
 
     # Combine Series to form a DataFrame.
-    events = pd.concat(list(d_vars.values()), axis=1)
+    events = pd.concat(list(d_vars.to_numpy()()), axis=1)
     events.columns = list(d_vars.keys())
 
     return events
@@ -266,7 +272,7 @@ def get_concurrent_sides(events_t1, sides):
     """
     events_0 = pd.DataFrame({"t1": events_t1, "side": sides})
     active_long, active_short = _get_concurrent_sides_numba(
-        events_t1.index.view(np.int64), events_t1.view(np.int64).values, sides.values
+        events_t1.index.view(np.int64), events_t1.to_numpy(np.int64), sides.to_numpy()
     )
     events_0["active_long"] = active_long
     events_0["active_short"] = active_short

@@ -91,7 +91,7 @@ class M2N:
 
             if not parameters_new:
                 # An empty list returned means an invalid value was found in iter_4 or iter_5.
-                return None
+                return
 
             parameters = parameters_new.copy()
             self.get_moments(parameters)
@@ -109,13 +109,13 @@ class M2N:
 
             if num_iter > self.max_iter:
                 # Stops calculation if algorithm reaches the set maximum number of iterations.
-                return None
+                return
 
             p_1 = parameters[4]
             mu_2 = parameters[1]  # Update for the 5th moments convergence.
 
         self.parameters = parameters
-        return None
+        return
 
     def get_moments(self, parameters, return_result=False):
         """

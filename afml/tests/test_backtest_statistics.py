@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from ..backtest_statistics.statistics import (
+from ..backtest_statistics.perfomance_statistics import (
     all_bets_concentration,
     average_holding_period,
     bets_concentration,
@@ -225,7 +225,12 @@ class TestBacktestStatistics(unittest.TestCase):
         )
 
         param_defl_sr = deflated_sharpe_ratio(
-            observed_sr, estim_param, number_of_returns, skewness, kurtosis, estimates_param=True
+            observed_sr,
+            estim_param,
+            number_of_returns,
+            skewness,
+            kurtosis,
+            estimates_param=True,
         )
 
         self.assertAlmostEqual(result_defl_sr, 0.95836, delta=1e-4)

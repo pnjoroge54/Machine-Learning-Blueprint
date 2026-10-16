@@ -6,10 +6,11 @@ Combines the speed of local caching with the tracking power of MLflow.
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -32,8 +33,8 @@ class MLflowCacheIntegration:
     def __init__(
         self,
         experiment_name: str = "afml_experiments",
-        tracking_uri: Optional[str] = None,
-        cache_dir: Optional[Path] = None,
+        tracking_uri: str | None = None,
+        cache_dir: Path | None = None,
     ):
         """
         Initialize MLflow + cache integration.
@@ -64,7 +65,7 @@ class MLflowCacheIntegration:
 
     def cached_experiment(
         self,
-        tags: Optional[Dict[str, str]] = None,
+        tags: dict[str, str] | None = None,
         log_artifacts: bool = True,
         cache_metrics: bool = True,
     ):
@@ -163,8 +164,8 @@ class MLflowCacheIntegration:
     @contextmanager
     def experiment_run(
         self,
-        run_name: Optional[str] = None,
-        tags: Optional[Dict[str, str]] = None,
+        run_name: str | None = None,
+        tags: dict[str, str] | None = None,
         use_cache: bool = True,
     ):
         """
@@ -188,7 +189,7 @@ class MLflowCacheIntegration:
                 if self.integration.enabled:
                     mlflow.log_param(key, value)
 
-            def log_metric(self, key: str, value: float, step: Optional[int] = None):
+            def log_metric(self, key: str, value: float, step: int | None = None):
                 if self.integration.enabled:
                     mlflow.log_metric(key, value, step=step)
 
@@ -201,7 +202,7 @@ class MLflowCacheIntegration:
                     self.cached_data[key] = value
                     self.integration._save_to_cache(key, value)
 
-            def get_cached(self, key: str) -> Optional[Any]:
+            def get_cached(self, key: str) -> Any | None:
                 if self.use_cache:
                     if key in self.cached_data:
                         return self.cached_data[key]
@@ -221,7 +222,7 @@ class MLflowCacheIntegration:
 
     def compare_runs(
         self, run_ids: list[str], metrics: list[str] = None
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> dict[str, dict[str, float]]:
         """
         Compare metrics across multiple MLflow runs.
 
@@ -254,7 +255,7 @@ class MLflowCacheIntegration:
 
         return comparison
 
-    def get_best_run(self, metric_name: str, maximize: bool = True) -> Optional[str]:
+    def get_best_run(self, metric_name: str, maximize: bool = True) -> str | None:
         """
         Find the best run based on a metric.
 
@@ -306,7 +307,7 @@ class MLflowCacheIntegration:
             logger.error(f"Failed to load model from run {run_id}: {e}")
             raise
 
-    def _extract_params(self, func: Callable, args: tuple, kwargs: dict) -> Dict[str, Any]:
+    def _extract_params(self, func: Callable, args: tuple, kwargs: dict) -> dict[str, Any]:
         """Extract parameters from function call."""
         import inspect
 
@@ -334,17 +335,17 @@ class MLflowCacheIntegration:
 
         return params
 
-    def _generate_run_name(self, func_name: str, params: Dict[str, Any]) -> str:
+    def _generate_run_name(self, func_name: str, params: dict[str, Any]) -> str:
         """Generate unique run name."""
         param_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
         return f"{func_name}_{param_hash}"
 
-    def _generate_cache_key(self, func_name: str, params: Dict[str, Any]) -> str:
+    def _generate_cache_key(self, func_name: str, params: dict[str, Any]) -> str:
         """Generate cache key from function name and parameters."""
         param_str = json.dumps(params, sort_keys=True)
         return hashlib.md5(f"{func_name}_{param_str}".encode()).hexdigest()
 
-    def _log_params(self, params: Dict[str, Any]):
+    def _log_params(self, params: dict[str, Any]):
         """Log parameters to MLflow."""
         for key, value in params.items():
             try:
@@ -356,7 +357,7 @@ class MLflowCacheIntegration:
             except Exception as e:
                 logger.debug(f"Failed to log param {key}: {e}")
 
-    def _log_metrics(self, result: Dict[str, Any]):
+    def _log_metrics(self, result: dict[str, Any]):
         """Log numeric metrics from result dict."""
         if not isinstance(result, dict):
             return
@@ -382,7 +383,7 @@ class MLflowCacheIntegration:
         except Exception as e:
             logger.debug(f"Failed to log result artifact: {e}")
 
-    def _get_from_cache(self, cache_key: str) -> Optional[Any]:
+    def _get_from_cache(self, cache_key: str) -> Any | None:
         """Retrieve from local cache."""
         import pickle
 
@@ -413,12 +414,12 @@ class MLflowCacheIntegration:
 
 
 # Global instance for easy usage
-_global_integration: Optional[MLflowCacheIntegration] = None
+_global_integration: MLflowCacheIntegration | None = None
 
 
 def setup_mlflow_cache(
     experiment_name: str = "afml_experiments",
-    tracking_uri: Optional[str] = None,
+    tracking_uri: str | None = None,
 ) -> MLflowCacheIntegration:
     """
     Setup global MLflow + cache integration.
@@ -448,7 +449,7 @@ def get_mlflow_cache() -> MLflowCacheIntegration:
 
 # Decorator shortcut
 def mlflow_cached(
-    tags: Optional[Dict[str, str]] = None,
+    tags: dict[str, str] | None = None,
     log_artifacts: bool = True,
 ):
     """
@@ -464,9 +465,9 @@ def mlflow_cached(
 
 
 __all__ = [
+    "MLFLOW_AVAILABLE",
     "MLflowCacheIntegration",
-    "setup_mlflow_cache",
     "get_mlflow_cache",
     "mlflow_cached",
-    "MLFLOW_AVAILABLE",
+    "setup_mlflow_cache",
 ]

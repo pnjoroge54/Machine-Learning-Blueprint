@@ -5,7 +5,6 @@ Logic regarding return and time decay attribution for sample weights from chapte
 import numpy as np
 import pandas as pd
 
-from ..cache import smart_cacheable
 from ..sampling.concurrent import (
     get_av_uniqueness_from_triple_barrier,
     num_concurrent_events,
@@ -40,7 +39,6 @@ def _apply_weight_by_return(label_endtime, num_conc_events, close_series, molecu
     return weights.abs()
 
 
-@smart_cacheable
 def get_weights_by_return(
     triple_barrier_events,
     close_series,
@@ -90,7 +88,7 @@ def get_weights_by_return(
         # Verify index compatibility
         missing_in_close = processed_ce.index.difference(close_series.index)
         assert missing_in_close.empty, (
-            f"num_conc_events contains {len(missing_in_close)} " "indices not in close_series"
+            f"num_conc_events contains {len(missing_in_close)} indices not in close_series"
         )
 
     # Compute weights using processed concurrent events
@@ -150,10 +148,7 @@ def get_weights_by_time_decay(
         return weights
     else:
         # Apply exponential decay
-        if last_weight == 1:
-            return pd.Series(1.0, index=cum_time_weights.index)
-
-        elif cum_time_weights.iloc[-1] == 0:
+        if last_weight == 1 or cum_time_weights.iloc[-1] == 0:
             return pd.Series(1.0, index=cum_time_weights.index)
 
         # Calculate normalized position (0 = newest, 1 = oldest)

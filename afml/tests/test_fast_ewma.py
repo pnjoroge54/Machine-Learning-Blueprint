@@ -2,8 +2,9 @@
 Tests ewma function from fast_ewma module
 """
 
-import unittest
 import os
+import unittest
+
 import numpy as np
 import pandas as pd
 
@@ -23,7 +24,7 @@ class TestDataStructures(unittest.TestCase):
         Set the file path for the tick data csv
         """
         project_path = os.path.dirname(__file__)
-        self.path = project_path + '/test_data/tick_data.csv'
+        self.path = project_path + "/test_data/tick_data.csv"
 
     def test_ewma(self):
         """

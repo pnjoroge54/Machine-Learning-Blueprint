@@ -4,7 +4,6 @@ used to filter events where a structural break occurs. This event is then used t
 to some event horizon, say a day.
 """
 
-from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -56,7 +55,9 @@ def _cusum_filter_numba_core(
 
 
 def cusum_filter(
-    raw_time_series: pd.Series, threshold: Union[float, int, pd.Series], time_stamps: bool = True
+    raw_time_series: pd.Series,
+    threshold: float | pd.Series,
+    time_stamps: bool = True,
 ):
     """
     Advances in Financial Machine Learning, Snippet 2.4, page 39.

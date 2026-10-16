@@ -11,9 +11,8 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -26,12 +25,12 @@ class SignalPacket:
     symbol: str
     signal_type: str  # "BUY", "SELL", "CLOSE", "MODIFY"
     entry_price: float
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
-    position_size: Optional[float] = None
-    metadata: Optional[Dict[str, Any]] = None
-    strategy_name: Optional[str] = None
-    confidence: Optional[float] = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    position_size: float | None = None
+    metadata: dict[str, Any] | None = None
+    strategy_name: str | None = None
+    confidence: float | None = None
 
 
 @dataclass
@@ -44,7 +43,7 @@ class MarketDataPacket:
     ask: float
     volume: float
     spread: float
-    bars: Optional[List[Dict]] = None  # OHLCV bars
+    bars: list[dict] | None = None  # OHLCV bars
 
 
 class MQL5Bridge:
@@ -64,7 +63,7 @@ class MQL5Bridge:
         host: str = "localhost",
         port: int = 80,
         mode: str = "live",  # "live" or "backtest"
-        cache_dir: Optional[Path] = None,
+        cache_dir: Path | None = None,
     ):
         """
         Initialize MQL5 bridge.
@@ -84,22 +83,22 @@ class MQL5Bridge:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Communication
-        self.server_socket: Optional[socket.socket] = None
-        self.client_socket: Optional[socket.socket] = None
+        self.server_socket: socket.socket | None = None
+        self.client_socket: socket.socket | None = None
         self.is_running = False
         self.lock = threading.Lock()
 
         # Signal management
-        self.signal_history: List[SignalPacket] = []
-        self.pending_signals: List[SignalPacket] = []
+        self.signal_history: list[SignalPacket] = []
+        self.pending_signals: list[SignalPacket] = []
 
         # Market data buffer
-        self.market_data_buffer: Dict[str, List[MarketDataPacket]] = {}
+        self.market_data_buffer: dict[str, list[MarketDataPacket]] = {}
 
         # Performance tracking
         self.signals_sent = 0
         self.signals_executed = 0
-        self.connection_start_time: Optional[float] = None
+        self.connection_start_time: float | None = None
 
         # Load cached signals if in backtest mode
         if self.mode == "backtest":
@@ -202,7 +201,7 @@ class MQL5Bridge:
         except Exception as e:
             logger.error(f"Error processing MQL5 message: {e}")
 
-    def _handle_market_data(self, message: Dict):
+    def _handle_market_data(self, message: dict):
         """Handle incoming market data from MQL5."""
         try:
             packet = MarketDataPacket(
@@ -230,7 +229,7 @@ class MQL5Bridge:
         except Exception as e:
             logger.error(f"Error handling market data: {e}")
 
-    def _handle_execution_report(self, message: Dict):
+    def _handle_execution_report(self, message: dict):
         """Handle execution report from MQL5."""
         try:
             signal_id = message.get("signal_id")
@@ -284,7 +283,7 @@ class MQL5Bridge:
             logger.error(f"Error sending signal: {e}")
             return False
 
-    def _send_message(self, message: Dict):
+    def _send_message(self, message: dict):
         """Send message to MQL5 with length prefix."""
         try:
             data = json.dumps(message).encode("utf-8")
@@ -311,12 +310,15 @@ class MQL5Bridge:
 
     def _send_heartbeat_response(self):
         """Send heartbeat response to MQL5."""
-        message = {"type": "heartbeat_response", "timestamp": datetime.now().isoformat()}
+        message = {
+            "type": "heartbeat_response",
+            "timestamp": datetime.now().isoformat(),
+        }
         self._send_message(message)
 
     def get_market_data(
         self, symbol: str, as_dataframe: bool = True
-    ) -> Optional[pd.DataFrame | List[MarketDataPacket]]:
+    ) -> pd.DataFrame | list[MarketDataPacket] | None:
         """
         Get buffered market data for symbol.
 
@@ -380,7 +382,7 @@ class MQL5Bridge:
         except Exception as e:
             logger.error(f"Error loading cached signals: {e}")
 
-    def _save_execution_report(self, report: Dict):
+    def _save_execution_report(self, report: dict):
         """Save execution report to cache."""
         try:
             reports_file = self.cache_dir / f"executions_{self.mode}.jsonl"
@@ -391,7 +393,7 @@ class MQL5Bridge:
         except Exception as e:
             logger.error(f"Error saving execution report: {e}")
 
-    def get_performance_stats(self) -> Dict[str, Any]:
+    def get_performance_stats(self) -> dict[str, Any]:
         """Get bridge performance statistics."""
         stats = {
             "mode": self.mode,
@@ -430,7 +432,11 @@ class MQL5CachedStrategy:
     """
 
     def __init__(
-        self, strategy_func, bridge: MQL5Bridge, use_cache: bool = True, track_data: bool = True
+        self,
+        strategy_func,
+        bridge: MQL5Bridge,
+        use_cache: bool = True,
+        track_data: bool = True,
     ):
         """
         Initialize cached strategy for MQL5.
@@ -452,11 +458,11 @@ class MQL5CachedStrategy:
         self.backtest_cache = get_backtest_cache()
         self.data_tracker = get_data_tracker() if track_data else None
 
-        self.last_signal_time: Optional[datetime] = None
+        self.last_signal_time: datetime | None = None
 
     def generate_signals(
-        self, market_data: pd.DataFrame, parameters: Dict[str, Any]
-    ) -> List[SignalPacket]:
+        self, market_data: pd.DataFrame, parameters: dict[str, Any]
+    ) -> list[SignalPacket]:
         """
         Generate trading signals using cached strategy.
 
@@ -500,7 +506,7 @@ class MQL5CachedStrategy:
             logger.error(f"Error generating signals: {e}")
             return []
 
-    def _convert_to_signal_packet(self, signal: Dict) -> Optional[SignalPacket]:
+    def _convert_to_signal_packet(self, signal: dict) -> SignalPacket | None:
         """Convert strategy signal to MQL5 signal packet."""
         try:
             return SignalPacket(
@@ -535,7 +541,7 @@ def setup_mql5_monitoring(bridge: MQL5Bridge):
 
         # MQL5 stats
         mql5_stats = bridge.get_performance_stats()
-        print(f"\nMQL5 Bridge Status:")
+        print("\nMQL5 Bridge Status:")
         print(f"  Mode: {mql5_stats['mode']}")
         print(f"  Connected: {mql5_stats['connected']}")
         print(f"  Signals Sent: {mql5_stats['signals_sent']}")
@@ -544,7 +550,7 @@ def setup_mql5_monitoring(bridge: MQL5Bridge):
         print(f"  Uptime: {mql5_stats['uptime_seconds']:.0f}s")
 
         # Cache stats
-        print(f"\nCache Performance:")
+        print("\nCache Performance:")
         monitor.print_health_report(detailed=False)
 
         print("=" * 80 + "\n")
@@ -555,7 +561,7 @@ def setup_mql5_monitoring(bridge: MQL5Bridge):
 __all__ = [
     "MQL5Bridge",
     "MQL5CachedStrategy",
-    "SignalPacket",
     "MarketDataPacket",
+    "SignalPacket",
     "setup_mql5_monitoring",
 ]

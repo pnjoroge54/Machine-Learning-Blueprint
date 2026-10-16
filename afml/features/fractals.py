@@ -12,17 +12,15 @@ References:
 - Mandelbrot, Benoit (2004). "The (Mis)Behavior of Markets"
 """
 
-from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 # Define type aliases for clarity
-FractalIndicators = Dict[str, pd.Series]
-FractalLevels = Dict[str, pd.Series]
-FractalTrendFeatures = Dict[str, pd.Series]
-FractalSignals = Dict[str, pd.Series]
+FractalIndicators = dict[str, pd.Series]
+FractalLevels = dict[str, pd.Series]
+FractalTrendFeatures = dict[str, pd.Series]
+FractalSignals = dict[str, pd.Series]
 
 
 def calculate_basic_fractals(high: pd.Series, low: pd.Series, n: int = 2) -> FractalIndicators:
@@ -114,7 +112,9 @@ def calculate_enhanced_fractals(
     )
 
     fractal_low_strength = np.where(
-        basic_fractals["fractal_low"] == 1, 1 - low / low.rolling(2 * n + 1, center=True).mean(), 0
+        basic_fractals["fractal_low"] == 1,
+        1 - low / low.rolling(2 * n + 1, center=True).mean(),
+        0,
     )
 
     # Validate fractals based on strength threshold
@@ -353,7 +353,7 @@ def comprehensive_fractal_analysis(
     n: int = 2,
     lookback_period: int = 20,
     ma_period: int = 20,
-) -> Dict[str, Union[FractalIndicators, FractalLevels, FractalTrendFeatures, FractalSignals]]:
+) -> dict[str, FractalIndicators | FractalLevels | FractalTrendFeatures | FractalSignals]:
     """
     Perform comprehensive fractal analysis on price data.
 
@@ -395,7 +395,10 @@ def comprehensive_fractal_analysis(
     )
 
     trend_features = calculate_fractal_trend_features(
-        close, indicators["fractal_breakout_up"], indicators["fractal_breakout_down"], ma_period
+        close,
+        indicators["fractal_breakout_up"],
+        indicators["fractal_breakout_down"],
+        ma_period,
     )
 
     signals = generate_fractal_signals(

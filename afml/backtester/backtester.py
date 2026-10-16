@@ -1,5 +1,3 @@
-from typing import Dict, Tuple
-
 import numpy as np
 import pandas as pd
 
@@ -18,7 +16,7 @@ def backtest_model(
     position_sizing: str = "fixed",
     max_position: float = 1.0,
     risk_free_rate: float = 0.0,
-) -> Tuple[pd.DataFrame, Dict]:
+) -> tuple[pd.DataFrame, dict]:
     """
     Backtest a trained model on out-of-sample data.
 
@@ -123,7 +121,7 @@ def backtest_with_labeling(
     close_prices: pd.Series,
     initial_capital: float = 10000,
     transaction_cost: float = 0.001,
-) -> Dict:
+) -> dict:
     """
     Backtest using the entry/exit points defined by labeling functions
 

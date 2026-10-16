@@ -1,10 +1,13 @@
 """
 Tests Correlation Driven Nonparametric Learning.
 """
-from unittest import TestCase
+
 import os
+from unittest import TestCase
+
 import numpy as np
 import pandas as pd
+
 from ..online_portfolio_selection.corn import CORN
 
 
@@ -22,7 +25,7 @@ class TestCorrelationDrivenNonparametricLearning(TestCase):
         # Set project path to current directory.
         project_path = os.path.dirname(__file__)
         # Add new data path to match stock_prices.csv data.
-        data_path = project_path + '/test_data/stock_prices.csv'
+        data_path = project_path + "/test_data/stock_prices.csv"
         # Read csv, parse dates, and drop NaN.
         self.data = pd.read_csv(data_path, parse_dates=True, index_col="Date").dropna(axis=1)
 
@@ -33,7 +36,7 @@ class TestCorrelationDrivenNonparametricLearning(TestCase):
         # Initialize CORN.
         corn = CORN(window=2, rho=0.5)
         # Allocates asset prices to CORN.
-        corn.allocate(self.data, resample_by='M')
+        corn.allocate(self.data, resample_by="M")
         # Create np.array of all_weights.
         all_weights = np.array(corn.all_weights)
         # Check if all weights sum to 1.

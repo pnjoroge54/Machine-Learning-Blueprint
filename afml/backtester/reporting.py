@@ -1,12 +1,10 @@
 import re
 from pathlib import Path
-from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from loguru import logger
-from matplotlib import pyplot as plt
 from PIL import Image, ImageDraw, ImageFont
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
@@ -19,7 +17,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from ..backtest_statistics.performance_analysis import (
+from ..backtest_statistics.meta_labeling_analysis import (
     evaluate_meta_labeling_performance,
 )
 from .training import ModelData, get_optimal_threshold
@@ -49,7 +47,7 @@ def labeling_reports(model_data, name="Primary Model"):
         model_data.pred,
     )
 
-    print(f"\nMODEL PERFORMANCE:")
+    print("\nMODEL PERFORMANCE:")
     print("-" * 53)
     print(classification_report(y_test, pred))
     print("\nConfusion Matrix:")
@@ -91,7 +89,7 @@ def meta_labeling_reports(model_data, name="Meta-Model", plot=False):
     cm = confusion_matrix(y_test, pred0)
     print(cm)
 
-    print(f"\nMETA-MODEL PERFORMANCE:")
+    print("\nMETA-MODEL PERFORMANCE:")
     print("-" * 53)
     print(classification_report(y_test, pred))
     print("\nConfusion Matrix:")
@@ -106,7 +104,10 @@ def meta_labeling_reports(model_data, name="Meta-Model", plot=False):
 
 
 def compare_confusion_matrices(
-    model_data_1: ModelData, model_data_2: ModelData, normalize=None, titles: List[str] = None
+    model_data_1: ModelData,
+    model_data_2: ModelData,
+    normalize=None,
+    titles: list[str] = None,
 ):
     cm0 = confusion_matrix(
         model_data_1.y_test,
@@ -137,8 +138,8 @@ def compare_confusion_matrices(
 
 
 def compare_roc_curves(
-    model_data: List[ModelData],
-    titles: List[str] = None,
+    model_data: list[ModelData],
+    titles: list[str] = None,
     fig_title: str = None,
     columns: int = 1,
     height: float = 5,
@@ -177,8 +178,8 @@ def compare_roc_curves(
 
 
 def compare_pr_curves(
-    model_data: List[tuple],  # ModelData or similar with y_test and prob
-    titles: List[str] = None,
+    model_data: list[tuple],  # ModelData or similar with y_test and prob
+    titles: list[str] = None,
     fig_title: str = None,
     columns: int = 1,
     height: float = 5,
@@ -237,9 +238,9 @@ def compare_pr_curves(
 
 
 def compare_roc_pr_curves(
-    model_data: List[ModelData],  # ModelData-like with y_test and prob
-    model_names: List[str] = None,
-    titles: List[str] = None,
+    model_data: list[ModelData],  # ModelData-like with y_test and prob
+    model_names: list[str] = None,
+    titles: list[str] = None,
     fig_title: str = None,
     columns: int = 1,
     width: float = 7.5,
@@ -261,7 +262,12 @@ def compare_roc_pr_curves(
     nrows = int(np.ceil(n / columns))
     sharex = True if nrows <= 2 else False
     fig, ax = plt.subplots(
-        nrows, ncols=columns, sharex=sharex, sharey=False, figsize=(width, height), dpi=100
+        nrows,
+        ncols=columns,
+        sharex=sharex,
+        sharey=False,
+        figsize=(width, height),
+        dpi=100,
     )
 
     ax = np.atleast_1d(ax).flatten()
@@ -300,7 +306,12 @@ def compare_roc_pr_curves(
         if show_baseline:
             baseline = data.y_test.sum() / len(data.y_test)
             axis.hlines(
-                baseline, 0, 1, colors="gray", linestyles="-.", label=f"Baseline = {baseline:.2f}"
+                baseline,
+                0,
+                1,
+                colors="gray",
+                linestyles="-.",
+                label=f"Baseline = {baseline:.2f}",
             )
 
         axis.set_xlabel("Recall / FPR")
@@ -414,7 +425,7 @@ def create_classification_report_image(
 
         font_data = ImageFont.truetype(font_path_mono, font_size_data)
         font_header = ImageFont.truetype(font_path_regular, font_size_header)
-    except IOError:
+    except OSError:
         print("Warning: Font files not found. Using default fonts.")
         font_data = ImageFont.load_default()
         font_header = ImageFont.load_default()
@@ -518,7 +529,12 @@ def create_classification_report_image(
     # Draw the report title
     title_width = font_header.getlength(title)
     y_pos = padding / 2
-    draw.text(((img_width - title_width) / 2, y_pos), title, font=font_header, fill=header_color)
+    draw.text(
+        ((img_width - title_width) / 2, y_pos),
+        title,
+        font=font_header,
+        fill=header_color,
+    )
 
     # Draw the table headers
     y_pos += (font_header.getbbox("A")[3] - font_header.getbbox("A")[1]) + 10
@@ -534,7 +550,10 @@ def create_classification_report_image(
     # Draw a horizontal line under the header
     draw.line(
         [
-            (padding, y_pos + (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + 5),
+            (
+                padding,
+                y_pos + (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + 5,
+            ),
             (
                 img_width - padding,
                 y_pos + (font_data.getbbox("A")[3] - font_data.getbbox("A")[1]) + 5,
@@ -668,7 +687,10 @@ def meta_labeling_classification_report_images(model_data, titles, output_filena
 
 
 def meta_labeling_classification_report_tables(
-    model_data: List[ModelData], methods: List[str], title: str, dirpath: str = "../reports"
+    model_data: list[ModelData],
+    methods: list[str],
+    title: str,
+    dirpath: str = "../reports",
 ):
     dirpath = Path(dirpath)
     dirpath.mkdir(parents=True, exist_ok=True)
@@ -713,7 +735,10 @@ def meta_labeling_classification_report_tables(
             [
                 {
                     "selector": "th",
-                    "props": [("text-align", "center"), ("background-color", "#f2f2f2")],
+                    "props": [
+                        ("text-align", "center"),
+                        ("background-color", "#f2f2f2"),
+                    ],
                 },
                 {"selector": "td", "props": [("text-align", "center")]},
             ]
@@ -747,12 +772,12 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
         primary_metrics = results["primary_metrics"]
         meta_metrics = results["meta_metrics"]
 
-        print(f"\n{'='*100}")
+        print(f"\n{'=' * 100}")
         print(f"Meta-Labeling Performance Analysis: {strategy_name}")
-        print(f"{'='*100}")
+        print(f"{'=' * 100}")
 
         # --- Signal Filtering Summary ---
-        print(f"\nSignal Filtering Summary:")
+        print("\nSignal Filtering Summary:")
         print(f"  Total Primary Signals: {results['total_primary_signals']:,}")
         print(f"  Filtered Signals: {results['filtered_signals']:,}")
         print(f"  Filter Rate: {meta_metrics['signal_filter_rate']:,.2%}")
@@ -905,13 +930,13 @@ def print_meta_labeling_comparison(results: dict, save_path: str = None):
         if "sharpe_ratio" in meta_metrics and meta_metrics["sharpe_ratio"] > primary_metrics.get(
             "sharpe_ratio", 0
         ):
-            print(f"\n✅ Meta-labeling improves risk-adjusted returns")
+            print("\n✅ Meta-labeling improves risk-adjusted returns")
         if "signal_filter_rate" in meta_metrics:
             print(
                 f"\n📊 Signal filtering removed {meta_metrics['signal_filter_rate']:,.1%} of trades"
             )
             if meta_metrics["signal_filter_rate"] > 0.3:
-                print(f"   High filtering rate suggests meta-model is selective")
+                print("   High filtering rate suggests meta-model is selective")
 
     # Get the captured output
     output_text = output_buffer.getvalue()
