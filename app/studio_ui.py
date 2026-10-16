@@ -82,6 +82,12 @@ DEFAULT_DRAFT: Dict[str, Any] = {
         "bagging_max_samples": 1.0,
         "bagging_max_features": 1.0,
         "rnd_search_iter": 0,
+        "search": "optuna",
+        "search_space": {},  # filled from the estimator's default on page 5
+        "n_trials": 50,
+        "timeout_s": 3600,
+        "pruner": "hyperband",
+        "metric": "neg_log_loss",
     },
 }
 

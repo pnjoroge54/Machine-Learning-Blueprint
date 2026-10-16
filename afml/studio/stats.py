@@ -1,24 +1,21 @@
 """
 Family statistics shown beside every score.
 
-The plan names ``effective_trial_count``, ``expected_max_sharpe``,
-``criterion_variance_audit`` and ``one_standard_error_selection``; afml now has them in
-``afml.cross_validation.selection_overfit``.
-This branch does not have them, so this module carries self-contained versions
-with the same roles. ``resolve()`` prefers the afml implementations when they are
-importable, so rewiring is a no-op once the newer code lands.
+The numbers come from ``afml.cross_validation.selection_overfit``: the effective trial
+count (Li and Ji eigenvalue count and the Kish design effect), the expected maximum
+under no skill, and the one-standard-error rule. This module adapts them to the
+ledger: small or degenerate score matrices return counts instead of raising, and the
+null threshold is shifted to the mean of the scores, because CV scores such as log
+loss are not centered on zero the way Sharpe ratios are.
 """
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import asdict, dataclass
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from scipy import stats as sps
-
-EULER_GAMMA = 0.5772156649015329
+from afml.cross_validation import selection_overfit as so
 
 
 @dataclass
@@ -35,62 +32,34 @@ class TrialCount:
 
 def effective_trial_count(scores: np.ndarray) -> TrialCount:
     """
-    Effective number of independent trials from a trials x observations score matrix
-    (rows are trials, columns are fold scores or returns).
+    Effective number of independent trials from a trials x folds score matrix,
+    through ``selection_overfit.effective_trial_count``.
 
-    * ``n_eigen``: participation ratio of the eigenvalues of the trial correlation
-      matrix, ``(sum l)^2 / sum l^2``. Equals N for uncorrelated trials and 1 for
-      identical ones.
-    * ``n_kish``: Kish design-effect count, ``N / (1 + (N - 1) * mean_rho)``, with the
-      mean off-diagonal correlation clipped at 0.
-
-    The correlation matrix has rank at most ``n_obs - 1``, so when N exceeds the
-    score-vector length the eigenvalue count is capped and the result is flagged
-    ``rank_limited``.
+    Trials with missing scores are dropped. With fewer than two trials or two scores
+    each there is no correlation to measure, so the raw count is returned. A matrix
+    with more trials than scores per trial is ``rank_limited``: its effective count
+    is a floor, not an estimate.
     """
     scores = np.asarray(scores, dtype=float)
     if scores.ndim != 2:
         raise ValueError("scores must be a 2-D trials x observations matrix")
-    # Drop trials with missing scores or no variation; they carry no correlation info
-    ok = np.isfinite(scores).all(axis=1)
-    scores = scores[ok]
+    scores = scores[np.isfinite(scores).all(axis=1)]
     n_raw, n_obs = scores.shape
-    if n_raw <= 1:
+    if n_raw < 2 or n_obs < 2:
         return TrialCount(n_raw, float(n_raw), float(n_raw), n_obs, False)
-
-    # Trials whose scores never vary have no defined correlation; count only the rest
-    varying = scores.std(axis=1) > 0
-    if varying.sum() <= 1:
-        return TrialCount(n_raw, 1.0, 1.0, n_obs, n_raw > n_obs)
-
-    corr = np.corrcoef(scores[varying])
-    corr = np.nan_to_num(corr, nan=0.0)
-    eig = np.clip(np.linalg.eigvalsh(corr), 0, None)
-    n_eigen = float(eig.sum() ** 2 / (eig**2).sum())
-
-    m = corr.shape[0]
-    mean_rho = (corr.sum() - m) / (m * (m - 1))
-    n_kish = float(m / (1 + (m - 1) * max(mean_rho, 0.0)))
-
-    return TrialCount(n_raw, n_eigen, n_kish, n_obs, n_raw > n_obs)
+    tc = so.effective_trial_count(scores)
+    return TrialCount(n_raw, tc.n_eff_eigen, tc.n_eff_kish, n_obs, bool(n_raw > n_obs or tc.rank_limited))
 
 
 def expected_max_sharpe(n_trials: float, sr_variance: float, sr_mean: float = 0.0) -> float:
     """
-    Expected maximum Sharpe ratio among ``n_trials`` independent trials with true
-    Sharpe zero (the null threshold of the Deflated Sharpe Ratio, Bailey and
-    Lopez de Prado 2014):
-
-        E[max SR] = mean + sqrt(V) * ((1 - g) Z(1 - 1/N) + g Z(1 - 1/(N e)))
+    Expected best score among ``n_trials`` independent trials with no skill
+    (AFML Section 8.1), shifted to ``sr_mean``. Zero skill is the mean score, not
+    zero, for criteria such as log loss.
     """
-    n = float(n_trials)
-    if n < 1 or not np.isfinite(sr_variance) or sr_variance < 0:
+    if not np.isfinite(sr_variance) or sr_variance < 0 or n_trials < 1:
         return float("nan")
-    if n == 1:
-        return float(sr_mean)
-    z1 = sps.norm.ppf(1 - 1 / n)
-    z2 = sps.norm.ppf(1 - 1 / (n * np.e))
-    return float(sr_mean + np.sqrt(sr_variance) * ((1 - EULER_GAMMA) * z1 + EULER_GAMMA * z2))
+    return float(sr_mean + so.expected_max_sharpe(n_trials, sr_variance))
 
 
 def noise_floor(fold_scores: np.ndarray) -> float:
@@ -102,36 +71,16 @@ def noise_floor(fold_scores: np.ndarray) -> float:
     return float(s.std(ddof=1) / np.sqrt(s.size))
 
 
-def one_standard_error_selection(mean_scores: np.ndarray, std_errors: np.ndarray) -> int:
+def one_standard_error_selection(results: Sequence[Dict[str, Any]],
+                                 complexity: Callable[[Dict[str, Any]], float]) -> Tuple[Dict, Dict]:
     """
-    Index of the simplest candidate within one standard error of the best, assuming
-    candidates are ordered from simplest to most complex.
+    The simplest candidate within one standard error of the best, through
+    ``selection_overfit.one_standard_error_selection``. Each result holds ``params``
+    and ``fold_scores``; ``complexity`` maps params to a number, lower being simpler.
     """
-    mean_scores = np.asarray(mean_scores, dtype=float)
-    best = int(np.nanargmax(mean_scores))
-    threshold = mean_scores[best] - np.asarray(std_errors, dtype=float)[best]
-    return int(np.flatnonzero(mean_scores >= threshold)[0])
-
-
-# --------------------------------------------------------------------------- rewiring
-
-_AFML_LOCATIONS = {
-    "effective_trial_count": ["afml.cross_validation.selection_overfit"],
-    "expected_max_sharpe": ["afml.cross_validation.selection_overfit"],
-    "one_standard_error_selection": ["afml.cross_validation.selection_overfit"],
-}
-
-
-def resolve(name: str) -> Callable:
-    """Return the afml implementation of ``name`` if one exists, else the local one."""
-    for module in _AFML_LOCATIONS.get(name, []):
-        try:
-            fn = getattr(importlib.import_module(module), name, None)
-        except ImportError:
-            fn = None
-        if fn is not None:
-            return fn
-    return globals()[name]
+    usable: List[Dict[str, Any]] = [r for r in results
+                                    if np.isfinite(np.asarray(r["fold_scores"], dtype=float)).sum() >= 2]
+    return so.one_standard_error_selection(usable, complexity)
 
 
 def family_summary(score_matrix: Optional[np.ndarray], best_sharpe: Optional[float] = None,

@@ -106,3 +106,35 @@ def test_role_is_derived_from_events():
     assert P.model_role(events) == "secondary"
     assert P.model_role(events.drop(columns="side")) == "primary"
     assert {"train_w", "w"} <= set(events.columns)
+
+
+def test_optuna_study_logs_every_trial_in_its_family(home):
+    vault.set_research_end("SYNTH", "2024-06-30", ledger=home)
+    n_trials = 12
+    cfg = base_config(
+        stage="model",
+        model={"search": "optuna", "n_trials": n_trials, "cv_splits": 3,
+               "estimator": {"name": "random_forest", "params": {"n_estimators": 10, "n_jobs": 1}},
+               "search_space": {"max_depth": {"int": [2, 6]},
+                                "min_weight_fraction_leaf": {"float": [0.025, 0.2]}}},
+    )
+    run_id = jobs.submit(cfg, ledger=home)
+    _run_queue(home)
+    run = home.get_run(run_id)
+    assert run["status"] == "done", run["error"]
+
+    trials = [t for t in home.trials(run["family_id"]) if t["run_id"] == run_id]
+    assert len(trials) == n_trials and {t["kind"] for t in trials} == {"optuna_trial"}
+    complete = [t for t in trials if t["score"] is not None]
+    assert complete and run["summary"]["model"]["n_complete"] == len(complete)
+    assert run["summary"]["model"]["best_score"] == pytest.approx(max(t["score"] for t in complete))
+
+    # Every trial is a raw trial; the effective count and null threshold sit beside the best
+    stats = home.family_stats(run["family_id"])
+    assert stats["n_raw"] == n_trials
+    assert stats["n_eigen"] is not None and stats["n_eigen"] <= len(complete)
+    if len(complete) > 1:
+        assert stats["null_threshold"] is not None
+
+    paths = {a["path"] for a in home.artifacts(run_id)}
+    assert {"optuna.db", "tables/cv_results.parquet", "tables/optuna_trials.parquet"} <= paths

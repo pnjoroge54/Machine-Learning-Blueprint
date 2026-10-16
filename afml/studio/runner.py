@@ -12,6 +12,7 @@ Run folder layout::
         log.jsonl          every log record bound to this run (progress included)
         process.log        raw stdout/stderr of the subprocess
         summary.json       per-step summaries and cache hit/miss counts
+        optuna.db          the Optuna study (model runs with search="optuna")
         tables/*.parquet   every table a page plots from
 
 Invoked as ``python -m afml.studio.runner <run_id>`` by the worker, one subprocess per
@@ -176,15 +177,23 @@ def step_importance(ctx: RunContext, state: Dict[str, Any]) -> None:
 
 def step_model(ctx: RunContext, state: Dict[str, Any]) -> None:
     report = ctx.progress_for("model")
-    tables, summary, trials = P.run_model(state["X"], state["events"], ctx.cfg["model"],
-                                          seed=ctx.cfg["seed"], progress=report)
-    ctx.write_tables(tables)
-    ctx.summary["model"] = summary
-    for t in trials:
-        ctx.ledger.add_trial(run_id=ctx.run_id, family_id=ctx.family_id, kind="model_candidate",
+
+    def log_trial(t: Dict[str, Any]) -> None:
+        # Written as each trial finishes, so a cancelled study keeps every trial it ran
+        ctx.ledger.add_trial(run_id=ctx.run_id, family_id=ctx.family_id, kind=t["kind"],
                              number=t["number"], metric=t["metric"], score=t["score"],
                              params=t["params"], fold_scores=t["fold_scores"])
-    report(1.0, f"best {summary['scoring']} {summary['best_score']:.4f} over {len(trials)} candidates")
+
+    tables, summary, trials = P.run_model(state["X"], state["events"], ctx.cfg["model"],
+                                          seed=ctx.cfg["seed"], progress=report,
+                                          data_index=state["bars"].index, storage_dir=ctx.run_dir,
+                                          on_trial=log_trial)
+    ctx.write_tables(tables)
+    ctx.summary["model"] = summary
+    db = ctx.run_dir / "optuna.db"
+    if db.exists():
+        ctx.ledger.add_artifact(ctx.run_id, db.name, "optuna_study", sha256_file(db), db.stat().st_size)
+    report(1.0, f"best {summary['scoring']} {summary['best_score']:.4f} over {len(trials)} trials")
 
 
 STEPS = {"bars": step_bars, "labels": step_labels, "features": step_features,
@@ -227,7 +236,8 @@ def replay_script(run_id: str, spec: RunSpec) -> str:
         lines += ['tables, summary, trial = P.run_importance(X, events, cfg["importance"], seed=cfg["seed"])',
                   "print(summary)"]
     if "model" in steps:
-        lines += ['tables, summary, trials = P.run_model(X, events, cfg["model"], seed=cfg["seed"])',
+        lines += ['tables, summary, trials = P.run_model(X, events, cfg["model"], seed=cfg["seed"],',
+                  '                                      data_index=bars.index, storage_dir=Path(__file__).parent / "replay")',
                   "print(summary)"]
     return "\n".join(lines) + "\n"
 

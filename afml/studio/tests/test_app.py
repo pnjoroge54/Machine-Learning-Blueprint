@@ -34,6 +34,12 @@ def seeded_home(tmp_path_factory):
         model={"estimator": {"name": "random_forest", "params": {"n_estimators": 10, "n_jobs": 1}},
                "param_grid": {"max_depth": [2, 4]}, "cv_splits": 3},
     ), ledger=led)
+    jobs.submit(base_config(  # last, so page 5 opens on the Optuna run
+        stage="model",
+        model={"search": "optuna", "n_trials": 6, "cv_splits": 3,
+               "estimator": {"name": "random_forest", "params": {"n_estimators": 10, "n_jobs": 1}},
+               "search_space": {"max_depth": {"int": [2, 6]}}},
+    ), ledger=led)
     run_worker(poll_s=0.2, once=True, ledger=led)
     failed = [r for r in led.list_runs() if r["status"] != "done"]
     assert not failed, [(r["stage"], r["error"]) for r in failed]
@@ -66,3 +72,11 @@ def test_launch_without_research_end_is_refused(seeded_home):
     at.run()
     at.text_input[0].set_value("NOEND").run()
     assert any("No research_end" in e.value for e in at.error)
+
+
+def test_model_page_shows_the_optuna_study(seeded_home):
+    at = streamlit_testing.AppTest.from_file(str(APP / "views" / "model_development.py"), default_timeout=120)
+    at.run()
+    assert not at.exception
+    assert any("6 trials" in c.value for c in at.caption)
+    assert any(m.label.startswith("Trials N") for m in at.metric)

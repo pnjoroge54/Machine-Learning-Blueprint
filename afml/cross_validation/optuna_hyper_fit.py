@@ -199,6 +199,7 @@ def optimize_trading_model_with_pruning(
     param_distributions: dict,
     n_splits: int = 5,
     metric="neg_log_loss",
+    pct_embargo: float = 0.01,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
@@ -209,7 +210,7 @@ def optimize_trading_model_with_pruning(
     model = suggester.suggest_and_apply(trial, classifier, param_distributions, events, data_index)
 
     # Setup Cross-Validation
-    cv = PurgedKFold(n_splits=n_splits, t1=events["t1"], pct_embargo=0.01)
+    cv = PurgedKFold(n_splits=n_splits, t1=events["t1"], pct_embargo=pct_embargo)
 
     # Extract return-attribution weights from to evaluate validation set with respect to PnL
     w_score = events["w"]
@@ -322,6 +323,7 @@ def optimize_trading_model(
     refit: bool = True,
     continue_study: bool = False,
     callbacks: list[Callable] = [],
+    pct_embargo: float = 0.01,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -347,6 +349,7 @@ def optimize_trading_model(
         db_path (str): Path to store trials.
         refit (bool): Fit best model on full data.
         continue_study (bool): Run new trials.
+        pct_embargo (float): Embargo fraction for PurgedKFold.
 
     Returns:
         optuna.study.Study: The completed study object with history and best params.
@@ -395,7 +398,8 @@ def optimize_trading_model(
 
         def objective(trial):
             return optimize_trading_model_with_pruning(
-                trial, X, y, events, data_index, classifier, param_distributions, n_splits, metric
+                trial, X, y, events, data_index, classifier, param_distributions, n_splits, metric,
+                pct_embargo,
             )
 
         callbacks = [*callbacks]

@@ -17,15 +17,18 @@ labels_report        events -> label balance, holding times, concurrency, unique
 build_feature_matrix bars + feature set spec -> X and the provenance catalog
 features_report      X + catalog -> NaN share per column
 run_importance       X + events + importance spec -> MDI / MDA / SFI under PurgedKFold
-run_model            X + events + model spec -> purged-CV grid search (clf_hyper_fit)
+run_model            X + events + model spec -> Optuna study (optimize_trading_model)
+                     or purged-CV grid search (clf_hyper_fit), one ledger trial each
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Annotated, Any, Callable, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
@@ -682,7 +685,31 @@ def run_importance(X: pd.DataFrame, events: pd.DataFrame, importance: Dict[str, 
 
 
 def run_model(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
-              seed: int = 42, progress: Progress = _noop_progress) -> Tuple[Tables, Dict, List[Dict]]:
+              seed: int = 42, progress: Progress = _noop_progress,
+              data_index: Optional[pd.DatetimeIndex] = None,
+              storage_dir: Optional[Path] = None,
+              on_trial: Optional[Callable[[Dict], None]] = None) -> Tuple[Tables, Dict, List[Dict]]:
+    """
+    Model development: an Optuna study or a purged-CV grid search, by ``model["search"]``.
+
+    Returns ``(tables, summary, trials)``. Each trial is one ledger trial. An Optuna
+    study also hands each trial to ``on_trial`` as it finishes, so a cancelled or
+    crashed study still leaves every trial it ran in the ledger.
+    """
+    if model.get("search") == "optuna":
+        if data_index is None:
+            raise ValueError("an Optuna search needs the bar index (data_index)")
+        return run_optuna(X, events, model, data_index, seed=seed, progress=progress,
+                          storage_dir=storage_dir, on_trial=on_trial)
+    tables, summary, trials = run_grid(X, events, model, seed=seed, progress=progress)
+    if on_trial is not None:
+        for t in trials:
+            on_trial(t)
+    return tables, summary, trials
+
+
+def run_grid(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
+             seed: int = 42, progress: Progress = _noop_progress) -> Tuple[Tables, Dict, List[Dict]]:
     """
     Purged-CV grid search through ``afml.cross_validation.hyper_fit.clf_hyper_fit``.
     Each grid candidate is one ledger trial with its fold scores.
@@ -724,7 +751,7 @@ def run_model(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
                         key=lambda c: int(c[5:].split("_")[0]))
     trials = []
     for i, row in res.iterrows():
-        trials.append({"number": int(i), "metric": cv_results["scoring"],
+        trials.append({"number": int(i), "kind": "model_candidate", "metric": cv_results["scoring"],
                        "score": float(row["mean_test_score"]),
                        "params": row["params"],
                        "fold_scores": [float(row[c]) for c in split_cols]})
@@ -737,8 +764,215 @@ def run_model(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
         "n_candidates": len(trials),
         "n_samples": int(len(Xa)),
         "score_weights_applied": True,
+        "search": "grid",
     }
     return {"cv_results": table}, summary, trials
+
+
+# Starting search spaces for the Optuna page, in the ModelSpec.search_space format.
+# Ranges follow FinancialModelSuggester.get_search_space, without max_samples for
+# extra trees (it needs bootstrap=True).
+DEFAULT_SEARCH_SPACES: Dict[str, Dict[str, Any]] = {
+    "random_forest": {
+        "n_estimators": {"int": [50, 500]},
+        "max_depth": {"int": [3, 11]},
+        "min_weight_fraction_leaf": {"float": [0.025, 0.5]},
+        "max_features": ["sqrt"],
+        "max_samples": [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    },
+    "extra_trees": {
+        "n_estimators": {"int": [50, 500]},
+        "max_depth": {"int": [3, 11]},
+        "min_weight_fraction_leaf": {"float": [0.025, 0.5]},
+        "max_features": ["sqrt"],
+    },
+}
+
+# Lower is simpler: what the one-standard-error rule prefers among near-ties.
+COMPLEXITY_KEYS = {"max_depth": 1.0, "n_estimators": 1e-3, "min_weight_fraction_leaf": -10.0,
+                   "C": 1.0}
+
+
+def default_search_space(estimator: str) -> Dict[str, Any]:
+    return json.loads(json.dumps(DEFAULT_SEARCH_SPACES.get(estimator, {})))
+
+
+def complexity(params: Dict[str, Any]) -> float:
+    """Model capacity from its params: deeper, larger and less regularized is higher."""
+    total = 0.0
+    params = {k.split("__")[-1]: v for k, v in params.items()}  # grid keys carry a step prefix
+    for key, weight in COMPLEXITY_KEYS.items():
+        value = params.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            total += weight * float(value)
+        elif key == "max_depth" and key in params and value is None:
+            total += 100.0  # unlimited depth
+    return total
+
+
+def _to_distributions(space: Dict[str, Any]) -> Dict[str, Any]:
+    """ModelSpec.search_space to the distributions FinancialModelSuggester samples from."""
+    from scipy import stats as sps
+
+    out: Dict[str, Any] = {}
+    for name, dim in space.items():
+        if isinstance(dim, list):
+            out[name] = list(dim)
+        elif "int" in dim:
+            lo, hi = dim["int"]
+            out[name] = range(int(lo), int(hi) + 1)
+        else:
+            lo, hi = dim["float"]
+            out[name] = sps.loguniform(lo, hi) if dim.get("log") else sps.uniform(lo, hi - lo)
+    return out
+
+
+def _trial_record(trial, metric: str) -> Dict[str, Any]:
+    """One finished Optuna trial as a ledger trial. Only complete trials carry scores."""
+    import optuna
+
+    state = trial.state.name
+    complete = trial.state == optuna.trial.TrialState.COMPLETE
+    folds = [float(s) for s in trial.user_attrs.get("fold_scores", [])] if complete else None
+    return {
+        "number": int(trial.number),
+        "kind": "optuna_trial",
+        "metric": metric,
+        "score": float(trial.value) if complete and trial.value is not None else None,
+        "params": {"state": state, "params": dict(trial.params),
+                   "intermediate": {int(k): float(v) for k, v in trial.intermediate_values.items()}},
+        "fold_scores": folds,
+    }
+
+
+def run_optuna(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
+               data_index: pd.DatetimeIndex, seed: int = 42, progress: Progress = _noop_progress,
+               storage_dir: Optional[Path] = None,
+               on_trial: Optional[Callable[[Dict], None]] = None) -> Tuple[Tables, Dict, List[Dict]]:
+    """
+    A TPE study through ``afml.cross_validation.optuna_hyper_fit.optimize_trading_model``.
+
+    Every fold is scored with the return-attribution weights ``events['w']``. The fit
+    weights (unweighted, uniqueness or return, with time decay) are searched by the
+    study, so page 2's fit-weight choice does not apply here. Pruned and failed
+    trials count as trials; only complete trials carry fold scores.
+    """
+    import tempfile
+
+    import optuna
+    from afml.cross_validation.optuna_hyper_fit import optimize_trading_model, optuna_to_cv_results
+    from sklearn.utils.validation import has_fit_parameter
+
+    idx = X.dropna().index.intersection(events.index)
+    if len(idx) < 50:
+        raise ValueError(f"only {len(idx)} rows with complete features and labels")
+    Xa, ev = X.loc[idx], events.loc[idx]
+    if model.get("window_fraction"):
+        lo, hi = model["window_fraction"]
+        a, b = int(len(Xa) * lo), int(len(Xa) * hi)
+        Xa, ev = Xa.iloc[a:b], ev.iloc[a:b]
+    y = ev["bin"].astype(int)
+    metric = model["metric"]
+    if metric == "f1" and set(y.unique()) - {0, 1}:
+        raise ValueError(f"f1 needs 0/1 labels (meta-labels); these labels are {sorted(y.unique())}. "
+                         "Use neg_log_loss.")
+
+    est_spec = model["estimator"]
+    clf = call("estimator", est_spec["name"], **est_spec["params"])
+    if not has_fit_parameter(clf, "sample_weight"):
+        raise ValueError(f"estimator {est_spec['name']!r} is a pipeline or does not take sample_weight; "
+                         "the Optuna search supports random_forest and extra_trees")
+    unknown = set(model["search_space"]) - set(clf.get_params())
+    if unknown:
+        raise ValueError(f"search space params {sorted(unknown)} are not {est_spec['name']} params")
+
+    storage_dir = Path(storage_dir) if storage_dir else Path(tempfile.mkdtemp(prefix="afml_optuna_"))
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    db = storage_dir / "optuna.db"
+    storage = f"sqlite:///{db.resolve().as_posix()}"
+    study_name = "studio"
+    n_trials = int(model["n_trials"])
+    trials: List[Dict] = []
+
+    def record(study, trial):
+        t = _trial_record(trial, metric)
+        trials.append(t)
+        if on_trial is not None:
+            on_trial(t)
+        best = max((x["score"] for x in trials if x["score"] is not None), default=None)
+        progress(min(len(trials) / n_trials, 1.0) * 0.95,
+                 f"trial {len(trials)}/{n_trials} {t['params']['state'].lower()}"
+                 + (f" · best {best:.4f}" if best is not None else ""))
+
+    progress(0.0, f"Optuna study, {n_trials} trials")
+    try:
+        result = optimize_trading_model(
+            classifier=clf, X=Xa, y=y, events=ev, data_index=data_index,
+            param_distributions=_to_distributions(model["search_space"]),
+            n_trials=n_trials, timeout=int(model["timeout_s"]), n_splits=int(model["cv_splits"]),
+            pruner_type=model["pruner"], metric=metric, study_name=study_name, db_path=storage,
+            random_state=seed, refit=False, callbacks=[record], pct_embargo=float(model["pct_embargo"]),
+        )
+    except Exception:
+        # Optuna skips callbacks for a trial whose objective raised; log it anyway
+        try:
+            seen = {t["number"] for t in trials}
+            for ft in optuna.load_study(study_name=study_name, storage=storage).trials:
+                if ft.number not in seen and ft.state.is_finished():
+                    record(None, ft)
+        except Exception as exc:
+            logger.debug("could not recover failed trials: {}", exc)
+        raise
+    if result is None:
+        raise RuntimeError(f"the Optuna storage at {db} was locked or unreachable")
+    study, cv_results = result
+    progress(0.97, "collecting results")
+
+    complete = [t for t in trials if t["score"] is not None]
+    if not complete:
+        raise RuntimeError(f"no Optuna trial completed out of {len(trials)}")
+    best = max(complete, key=lambda t: t["score"])
+    split_cols = sorted([c for c in cv_results.columns if c.startswith("split") and c.endswith("_test_score")],
+                        key=lambda c: int(c[5:].split("_")[0]))
+    table = cv_results[["params", "mean_test_score", "std_test_score", *split_cols]].copy()
+    table.insert(0, "number", [t.number for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+    table["rank_test_score"] = table["mean_test_score"].rank(ascending=False, method="min").astype(int)
+    table["complexity"] = [complexity(p) for p in table["params"]]
+    table["params"] = table["params"].astype(str)
+
+    history = pd.DataFrame([{
+        "number": t.number, "state": t.state.name, "value": t.value,
+        "duration_s": t.duration.total_seconds() if t.duration else None,
+        "folds_done": len(t.intermediate_values),
+        "params": json.dumps(t.params, sort_keys=True, default=str),
+    } for t in study.trials])
+    tables: Tables = {"cv_results": table, "optuna_trials": history}
+    try:
+        if len(complete) >= 2:
+            imp = optuna.importance.get_param_importances(study)
+            tables["param_importance"] = pd.DataFrame(
+                {"param": list(imp), "importance": list(imp.values())}).set_index("param")
+    except Exception as exc:  # importance is a diagnostic, never a failure
+        logger.debug("param importance skipped: {}", exc)
+
+    states = history["state"].value_counts().to_dict()
+    summary = {
+        "search": "optuna",
+        "best_score": float(best["score"]),
+        "best_params": best["params"]["params"],
+        "best_trial": best["number"],
+        "scoring": metric,
+        "n_trials": len(trials),
+        "n_complete": int(states.get("COMPLETE", 0)),
+        "n_pruned": int(states.get("PRUNED", 0)),
+        "n_failed": int(states.get("FAIL", 0)),
+        "n_candidates": len(trials),
+        "n_samples": int(len(Xa)),
+        "storage": storage,
+        "study_name": study_name,
+        "score_weights_applied": True,
+    }
+    return tables, summary, trials
 
 
 # =========================================================================== pipeline kwargs
@@ -789,15 +1023,23 @@ def to_pipeline_kwargs(spec) -> Dict[str, Any]:
     return out
 
 
+def _importable(module: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(module) is not None
+
+
 def capabilities() -> Dict[str, Any]:
     """What this afml branch can do, so pages hide controls that have no backend."""
     return {
         "importance_methods": ["mdi", "mda", "sfi"],
         "missing_importance_methods": ["clustered_mdi", "clustered_mda", "pca", "orthogonal", "fingerprint"],
         "screening": False,  # afml.screening.screen_features exists; not wired yet
-        "optuna": False,     # optuna not installed; model stage uses grid search
+        "optuna": _importable("optuna"),
+        "optuna_dashboard": _importable("optuna_dashboard"),
+        "optuna_estimators": sorted(DEFAULT_SEARCH_SPACES),
         "learned_strategy": False,
-        "family_stats_source": "afml.studio.stats (local)",
+        "family_stats_source": "afml.cross_validation.selection_overfit",
     }
 
 

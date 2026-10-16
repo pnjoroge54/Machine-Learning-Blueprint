@@ -38,7 +38,7 @@ python -m afml.studio families                                 # N, effective N,
 | `registry.py` | Stable name → callable. Parameter forms are built from signatures |
 | `ledger.py` | SQLite: families, runs, jobs, trials, fold scores, data access, artifacts |
 | `vault.py` | `research_end` per symbol, pre-registration, contamination |
-| `stats.py` | Effective trial count, expected max Sharpe, noise floor, 1-SE rule |
+| `stats.py` | Family statistics through `afml.cross_validation.selection_overfit`: effective trial count, null threshold, noise floor, 1-SE rule |
 | `jobs.py` / `worker.py` / `runner.py` | Submit, cancel (kills the process tree), resume; one subprocess per job |
 | `versioning.py` | Code version: git, studio source, registered-function and package hashes |
 | `adapters/pipelines.py` | **The only module that calls afml pipeline code** |
@@ -46,12 +46,14 @@ python -m afml.studio families                                 # N, effective N,
 
 Each run folder holds `config.json`, `code_version.json`, `env.json`, `replay.py`
 (a generated headless equivalent of the run), `log.jsonl` (progress included),
-`summary.json` and `tables/*.parquet`.
+`summary.json` and `tables/*.parquet`. An Optuna model run also keeps its study in
+`optuna.db`, which `optuna-dashboard sqlite:///<run folder>/optuna.db` opens.
 
 ## Rules enforced in code
 
-1. Every launch is logged to a family before it is queued. Grid candidates are one
-   trial each, and saving a feature set is a trial too.
+1. Every launch is logged to a family before it is queued. Grid candidates and Optuna
+   trials (pruned and failed ones included) are one trial each, written as each one
+   finishes, and saving a feature set is a trial too.
 2. Scores are shown beside the family's N, effective N and null threshold, and are
    only compared within the same metric.
 3. A symbol with no `research_end` cannot start any run. Research runs cannot request
@@ -60,15 +62,23 @@ Each run folder holds `config.json`, `code_version.json`, `env.json`, `replay.py
 4. Two weight fields, never one: `train_weight_scheme` (fit) and `score_weight_source`
    (`events['w']`, scoring). The model role is derived from `side` in events.
 
+## Model development (Phase 2)
+
+The model stage runs either an Optuna study through
+`afml.cross_validation.optuna_hyper_fit.optimize_trading_model` (`search: "optuna"`,
+the default on page 5) or a purged-CV grid search through `clf_hyper_fit`
+(`search: "grid"`). The Optuna study searches the fit weights (scheme and time decay)
+along with the estimator's `search_space`, and scores every fold with `events['w']`.
+It supports estimators that take `sample_weight` directly (`random_forest`,
+`extra_trees`).
+
 ## Rewiring to the newer afml
 
-afml now has `FeatureEngineeringPipeline`, `ModelDevelopmentPipeline`,
-`screen_features`, Optuna HPO, `LearnedStrategy`, the clustered, orthogonal and
-fingerprint importance methods, and the family statistics in
-`afml.cross_validation.selection_overfit`. The studio still runs its stages through
-the step functions in `adapters/pipelines.py`, built on the lower-level afml
-functions. Moving a stage onto the new pipelines means changing that module (the
-step functions and `capabilities()`) and nothing else.
+afml also has `FeatureEngineeringPipeline`, `ModelDevelopmentPipeline`,
+`screen_features`, `LearnedStrategy`, and the clustered, orthogonal and fingerprint
+importance methods, which the studio does not call yet. Moving a stage onto them
+means changing `adapters/pipelines.py` (the step functions and `capabilities()`)
+and nothing else.
 
 ## Tests
 

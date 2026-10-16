@@ -98,7 +98,9 @@ def test_effective_trial_count_bounds():
     base = rng.normal(size=200)
     clones = base + rng.normal(scale=1e-3, size=(10, 200))
     tc = effective_trial_count(clones)
-    assert tc.n_eigen < 1.1 and tc.n_kish < 1.1
+    # Li and Ji count the integer and fractional parts of each eigenvalue, so an
+    # eigenvalue just under N contributes up to 2; Kish gives 1
+    assert tc.n_eigen <= 2.0 + 1e-9 and tc.n_kish < 1.1
     assert not tc.rank_limited
     assert effective_trial_count(rng.normal(size=(12, 5))).rank_limited
 
@@ -110,8 +112,17 @@ def test_expected_max_sharpe_grows_with_n():
     assert 2.4 < expected_max_sharpe(100, 1.0) < 2.6
 
 
-def test_one_standard_error_selection():
-    assert one_standard_error_selection([0.50, 0.58, 0.60], [0.03, 0.03, 0.03]) == 1
+def test_one_standard_error_selection_prefers_the_simpler_near_tie():
+    folds = {2: [0.50, 0.52, 0.48, 0.50], 4: [0.57, 0.59, 0.58, 0.57], 8: [0.64, 0.54, 0.60, 0.60]}
+    results = [{"params": {"max_depth": d}, "fold_scores": f} for d, f in folds.items()]
+    chosen, diag = one_standard_error_selection(results, lambda p: p["max_depth"])
+    assert chosen["params"]["max_depth"] == 4 and diag["n_within_1se"] == 2
+
+
+def test_effective_trial_count_tolerates_tiny_matrices():
+    assert effective_trial_count(np.array([[0.1, 0.2, 0.3]])).n_eigen == 1.0
+    tc = effective_trial_count(np.array([[0.1, np.nan], [0.2, 0.3], [0.4, 0.5]]))
+    assert tc.n_raw == 2 and tc.n_obs == 2
 
 
 # --------------------------------------------------------------------------- vault
@@ -202,3 +213,20 @@ def test_family_stats_never_rank_scores_across_metrics(home):
     logloss = home.family_stats("f-m", "neg_log_loss")
     assert logloss["best_score"] == pytest.approx(-0.69)
     assert logloss["n_raw"] == 3 and logloss["n_metric"] == 1
+
+
+@pytest.mark.parametrize("space, ok", [
+    ({"max_depth": {"int": [2, 8]}, "C": {"float": [1e-3, 10], "log": True}, "f": ["sqrt", 1]}, True),
+    ({}, False),                                  # Optuna needs a space
+    ({"max_depth": {"int": [8, 2]}}, False),      # low >= high
+    ({"C": {"float": [0, 1], "log": True}}, False),  # log range from zero
+    ({"x": {"int": [1, 2], "float": [1, 2]}}, False),
+    ({"x": []}, False),
+])
+def test_optuna_search_space_is_validated(space, ok):
+    cfg = base_config(stage="model", model={"search": "optuna", "search_space": space})
+    if ok:
+        RunSpec.model_validate(cfg)
+    else:
+        with pytest.raises(ValueError):
+            RunSpec.model_validate(cfg)

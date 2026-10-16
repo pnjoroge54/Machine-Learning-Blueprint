@@ -150,9 +150,44 @@ class ImportanceSpec(_Spec):
         return sorted(set(v), key=v.index)
 
 
+def _check_search_space(space: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    A search space is a dict of estimator params. Each value is one of:
+
+    * a list: categorical choices
+    * ``{"int": [low, high]}``: integers, both ends included
+    * ``{"float": [low, high], "log": false}``: floats, log scale when ``log`` is true
+    """
+    for name, dim in space.items():
+        if isinstance(dim, list):
+            if not dim:
+                raise ValueError(f"search space {name!r}: empty choice list")
+            continue
+        if not isinstance(dim, dict):
+            raise ValueError(f"search space {name!r}: use a list or an int/float range")
+        kinds = {"int", "float"} & set(dim)
+        if len(kinds) != 1 or set(dim) - {"int", "float", "log"}:
+            raise ValueError(f"search space {name!r}: give exactly one of 'int' or 'float' (plus 'log')")
+        kind = kinds.pop()
+        bounds = dim[kind]
+        if not (isinstance(bounds, list) and len(bounds) == 2 and bounds[0] < bounds[1]):
+            raise ValueError(f"search space {name!r}: {kind} range must be [low, high] with low < high")
+        if dim.get("log") and bounds[0] <= 0:
+            raise ValueError(f"search space {name!r}: a log range needs low > 0")
+    return space
+
+
 class ModelSpec(_Spec):
     estimator: CallSpec = Field(default_factory=lambda: CallSpec(name="random_forest"))
+    # "optuna": a TPE study through afml's optimize_trading_model, one ledger trial per
+    # Optuna trial. "grid": purged-CV grid search through clf_hyper_fit.
+    search: Literal["grid", "optuna"] = "grid"
     param_grid: Dict[str, List[Any]] = Field(default_factory=dict)
+    search_space: Dict[str, Any] = Field(default_factory=dict)
+    n_trials: int = Field(50, ge=1, le=5000)
+    timeout_s: int = Field(3600, ge=10)
+    pruner: Literal["hyperband", "median"] = "hyperband"
+    metric: Literal["neg_log_loss", "f1"] = "neg_log_loss"
     cv_splits: int = Field(5, ge=2, le=20)
     pct_embargo: float = Field(0.01, ge=0, lt=0.5)
     bagging_n_estimators: int = Field(0, ge=0)
@@ -161,6 +196,18 @@ class ModelSpec(_Spec):
     rnd_search_iter: int = Field(0, ge=0)
     # Use the later part of the window when the importance run used split mode.
     window_fraction: Optional[List[float]] = None
+
+    @field_validator("search_space")
+    @classmethod
+    def _valid_space(cls, v):
+        return _check_search_space(v)
+
+    @model_validator(mode="after")
+    def _space_for_optuna(self):
+        # The space must be in the config so the hash covers what the study searched
+        if self.search == "optuna" and not self.search_space:
+            raise ValueError("an Optuna search needs a search_space")
+        return self
 
 
 class RunSpec(_Spec):
