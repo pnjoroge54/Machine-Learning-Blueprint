@@ -516,7 +516,7 @@ def make_sizer(
     >>> # On every bar:
     >>> state.update(realized_pnl_delta=closed_pnl,
     ...              unrealized_pnl=floating_pnl,
-    ...              fees_and_swaps=today_fees)
+    ...              fees_and_swaps=bar_fees)  # accrued since the last update
     >>> result = sizer.size(events=events_df, prob=probs, pred=sides,
     ...                     state=state, average_active=True)
     >>> position_sizes = result['final_size']

@@ -38,8 +38,8 @@ class PropFirmAccountState:
     of the current day) plus today's intraday activity. banked_equity
     is captured by reset_daily() from the prior day's ending
     current_equity, so multi-day profit persists across day
-    boundaries. daily_loss_used and intraday_realized_pnl remain
-    correctly scoped to the current day only — see reset_daily().
+    boundaries. daily_loss_used, intraday_realized_pnl and intraday_fees
+    remain correctly scoped to the current day only — see reset_daily().
     """
 
     initial_balance: float
@@ -51,6 +51,7 @@ class PropFirmAccountState:
     banked_equity: float = field(init=False)
     daily_loss_used: float = field(init=False)
     intraday_realized_pnl: float = field(init=False)
+    intraday_fees: float = field(init=False)
     trading_days_completed: int = field(init=False)
     phase_profit_pct: float = field(init=False)
 
@@ -59,6 +60,7 @@ class PropFirmAccountState:
         self.banked_equity = self.initial_balance
         self.daily_loss_used = 0.0
         self.intraday_realized_pnl = 0.0
+        self.intraday_fees = 0.0
         self.trading_days_completed = 0
         self.phase_profit_pct = 0.0
 
@@ -146,12 +148,15 @@ class PropFirmAccountState:
             subtracts it.
         """
         self.intraday_realized_pnl += realized_pnl_delta
+        # fees_and_swaps is an increment, so equity must subtract the day's total;
+        # subtracting only this call's amount let earlier fees reappear as equity
+        self.intraday_fees += fees_and_swaps
         net_change = realized_pnl_delta - fees_and_swaps
         if net_change < 0:
             self.daily_loss_used += abs(net_change)
 
         self.current_equity = (
-            self.banked_equity + self.intraday_realized_pnl + unrealized_pnl - fees_and_swaps
+            self.banked_equity + self.intraday_realized_pnl + unrealized_pnl - self.intraday_fees
         )
         self.phase_profit_pct = max(
             0.0,
@@ -167,7 +172,8 @@ class PropFirmAccountState:
         so a profitable day's gains persist into the next day's
         current_equity and phase_profit_pct instead of being discarded.
         """
-        self.banked_equity = self.current_equity
+        self.banked_equity = self.current_equity  # already net of today's fees
         self.daily_loss_used = 0.0
         self.intraday_realized_pnl = 0.0
+        self.intraday_fees = 0.0
         self.trading_days_completed += 1

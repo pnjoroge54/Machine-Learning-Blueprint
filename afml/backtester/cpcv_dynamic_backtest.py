@@ -293,7 +293,6 @@ def _simulate_path(
         commission = position_chg * cfg.commission_per_lot
         slippage = position_chg * cfg.slippage_pips * cfg.pip_value
         total_cost = commission + slippage
-        realized_delta = gross_pnl - total_cost
 
         # Daily reset
         bar_day = pd.Timestamp(ts).date()
@@ -301,8 +300,10 @@ def _simulate_path(
             state.reset_daily()
             current_day = bar_day
 
+        # Gross P&L and costs go in separately: update() subtracts fees_and_swaps
+        # itself, so netting the costs into realized_pnl_delta charged them twice
         state.update(
-            realized_pnl_delta=realized_delta,
+            realized_pnl_delta=gross_pnl,
             unrealized_pnl=0.0,
             fees_and_swaps=total_cost,
         )

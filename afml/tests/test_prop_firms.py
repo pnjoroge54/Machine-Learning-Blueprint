@@ -119,16 +119,25 @@ def test_phase_progress_and_min_trading_days():
     assert _state(phase=Phase.FUNDED).phase_progress == 0.0  # no target when funded
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="update() subtracts only the latest fees_and_swaps increment from current_equity, "
-    "so fees charged on an earlier bar reappear as equity on the next update",
-)
 def test_fees_persist_across_updates():
+    """Regression: fees charged on one bar used to reappear as equity on the next."""
     s = _state()
     s.update(realized_pnl_delta=0.0, unrealized_pnl=0.0, fees_and_swaps=5.0)
     s.update(realized_pnl_delta=0.0, unrealized_pnl=0.0, fees_and_swaps=0.0)
     assert s.current_equity == pytest.approx(99_995.0)
+    s.update(realized_pnl_delta=100.0, unrealized_pnl=20.0, fees_and_swaps=3.0)
+    assert s.current_equity == pytest.approx(100_000.0 + 100.0 + 20.0 - 8.0)
+    assert s.daily_loss_used == pytest.approx(5.0)  # the realized gain offset the second fee
+
+
+def test_fees_are_banked_once_across_days():
+    s = _state()
+    s.update(realized_pnl_delta=0.0, unrealized_pnl=0.0, fees_and_swaps=10.0)
+    s.reset_daily()
+    assert s.banked_equity == pytest.approx(99_990.0)
+    assert s.intraday_fees == 0.0
+    s.update(realized_pnl_delta=0.0, unrealized_pnl=0.0, fees_and_swaps=2.0)
+    assert s.current_equity == pytest.approx(99_988.0)  # yesterday's fee not charged twice
 
 
 # --------------------------------------------------------------------------- stop-loss ceiling
