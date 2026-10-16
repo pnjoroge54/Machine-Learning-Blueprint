@@ -176,7 +176,12 @@ def _get_bar_tick_indices(
     np.ndarray
         1-based tick indices, one per completed bar.
     """
-    diff_ = np.diff(bar_id, prepend=-1)
+    # np.diff(bar_id, prepend=-1), written out: Numba's nopython np.diff has
+    # no prepend argument in older releases
+    diff_ = np.empty(len(bar_id), dtype=np.int64)
+    if len(bar_id):
+        diff_[0] = bar_id[0] + 1
+        diff_[1:] = bar_id[1:] - bar_id[:-1]
     boundary_indices = np.where(diff_ > 0)[0]
     last_indices = boundary_indices - 1
 

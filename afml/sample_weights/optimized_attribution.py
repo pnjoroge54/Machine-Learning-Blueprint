@@ -128,9 +128,12 @@ def _apply_time_decay_numba(cumulative_time_weights, last_weight, linear_decay=T
         else:
             # last_weight < 0 case
             if max_cumulative > 1e-12:
+                # AFML snippet 4.11: the newest observation keeps weight 1 and the
+                # oldest |last_weight| share of cumulative uniqueness gets weight 0
                 slope = 1.0 / ((last_weight + 1.0) * max_cumulative)
+                const = 1.0 - slope * max_cumulative
                 for i in range(n):
-                    weight = slope * cumulative_time_weights[i]
+                    weight = const + slope * cumulative_time_weights[i]
                     decay_weights[i] = max(0.0, weight)
             else:
                 decay_weights[:] = 0.0

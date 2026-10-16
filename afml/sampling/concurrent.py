@@ -96,8 +96,10 @@ def get_av_uniqueness_from_triple_barrier(
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
         ce = ce.reindex(close_series.index).fillna(0)
-        if isinstance(ce, pd.Series):
-            ce = ce.to_frame()
+        # Keep a Series: dividing a Series of returns by a one-column frame
+        # broadcasts, so every per-event value became a Series (object dtype)
+        if isinstance(ce, pd.DataFrame):
+            ce = ce.iloc[:, 0]
         return ce
 
     # Handle num_conc_events (whether provided or computed)

@@ -158,10 +158,14 @@ def make_standard_bars(
     price_cols = ["bid", "ask"] if price == "bid_ask" else [price]
     price_cols += ["spread", "spread_bps"]
 
-    if bar_type in ("volume", "dollar"):
-        if "volume" not in tick_df.columns:
-            raise KeyError(f"'volume' column required for {bar_type} bars")
+    if bar_type in ("volume", "dollar") and "volume" not in tick_df.columns:
+        raise KeyError(f"'volume' column required for {bar_type} bars")
+    # Volume is summed into every bar type when present, so it must be grouped too
+    if "volume" in tick_df.columns:
         price_cols.append("volume")
+    # Dollar bars accumulate volume * mid_price whatever the OHLC price is
+    if bar_type == "dollar" and "mid_price" not in price_cols:
+        price_cols.append("mid_price")
 
     bar_group, bar_size, bar_id = _make_bar_type_grouper(tick_df[price_cols], bar_type, bar_size)
 
@@ -205,6 +209,9 @@ def make_standard_bars(
             ohlc_df = ohlc_df.iloc[:-1]
 
         if tick_num:
-            ohlc_df["tick_num"] = _get_bar_tick_indices(len(tick_df), bar_size, bar_id)
+            # The Numba kernel needs an int array; volume/dollar bar ids arrive as a Series
+            ohlc_df["tick_num"] = _get_bar_tick_indices(
+                len(tick_df), bar_size, np.asarray(bar_id, dtype=np.int64)
+            )
 
     return ohlc_df

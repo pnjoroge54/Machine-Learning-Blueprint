@@ -215,7 +215,7 @@ def confirm_and_cast_to_df(d_vars):
     any_series = False  # Are any variables a pandas.Series?
     all_series = True  # Are all variables a pandas.Series?
     ser_len = 0
-    for var in d_vars.to_numpy()():
+    for var in d_vars.values():
         any_series = any_series or isinstance(var, pd.Series)
         all_series = all_series and isinstance(var, pd.Series)
 
@@ -235,7 +235,7 @@ def confirm_and_cast_to_df(d_vars):
                 d_vars[k] = pd.Series(data=np.array([d_vars[k] for i in range(ser_len)]), index=idx)
 
     # Combine Series to form a DataFrame.
-    events = pd.concat(list(d_vars.to_numpy()()), axis=1)
+    events = pd.concat(list(d_vars.values()), axis=1)
     events.columns = list(d_vars.keys())
 
     return events

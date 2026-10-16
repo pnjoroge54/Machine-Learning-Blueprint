@@ -66,8 +66,10 @@ def get_weights_by_return(
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
         ce = ce.reindex(close_series.index).fillna(0)
-        if isinstance(ce, pd.Series):
-            ce = ce.to_frame()
+        # Keep a Series: dividing a Series of returns by a one-column frame
+        # broadcasts, so every per-event value became a Series (object dtype)
+        if isinstance(ce, pd.DataFrame):
+            ce = ce.iloc[:, 0]
         return ce
 
     # Handle num_conc_events (whether provided or computed)
@@ -154,7 +156,7 @@ def get_weights_by_time_decay(
         # Calculate normalized position (0 = newest, 1 = oldest)
         if last_weight >= 0:
             # For last_weight >= 0, use standard exponential decay
-            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (
+            normalized_position = (cum_time_weights.iloc[-1] - cum_time_weights) / (
                 cum_time_weights.iloc[-1] - cum_time_weights.iloc[0]
             )
             weights = last_weight**normalized_position
@@ -162,7 +164,7 @@ def get_weights_by_time_decay(
             # For last_weight < 0, implement cutoff (similar to linear case)
             # This is more complex for exponential - you might want to reconsider this case
             cutoff_threshold = abs(last_weight)
-            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (
+            normalized_position = (cum_time_weights.iloc[-1] - cum_time_weights) / (
                 cum_time_weights.iloc[-1] - cum_time_weights.iloc[0]
             )
             weights = (1 - cutoff_threshold) ** normalized_position
