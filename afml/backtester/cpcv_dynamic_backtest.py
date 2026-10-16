@@ -32,6 +32,7 @@ Dependencies
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -63,30 +64,46 @@ class BacktestConfig:
     initial_balance : float
         Starting account balance for every path simulation.
     phase : Phase
-        Prop firm phase.  Determines profit target and rule set.
+        Prop firm phase. Selects the profit target and phase-scoped rules.
     pip_value : float
-        Dollar value of one pip per standard lot.
+        Account-currency value of one pip per standard lot.
+    pip_size : float
+        Price change that makes one pip (0.0001 for most FX pairs, 0.01 for
+        JPY pairs and many CFDs).
     lot_size : float
-        Lot size used to translate bet size fractions into notional positions.
+        Lots held at full signal strength (|bet size| = 1).
     commission_per_lot : float
-        Commission per lot (both sides).  Counts against the daily limit.
+        Commission per lot traded, charged on every change in position.
     slippage_pips : float
-        Assumed slippage per trade in pips.  Applied to each entry and exit.
+        Assumed slippage in pips per lot traded.
+    stop_loss_pct : float or None
+        Stop distance as a fraction of price. Needed only when the rule set
+        caps per-trade risk in this phase; falls back to the sizer's
+        ``stop_loss_pct``.
     n_jobs : int
-        Number of parallel workers.  -1 = all physical cores.
+        Number of parallel workers. -1 = all physical cores.
     random_state : int
         Seed for any stochastic components.
+    rule_set : PropFirmRuleSet
+        Program rules (FundedNext, FTMO, The5ers presets, or custom).
     """
 
     initial_balance: float = 100_000.0
     phase: Phase = Phase.CHALLENGE_PHASE_1
     pip_value: float = 10.0
+    pip_size: float = 0.0001
     lot_size: float = 0.01
     commission_per_lot: float = 5.0
     slippage_pips: float = 0.5
+    stop_loss_pct: float | None = None
     n_jobs: int = -1
     random_state: int = 42
     rule_set: PropFirmRuleSet = field(default_factory=lambda: FUNDEDNEXT_STELLAR_2STEP)
+
+    @property
+    def value_per_price_unit(self) -> float:
+        """Account-currency P&L of a one-unit price move on one lot."""
+        return self.pip_value / self.pip_size
 
 
 # ── Per-path result container ─────────────────────────────────────────────────
@@ -106,6 +123,11 @@ class PathResult:
     trading_days: int
     hit_target: bool
     final_equity: float
+    breach: str | None = None
+    breach_time: pd.Timestamp | None = None
+    final_balance: float | None = None
+    quick_strike_ok: bool = True
+    n_trades: int = 0
 
 
 # ── Phase 1 helper: fit one split ─────────────────────────────────────────────
@@ -218,17 +240,49 @@ def _apply_calibrator(
 # ── Phase 3 helper: simulate one assembled path ──────────────────────────────
 
 
+def _as_prices(prices: pd.Series | pd.DataFrame) -> pd.DataFrame:
+    """Close prices, plus high/low when given (needed for intrabar breach checks)."""
+    if isinstance(prices, pd.Series):
+        df = prices.to_frame("close")
+    else:
+        df = prices.copy()
+        df.columns = [str(c).lower() for c in df.columns]
+        if "close" not in df.columns:
+            raise KeyError("prices must have a 'close' column")
+    for col in ("high", "low"):
+        if col not in df.columns:
+            df[col] = df["close"]
+    return df[["close", "high", "low"]].astype(float)
+
+
 def _simulate_path(
     path_id: int,
     oof_probs: pd.Series,
     events: pd.DataFrame,
-    price_returns: pd.Series,
+    prices: pd.Series | pd.DataFrame,
     sizer: PropFirmAwareSizer,
     cfg: BacktestConfig,
     primary_sides: pd.Series,
 ) -> PathResult:
     """
     Simulate one fully-assembled backtest path bar-by-bar.
+
+    Accounting
+    ----------
+    * The target position for bar t comes from the prediction at bar t and is
+      traded at bar t's close, so it earns from bar t+1 onward (no lookahead).
+    * Positions are held in lots (``bet size * cfg.lot_size``) with an average
+      entry price. P&L is ``lots * price change / pip_size * pip_value``;
+      commission and slippage are charged per lot traded, once.
+    * Closing or reducing a position realizes P&L into the balance; open
+      positions are marked at each close as floating P&L (equity).
+    * Each bar's worst price for the open position (low for longs, high for
+      shorts) is checked against the rule set's floors before the bar's trade,
+      so equity breaches inside a bar are caught. Without high/low columns the
+      check falls back to closes, which understates breaches.
+    * Days roll on the rule set's day boundary; timestamps without a timezone
+      are treated as UTC. A breach closes the account: equity is frozen at the
+      breach level and the path stops trading.
 
     Parameters
     ----------
@@ -238,8 +292,9 @@ def _simulate_path(
         Out-of-fold predicted probabilities (raw or calibrated).
     events : pd.DataFrame
         Events table aligned with X.
-    price_returns : pd.Series
-        Bar-level close-to-close returns aligned with X.
+    prices : pd.Series or pd.DataFrame
+        Close prices, or OHLC bars with at least close (high/low recommended),
+        indexed like X.
     sizer : PropFirmAwareSizer
         Fully configured sizer.
     cfg : BacktestConfig
@@ -255,7 +310,7 @@ def _simulate_path(
     oof_probs = oof_probs.loc[valid]
     sides_valid = primary_sides.loc[oof_probs.index]
     events_valid = events.loc[oof_probs.index]
-    ret_valid = price_returns.loc[oof_probs.index]
+    px = _as_prices(prices).loc[oof_probs.index]
 
     state = PropFirmAccountState(
         initial_balance=cfg.initial_balance,
@@ -271,49 +326,92 @@ def _simulate_path(
         state=state,
         average_active=True,
     )
-    position_sizes = sizing_result["final_size"]
+    target_lots = sizing_result["final_size"].reindex(px.index).fillna(0.0) * cfg.lot_size
 
-    # Bar-by-bar P&L simulation
+    vpu = cfg.value_per_price_unit
+    # Per-trade risk cap (e.g. FundedNext's 3% maximum risk on funded accounts)
+    if state.max_risk_amount is not None:
+        stop_pct = cfg.stop_loss_pct or getattr(sizer, "stop_loss_pct", None)
+        if not stop_pct:
+            raise ValueError(
+                "The rule set caps per-trade risk in this phase; set "
+                "BacktestConfig.stop_loss_pct (stop distance as a fraction of price)."
+            )
+        max_lots = state.max_risk_amount / (stop_pct * px["close"] * vpu)
+        target_lots = target_lots.clip(lower=-max_lots, upper=max_lots)
+
+    cost_per_lot = cfg.commission_per_lot + cfg.slippage_pips * cfg.pip_value
+    pos, entry = 0.0, 0.0
+    open_time, trade_pnl = None, 0.0
     equity_values = []
-    daily_breaches = 0
-    current_day = None
 
-    # Pre-compute shifted positions to avoid repeated .shift() calls
-    prev_positions = position_sizes.shift(1).fillna(0.0)
+    for ts, close, high, low, target in zip(
+        px.index,
+        px["close"].to_numpy(),
+        px["high"].to_numpy(),
+        px["low"].to_numpy(),
+        target_lots.to_numpy(),
+    ):
+        # 1) Mark the position held through this bar, checking its worst price
+        if pos != 0.0:
+            worst = low if pos > 0 else high
+            state.update(
+                0.0,
+                pos * (close - entry) * vpu,
+                0.0,
+                worst_unrealized_pnl=pos * (worst - entry) * vpu,
+                timestamp=ts,
+                traded=False,
+            )
+        else:
+            state.update(0.0, 0.0, 0.0, timestamp=ts, traded=False)
+        if state.is_breached:
+            break
 
-    for ts in position_sizes.index:
-        pos = position_sizes.loc[ts]
-        ret = ret_valid.loc[ts]
+        # 2) Trade at this bar's close to the target from this bar's signal
+        delta = target - pos
+        if abs(delta) > 1e-12:
+            new_pos = pos + delta
+            realized, closed_lots = 0.0, 0.0
+            if pos != 0.0 and np.sign(delta) != np.sign(pos):
+                closed_lots = min(abs(delta), abs(pos))
+                realized = np.sign(pos) * closed_lots * (close - entry) * vpu
+            fees = abs(delta) * cost_per_lot
 
-        # Gross bar P&L
-        gross_pnl = pos * ret * cfg.lot_size * cfg.pip_value
+            if pos == 0.0:
+                open_time, trade_pnl = ts, -fees
+                entry = close
+            elif new_pos == 0.0 or np.sign(new_pos) != np.sign(pos):
+                # Closed (and possibly reversed): log the closed trade
+                close_fees = closed_lots * cost_per_lot
+                state.record_trade(open_time, ts, trade_pnl + realized - close_fees)
+                if new_pos != 0.0:
+                    open_time, trade_pnl = ts, -(fees - close_fees)
+                    entry = close
+                else:
+                    open_time, trade_pnl, entry = None, 0.0, 0.0
+            elif abs(new_pos) > abs(pos):
+                entry = (pos * entry + delta * close) / new_pos  # added to the position
+                trade_pnl -= fees
+            else:
+                trade_pnl += realized - fees  # partial close
 
-        # Transaction costs on position change
-        position_chg = abs(pos - prev_positions.loc[ts])
-        commission = position_chg * cfg.commission_per_lot
-        slippage = position_chg * cfg.slippage_pips * cfg.pip_value
-        total_cost = commission + slippage
-
-        # Daily reset
-        bar_day = pd.Timestamp(ts).date()
-        if bar_day != current_day:
-            state.reset_daily()
-            current_day = bar_day
-
-        # Gross P&L and costs go in separately: update() subtracts fees_and_swaps
-        # itself, so netting the costs into realized_pnl_delta charged them twice
-        state.update(
-            realized_pnl_delta=gross_pnl,
-            unrealized_pnl=0.0,
-            fees_and_swaps=total_cost,
-        )
-
-        if state.daily_remaining <= 0:
-            daily_breaches += 1
+            state.update(realized, new_pos * (close - entry) * vpu, fees, timestamp=ts, traded=True)
+            pos = new_pos
 
         equity_values.append(state.current_equity)
+        if state.is_breached:
+            break
 
-    equity_curve = pd.Series(equity_values, index=position_sizes.index)
+    if state.is_breached:
+        # The account is closed at the breach; freeze equity there
+        if len(equity_values) < len(px):
+            equity_values.append(state.breach_level)
+        equity_values += [state.breach_level] * (len(px) - len(equity_values))
+    else:
+        state.reset_daily()  # count the final day toward trading days
+
+    equity_curve = pd.Series(equity_values, index=px.index[: len(equity_values)])
     returns = equity_curve.pct_change().fillna(0.0)
 
     # Path metrics
@@ -323,13 +421,8 @@ def _simulate_path(
     drawdown = (equity_curve - rolling_max) / rolling_max
     max_drawdown = float(drawdown.min())
 
-    overall_breach = bool((equity_curve < state.overall_floor).any())
-
-    hit_target = (
-        (state.phase_profit_pct >= 0.08)
-        if cfg.phase == Phase.CHALLENGE_PHASE_1
-        else (state.phase_profit_pct >= 0.05)
-    )
+    target = cfg.rule_set.phase_targets.get(cfg.phase)
+    hit_target = target is not None and not state.is_breached and state.phase_profit_pct >= target
 
     return PathResult(
         path_id=path_id,
@@ -337,11 +430,16 @@ def _simulate_path(
         returns=returns,
         sharpe=float(sharpe),
         max_drawdown=max_drawdown,
-        daily_breaches=daily_breaches,
-        overall_breach=overall_breach,
+        daily_breaches=int(state.breach == "daily"),
+        overall_breach=state.breach == "overall",
         trading_days=state.trading_days_completed,
-        hit_target=hit_target,
+        hit_target=bool(hit_target),
         final_equity=float(equity_curve.iloc[-1]),
+        breach=state.breach,
+        breach_time=state.breach_time,
+        final_balance=float(state.balance),
+        quick_strike_ok=state.quick_strike_ok,
+        n_trades=len(state.trades),
     )
 
 
@@ -377,8 +475,9 @@ class CPCVDynamicBacktest:
     sizer : PropFirmAwareSizer
         Fully configured sizer.
     cfg : BacktestConfig
-    close_prices : pd.Series
-        Bar-level close prices aligned with X.
+    close_prices : pd.Series or pd.DataFrame
+        Bar-level close prices aligned with X, or OHLC bars with open/high/low/
+        close columns. High and low are used for intrabar breach checks.
     primary_sides : pd.Series
         Side predictions (+1 long, -1 short) aligned with X.
     calibration_method : str or None, default=None
@@ -438,7 +537,7 @@ class CPCVDynamicBacktest:
         estimator,
         sizer: PropFirmAwareSizer,
         cfg: BacktestConfig,
-        close_prices: pd.Series,
+        close_prices: pd.Series | pd.DataFrame,
         primary_sides: pd.Series,
         calibration_method: str | None = None,
     ) -> None:
@@ -487,12 +586,17 @@ class CPCVDynamicBacktest:
         X, y, events : pd.DataFrame, pd.Series, pd.DataFrame
             Full feature matrix, labels, and events.
         price_returns : pd.Series, optional
-            Bar-level returns.  Computed from close_prices if not provided.
+            Deprecated and ignored: P&L is computed from close_prices (price
+            levels are needed to convert moves into pips).
         sample_weight : pd.Series, optional
             Per-observation sample weights for training.
         """
-        if price_returns is None:
-            price_returns = self.close_prices.pct_change().fillna(0.0)
+        if price_returns is not None:
+            warnings.warn(
+                "price_returns is ignored; P&L is computed from close_prices",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         # ── Phase 1: Train across all C(N, k) splits ────────────────────
         splits = [
@@ -521,7 +625,7 @@ class CPCVDynamicBacktest:
                 path_id=pid,
                 oof_probs=pd.Series(preds, index=X.index, name=f"path_{pid}"),
                 events=events,
-                price_returns=price_returns,
+                prices=self.close_prices,
                 sizer=self.sizer,
                 cfg=self.cfg,
                 primary_sides=self.primary_sides,
@@ -541,7 +645,8 @@ class CPCVDynamicBacktest:
         -------
         pd.DataFrame
             One row per path with sharpe, max_drawdown, daily_breaches,
-            overall_breach, trading_days, hit_target, final_equity.
+            overall_breach, trading_days, hit_target, final_equity, breach,
+            breach_time, quick_strike_ok, n_trades.
         """
         if not self.results_:
             raise RuntimeError("Call run() before distribution_report().")
@@ -556,6 +661,10 @@ class CPCVDynamicBacktest:
                 "trading_days": r.trading_days,
                 "hit_target": r.hit_target,
                 "final_equity": r.final_equity,
+                "breach": r.breach,
+                "breach_time": r.breach_time,
+                "quick_strike_ok": r.quick_strike_ok,
+                "n_trades": r.n_trades,
             }
             for r in self.results_
         ]
@@ -567,7 +676,7 @@ class CPCVDynamicBacktest:
         print(f"  Sharpe std         : {df['sharpe'].std():.3f}")
         print(f"  Paths > 0 Sharpe   : {(df['sharpe'] > 0).sum()} / {len(df)}")
         print(f"  Median max DD      : {df['max_drawdown'].median():.2%}")
-        print(f"  Daily limit breach : {df['daily_breaches'].sum()} bar(s) total")
+        print(f"  Daily limit breach : {df['daily_breaches'].sum()} path(s)")
         print(f"  Overall breach     : {df['overall_breach'].sum()} path(s)")
         print(f"  Hit phase target   : {df['hit_target'].sum()} / {len(df)}")
         print(f"  Median final equity: ${df['final_equity'].median():,.0f}")
