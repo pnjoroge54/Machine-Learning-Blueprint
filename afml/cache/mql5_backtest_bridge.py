@@ -15,7 +15,7 @@ import pandas as pd
 from loguru import logger
 
 # Import AFML cache components
-from afml.cache import get_backtest_cache, get_data_tracker, robust_cacheable
+from afml.cache import backtest_cache, cacheable, get_data_tracker
 
 
 @dataclass
@@ -128,7 +128,7 @@ class AFMLBacktestBridge:
         self.signals: list[BacktestSignal] = []
 
         # Cache and tracking
-        self.backtest_cache = get_backtest_cache()
+        self.backtest_cache = backtest_cache
         self.data_tracker = get_data_tracker()
 
         logger.info(f"AFML Backtest Bridge initialized: {self.cache_dir}")
@@ -241,7 +241,7 @@ class AFMLBacktestBridge:
     # Feature Engineering (Cached)
     # =========================================================================
 
-    @robust_cacheable
+    @cacheable
     def engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Engineer features for ML model (cached for speed).
@@ -280,7 +280,7 @@ class AFMLBacktestBridge:
 
         return df.dropna()
 
-    @robust_cacheable
+    @cacheable
     def generate_ml_signal(
         self, features: pd.DataFrame, model_path: Path | None = None
     ) -> BacktestSignal:

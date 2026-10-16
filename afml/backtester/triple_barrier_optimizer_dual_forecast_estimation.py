@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 from afml.labeling.triple_barrier import add_vertical_barrier
 
-from ..cache.unified_cache_system import cacheable
+from ..cache import cacheable
 from ..strategies.trading_strategies import BaseStrategy
 
 

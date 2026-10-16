@@ -749,6 +749,8 @@ def detect_distributed_frameworks():
         {'dask': 'active', 'ray': 'not installed', 'spark': 'inactive', 'mpi': '1 procs'}
     """
     import importlib
+    import importlib.util
+    import sys
 
     import dask.distributed
 
@@ -776,11 +778,15 @@ def detect_distributed_frameworks():
     except ImportError:
         results["spark"] = "not installed"
 
-    # MPI
-    try:
-        mpi = importlib.import_module("mpi4py.MPI")
+    # MPI. Importing mpi4py.MPI calls MPI_Init, which starts MPI and aborts the whole
+    # process when no MPI runtime is configured, so only inspect it when the caller
+    # has already imported it.
+    mpi = sys.modules.get("mpi4py.MPI")
+    if mpi is not None:
         results["mpi"] = f"{mpi.COMM_WORLD.Get_size()} procs"
-    except ImportError:
+    elif importlib.util.find_spec("mpi4py") is not None:
+        results["mpi"] = "inactive"
+    else:
         results["mpi"] = "not installed"
 
     pprint(results, sort_dicts=False)

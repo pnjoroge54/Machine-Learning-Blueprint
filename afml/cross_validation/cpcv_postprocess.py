@@ -135,11 +135,8 @@ def main() -> None:
     print("─" * 56)
 
     deploy = (median_sr > 0.0) and (std_sr < 0.5) and (pbo_value < 0.5)
-    print(
-        f"  Decision           : {
-            'PASS — proceed to demo forward test' if deploy else 'FAIL — do not deploy'
-        }"
-    )
+    decision = "PASS — proceed to demo forward test" if deploy else "FAIL — do not deploy"
+    print(f"  Decision           : {decision}")
     print("═" * 56)
     print()
 

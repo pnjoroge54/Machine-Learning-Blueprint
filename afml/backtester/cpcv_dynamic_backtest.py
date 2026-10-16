@@ -42,7 +42,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 
 from ..cross_validation.combinatorial import CombinatorialPurgedCV
-from ..prop_firm import (
+from ..prop_firms import (
     FUNDEDNEXT_STELLAR_2STEP,
     Phase,
     PropFirmAccountState,
