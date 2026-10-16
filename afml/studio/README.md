@@ -62,11 +62,13 @@ Each run folder holds `config.json`, `code_version.json`, `env.json`, `replay.py
 
 ## Rewiring to the newer afml
 
-This branch lacks `FeatureEngineeringPipeline`, `ModelDevelopmentPipeline`,
-`screen_features`, Optuna, `LearnedStrategy` and the clustered or orthogonal importance
-methods. When they land, change `adapters/pipelines.py` (the step functions and
-`capabilities()`). The family-statistics functions in `stats.py` already prefer an
-afml implementation with the same name when one is importable.
+afml now has `FeatureEngineeringPipeline`, `ModelDevelopmentPipeline`,
+`screen_features`, Optuna HPO, `LearnedStrategy`, the clustered, orthogonal and
+fingerprint importance methods, and the family statistics in
+`afml.cross_validation.selection_overfit`. The studio still runs its stages through
+the step functions in `adapters/pipelines.py`, built on the lower-level afml
+functions. Moving a stage onto the new pipelines means changing that module (the
+step functions and `capabilities()`) and nothing else.
 
 ## Tests
 

@@ -44,7 +44,7 @@ if fs.get("selected_columns"):
 
 if not capabilities()["screening"]:
     st.caption("Screening (stationarity, entropy, then mutual information under a circular-shift null "
-               "with Westfall-Young adjustment) needs afml.screening.screen_features, which this branch "
+               "with Westfall-Young adjustment) runs through afml.screening.screen_features, which is "
                "does not have yet. The naive-shuffle null will not be offered when it lands.")
 
 if steps:

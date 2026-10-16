@@ -14,7 +14,7 @@ st.title("5 · Model development")
 mod = ui.draft()["model"]
 caps = capabilities()
 if not caps["optuna"]:
-    st.info("Optuna is not installed in this environment, and FinancialModelSuggester is not on this branch, "
+    st.info("The studio's model stage is not yet wired to ModelDevelopmentPipeline or FinancialModelSuggester, "
             "so this page runs a purged-CV grid search through clf_hyper_fit. Each grid candidate is one "
             "ledger trial. The embedded Optuna Dashboard arrives with the newer pipeline.")
 
@@ -48,8 +48,7 @@ with st.expander("Bagging"):
                                                   float(mod["bagging_max_features"]), key=ui.wkey("mod.bf"))
 if mod.get("window_fraction"):
     st.caption(f"Split mode: using window fraction {mod['window_fraction']} (the part importance did not see).")
-st.caption("On this branch clf_hyper_fit scores folds without the return-attribution weights; "
-           "ModelDevelopmentPipeline in newer afml applies them.")
+st.caption("Folds are fit with the fit weights and scored with the return-attribution weights events['w'].")
 
 ui.launch("model", "Run model development")
 

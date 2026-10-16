@@ -267,7 +267,7 @@ class RunSpec(_Spec):
     def to_pipeline_kwargs(self) -> Dict[str, Any]:
         """
         Resolve to the dicts the existing afml pipelines take
-        (``develop_production_model`` on this branch): ``data_config``,
+        (in the keyword shape of the older ``develop_production_model``): ``data_config``,
         ``feature_config``, ``label_config``, ``model_params`` and
         ``sample_weight_params``. Registered names become live callables here, and
         only here.

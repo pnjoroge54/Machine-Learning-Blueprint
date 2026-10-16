@@ -110,7 +110,7 @@ def resume(run_id: str, ledger: Optional[Ledger] = None) -> str:
     """
     Resubmit a failed or cancelled run as a new run whose parent is the old one.
 
-    With Optuna (newer afml) this maps to ``continue_study``; on this branch the
+    With the Optuna path (not wired yet) this maps to ``continue_study``; today the
     model stage is a grid search, so resume reruns it and afml.cache supplies the
     steps that already finished.
     """

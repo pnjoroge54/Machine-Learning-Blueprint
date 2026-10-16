@@ -18,7 +18,7 @@ c1, c2 = st.columns([2, 1])
 imp["methods"] = c1.multiselect("Methods", caps["importance_methods"],
                                 default=[m for m in imp["methods"] if m in caps["importance_methods"]],
                                 key=ui.wkey("imp.methods"))
-c1.caption("Not on this branch yet: " + ", ".join(caps["missing_importance_methods"]))
+c1.caption("In afml but not wired into the studio yet: " + ", ".join(caps["missing_importance_methods"]))
 scorings = ["neg_log_loss", "accuracy"]
 imp["scoring"] = c2.selectbox("Scoring", scorings, index=scorings.index(imp["scoring"]), key=ui.wkey("imp.sc"))
 c1, c2, c3 = st.columns(3)
@@ -66,7 +66,7 @@ if run:
         fig.update_traces(textposition="top center")
         st.plotly_chart(fig, use_container_width=True)
     st.caption("Clustered MDI/MDA (and the substitution-effect flag that compares clustered with "
-               "unclustered rankings) need ONC clustering from newer afml.")
+               "unclustered rankings) need afml.clustering ONC, not wired into the studio yet.")
 
     folds = ui.table(run, "mda_folds")
     if folds is not None:

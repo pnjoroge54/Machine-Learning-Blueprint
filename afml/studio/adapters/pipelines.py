@@ -33,8 +33,9 @@ import pandas as pd
 from annotated_types import Ge, Le
 from loguru import logger
 
-from afml.cache import robust_cacheable
-from afml.logging_config import log_progress
+from afml.cache import cacheable
+
+from ..progress import log_progress
 
 from ..registry import call, get, register
 
@@ -51,9 +52,9 @@ _cache_baseline: Dict[str, Dict[str, int]] = {}
 
 def cache_report(reset: bool = True) -> Dict[str, Dict[str, int]]:
     """afml.cache hits and misses per cached function since the last reset."""
-    from afml.cache import get_cache_stats
+    from afml.cache import cache_stats
 
-    now = {k: dict(v) for k, v in get_cache_stats().items()}
+    now = {k: dict(v) for k, v in cache_stats.get_stats().items()}
     out: Dict[str, Dict[str, int]] = {}
     for name, v in now.items():
         base = _cache_baseline.get(name, {"hits": 0, "misses": 0})
@@ -157,15 +158,15 @@ def target_parkinson_vol(bars: pd.DataFrame, window: Annotated[int, Ge(2)] = 20)
 
 @register("strategy", "bollinger", description="Bollinger-band mean reversion (BollingerStrategy)")
 def strategy_bollinger(window: Annotated[int, Ge(2)] = 20, num_std: Annotated[float, Ge(0)] = 2.0):
-    from afml.strategies.signals import BollingerStrategy
+    from afml.strategies.trading_strategies import BollingerStrategy
 
-    return BollingerStrategy(window=window, num_std=num_std)
+    return BollingerStrategy(window=window, std=num_std)
 
 
 @register("strategy", "ma_crossover", description="Moving-average crossover (MACrossoverStrategy)")
 def strategy_ma_crossover(fast_window: Annotated[int, Ge(1)] = 10,
                           slow_window: Annotated[int, Ge(2)] = 30):
-    from afml.strategies.signals import MACrossoverStrategy
+    from afml.strategies.trading_strategies import MACrossoverStrategy
 
     if fast_window >= slow_window:
         raise ValueError("fast_window must be below slow_window")
@@ -297,7 +298,7 @@ def feature_volatility(bars: pd.DataFrame, window: Annotated[int, Ge(2)] = 20) -
 def feature_time(bars: pd.DataFrame, timeframe: str = "M15", n_terms: Annotated[int, Ge(1)] = 3,
                  bar_type: Literal["time", "tick", "volume", "dollar"] = "time",
                  forex: bool = True) -> pd.DataFrame:
-    from afml.features.time import get_time_features
+    from afml.features.trading_session import get_time_features
 
     return get_time_features(bars, timeframe, n_terms=n_terms, bar_type=bar_type, forex=forex)
 
@@ -383,7 +384,7 @@ def bars_report(bars: pd.DataFrame, d_grid: Optional[List[float]] = None) -> Tup
 # --------------------------------------------------------------------------- labels
 
 
-@robust_cacheable
+@cacheable
 def compute_events(bars: pd.DataFrame, labels: Dict[str, Any]) -> pd.DataFrame:
     """
     Triple-barrier events for a resolved LabelSpec dict, with both weight series:
@@ -481,7 +482,7 @@ def labels_report(events: pd.DataFrame, bars: pd.DataFrame) -> Tuple[Tables, Dic
 # --------------------------------------------------------------------------- features
 
 
-@robust_cacheable
+@cacheable
 def compute_feature_step(bars: pd.DataFrame, name: str, params: Dict[str, Any]) -> pd.DataFrame:
     """One registered feature function on the bars, cached on bar content and params."""
     out = call("feature", name, bars, **params)
@@ -683,36 +684,39 @@ def run_importance(X: pd.DataFrame, events: pd.DataFrame, importance: Dict[str, 
 def run_model(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
               seed: int = 42, progress: Progress = _noop_progress) -> Tuple[Tables, Dict, List[Dict]]:
     """
-    Purged-CV grid search through this branch's ``train_model_with_cv`` /
-    ``clf_hyper_fit``. Each grid candidate is one ledger trial with its fold scores.
+    Purged-CV grid search through ``afml.cross_validation.hyper_fit.clf_hyper_fit``.
+    Each grid candidate is one ledger trial with its fold scores.
 
-    Limitation on this branch: ``clf_hyper_fit`` scores folds without sample weights,
-    so the score weights ``w`` are not applied here. ``ModelDevelopmentPipeline``
-    scores with ``events['w']``; rewire to it when available.
+    The estimator fits with ``train_w``; every fold is scored with the
+    return-attribution weights ``w``.
     """
-    from afml.cross_validation.hyperfit import MyPipeline
-    from afml.production.model_development import train_model_with_cv
+    from afml.cross_validation.hyper_fit import MyPipeline, clf_hyper_fit
 
-    Xa, y, t1, w_fit, _ = _align(X, events)
+    Xa, y, t1, w_fit, w_score = _align(X, events)
     if model.get("window_fraction"):
         lo, hi = model["window_fraction"]
         a, b = int(len(Xa) * lo), int(len(Xa) * hi)
-        Xa, y, t1, w_fit = Xa.iloc[a:b], y.iloc[a:b], t1.iloc[a:b], w_fit.iloc[a:b]
+        Xa, y, t1 = Xa.iloc[a:b], y.iloc[a:b], t1.iloc[a:b]
+        w_fit, w_score = w_fit.iloc[a:b], w_score.iloc[a:b]
     est_spec = model["estimator"]
     pipe = MyPipeline([("clf", call("estimator", est_spec["name"], **est_spec["params"]))])
-    grid = {(k if "__" in k else f"clf__{k}"): v for k, v in model["param_grid"].items()} or \
-        {"clf__" + next(iter(est_spec["params"])): [next(iter(est_spec["params"].values()))]}
-    ev = pd.DataFrame({"bin": y, "t1": t1})
+    # clf_hyper_fit edits the grid in place; give it a copy
+    grid = {k: list(v) for k, v in model["param_grid"].items()}
+    if not grid:
+        first = next(iter(est_spec["params"]))
+        grid = {first: [est_spec["params"][first]]}
     progress(0.05, "grid search")
-    best_model, cv_results = train_model_with_cv(
-        Xa, ev, w_fit, pipe, grid,
-        cv_splits=model["cv_splits"],
+    best_model, cv_results = clf_hyper_fit(
+        Xa, y, t1, pipe, grid,
+        n_splits=model["cv_splits"],
         bagging_n_estimators=model["bagging_n_estimators"],
         bagging_max_samples=model["bagging_max_samples"],
         bagging_max_features=model["bagging_max_features"],
         rnd_search_iter=model["rnd_search_iter"],
         pct_embargo=model["pct_embargo"],
         random_state=seed,
+        sample_weight_train=w_fit,
+        sample_weight_score=w_score,
     )
     progress(0.95, "collecting results")
     res = cv_results["cv_results"]
@@ -732,7 +736,7 @@ def run_model(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
         "scoring": cv_results["scoring"],
         "n_candidates": len(trials),
         "n_samples": int(len(Xa)),
-        "score_weights_applied": False,
+        "score_weights_applied": True,
     }
     return {"cv_results": table}, summary, trials
 
@@ -742,7 +746,9 @@ def run_model(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
 
 def to_pipeline_kwargs(spec) -> Dict[str, Any]:
     """
-    Resolve a RunSpec into the arguments of this branch's ``develop_production_model``.
+    Resolve a RunSpec into the keyword shape of the older ``develop_production_model``
+    (removed from afml; ``FeatureEngineeringPipeline`` and ``ModelDevelopmentPipeline``
+    are the rewiring targets).
     Registered names become live callables here, and only here.
     """
     d = spec.data
@@ -788,7 +794,7 @@ def capabilities() -> Dict[str, Any]:
     return {
         "importance_methods": ["mdi", "mda", "sfi"],
         "missing_importance_methods": ["clustered_mdi", "clustered_mda", "pca", "orthogonal", "fingerprint"],
-        "screening": False,  # afml.screening.screen_features not on this branch
+        "screening": False,  # afml.screening.screen_features exists; not wired yet
         "optuna": False,     # optuna not installed; model stage uses grid search
         "learned_strategy": False,
         "family_stats_source": "afml.studio.stats (local)",

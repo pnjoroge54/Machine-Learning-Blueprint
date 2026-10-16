@@ -31,11 +31,12 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from afml.logging_config import configure_logging, log_progress
+from afml.logging_config import configure_logging
 
 from . import vault
 from .adapters import pipelines as P
 from .ledger import Ledger, get_ledger
+from .progress import log_progress
 from .schemas import RunSpec
 from .versioning import environment_snapshot
 
@@ -234,7 +235,7 @@ def replay_script(run_id: str, spec: RunSpec) -> str:
 # =========================================================================== entry point
 
 
-def execute_run(run_id: str, ledger: Optional[Ledger] = None, console: bool = True) -> str:
+def execute_run(run_id: str, ledger: Optional[Ledger] = None) -> str:
     """Execute a submitted run in this process. Returns the final status."""
     ledger = ledger or get_ledger()
     row = ledger.get_run(run_id)
@@ -249,7 +250,7 @@ def execute_run(run_id: str, ledger: Optional[Ledger] = None, console: bool = Tr
     # that still reconfigures loguru at import time cannot drop the run sink.
     P.prewarm()
 
-    configure_logging(level="INFO", console=console)
+    configure_logging()  # idempotent; afml configures loguru on import
     sink = logger.add(str(run_dir / "log.jsonl"), level="DEBUG", serialize=True,
                       filter=lambda r: r["extra"].get("run_id") == run_id)
     status = "failed"

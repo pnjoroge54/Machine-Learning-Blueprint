@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -209,7 +210,9 @@ def cmd_app(args) -> int:
            "--server.address", args.address, "--server.port", str(args.port),
            "--server.headless", "true", "--browser.gatherUsageStats", "false",
            "--theme.base", "light"]
-    return subprocess.call(cmd, cwd=str(paths.repo_root()))
+    env = os.environ.copy()
+    env.setdefault("AFML_LOG_DIR", str(paths.studio_home() / "logs"))
+    return subprocess.call(cmd, cwd=str(paths.repo_root()), env=env)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -14,7 +14,7 @@ c1, c2 = st.columns(2)
 with c1:
     lab["strategy"] = ui.callable_picker("strategy", lab["strategy"], "Strategy (side)", "lab.strategy")
     st.caption("Chaining a completed primary run as the strategy needs LearnedStrategy.from_pipeline "
-               "(newer afml); not available on this branch.")
+               "; not wired into the studio yet.")
 with c2:
     lab["target"] = ui.callable_picker("target", lab["target"], "Target (barrier width)", "lab.target")
 

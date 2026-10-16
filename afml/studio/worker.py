@@ -35,6 +35,8 @@ def _spawn(run_id: str, run_dir: Path) -> subprocess.Popen:
     env.setdefault("PYTHONIOENCODING", "utf-8")
     # The studio home is an absolute path the child must share
     env["AFML_STUDIO_HOME"] = str(paths.studio_home())
+    # afml.logging_config writes a file log on import; keep it out of the checkout
+    env.setdefault("AFML_LOG_DIR", str(paths.studio_home() / "logs"))
     flags = 0
     if os.name == "nt":
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
@@ -51,6 +53,7 @@ def spawn_detached(concurrency: int = 1) -> int:
     root = str(paths.repo_root())
     env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env["AFML_STUDIO_HOME"] = str(paths.studio_home())
+    env.setdefault("AFML_LOG_DIR", str(paths.studio_home() / "logs"))
     env.setdefault("PYTHONIOENCODING", "utf-8")
     flags = 0
     if os.name == "nt":

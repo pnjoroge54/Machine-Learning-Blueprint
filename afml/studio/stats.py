@@ -2,7 +2,8 @@
 Family statistics shown beside every score.
 
 The plan names ``effective_trial_count``, ``expected_max_sharpe``,
-``criterion_variance_audit`` and ``one_standard_error_selection`` from a newer afml.
+``criterion_variance_audit`` and ``one_standard_error_selection``; afml now has them in
+``afml.cross_validation.selection_overfit``.
 This branch does not have them, so this module carries self-contained versions
 with the same roles. ``resolve()`` prefers the afml implementations when they are
 importable, so rewiring is a no-op once the newer code lands.
@@ -115,9 +116,9 @@ def one_standard_error_selection(mean_scores: np.ndarray, std_errors: np.ndarray
 # --------------------------------------------------------------------------- rewiring
 
 _AFML_LOCATIONS = {
-    "effective_trial_count": ["afml.backtest_statistics", "afml.backtest_statistics.statistics"],
-    "expected_max_sharpe": ["afml.backtest_statistics", "afml.backtest_statistics.statistics"],
-    "one_standard_error_selection": ["afml.cross_validation", "afml.model_selection"],
+    "effective_trial_count": ["afml.cross_validation.selection_overfit"],
+    "expected_max_sharpe": ["afml.cross_validation.selection_overfit"],
+    "one_standard_error_selection": ["afml.cross_validation.selection_overfit"],
 }
 
 

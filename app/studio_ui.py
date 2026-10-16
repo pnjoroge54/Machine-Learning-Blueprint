@@ -335,7 +335,7 @@ def family_panel(family_id: str, score: Optional[float] = None, score_label: str
     cols[4].metric(f"Best in family ({s['metric']})", fmt(s["best_score"]))
     if s["rank_limited"]:
         st.warning("Rank-limited: more trials than fold scores, so effective N is capped. "
-                   "Lengthen the score vector (criterion_variance_audit in newer afml) before trusting it.")
+                   "Lengthen the score vector (afml.cross_validation.selection_overfit.criterion_variance_audit) before trusting it.")
     if score is not None and s["null_threshold"] is not None and score <= s["null_threshold"]:
         st.warning("This score does not beat the family's null threshold.")
     return s
