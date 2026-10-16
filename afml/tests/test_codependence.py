@@ -22,7 +22,7 @@ from ..codependence.information import (
     get_optimal_number_of_bins,
     variation_of_information_score,
 )
-from ..util.generate_dataset import get_classification_data
+from ._datasets import get_classification_data
 
 # pylint: disable=invalid-name
 

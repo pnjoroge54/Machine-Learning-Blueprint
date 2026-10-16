@@ -17,9 +17,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, "/home/claude")
 
-from incremental_bar_cache import (
+from afml.cache.incremental_bar_cache import (
     IncrementalBarCache,
     _detect_gap,
     _estimate_tick_freq,
@@ -80,6 +79,7 @@ def stub_make_bars(
     exp_ticks_init=None,
     exp_imbalance_init: float = 0.1,
     ewm_span: int = 20,
+    **kwargs,  # newer make_bars options (e.g. target_timeframe) are ignored
 ) -> pd.DataFrame:
     """Minimal bar construction for testing.
 
@@ -477,21 +477,21 @@ class TestLoggingConfig(unittest.TestCase):
     """Test that logging_config configures loguru exactly once."""
 
     def test_import_configures(self):
-        from logging_config import _CONFIGURED
+        from afml.logging_config import _CONFIGURED
 
         self.assertTrue(_CONFIGURED)
 
     def test_double_import_is_idempotent(self):
-        from logging_config import _CONSOLE_HANDLER_ID, configure_logging
+        from afml.logging_config import _CONSOLE_HANDLER_ID, configure_logging
 
         old_id = _CONSOLE_HANDLER_ID
         configure_logging()
-        from logging_config import _CONSOLE_HANDLER_ID as new_id
+        from afml.logging_config import _CONSOLE_HANDLER_ID as new_id
 
         self.assertEqual(old_id, new_id)
 
     def test_reconfigure_changes_level(self):
-        from logging_config import reconfigure_logging
+        from afml.logging_config import reconfigure_logging
 
         # Should not raise
         reconfigure_logging(level="DEBUG")

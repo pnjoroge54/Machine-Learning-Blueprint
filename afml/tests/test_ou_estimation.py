@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from ou_estimation import (
+from afml.backtester.ou_estimation import (
     build_within_trade_paths,
     build_within_trade_paths_flat,
     estimate_ou_from_signals,

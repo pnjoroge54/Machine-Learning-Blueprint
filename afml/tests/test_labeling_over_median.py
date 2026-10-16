@@ -47,7 +47,7 @@ class TestLabelingOverMedian(unittest.TestCase):
         test2_actual = test1_actual.apply(np.sign)
 
         # Check less precise because calculated numbers have more decimal places than inputted ones.
-        pd.testing.assert_frame_equal(test1, test1_actual, check_less_precise=True)
+        pd.testing.assert_frame_equal(test1, test1_actual, rtol=1e-3)
         pd.testing.assert_frame_equal(test2, test2_actual)
 
     def test_resample_period(self):
@@ -97,9 +97,9 @@ class TestLabelingOverMedian(unittest.TestCase):
             index=monthly_index,
         )
 
-        pd.testing.assert_frame_equal(test4, test4_actual, check_less_precise=True)
-        pd.testing.assert_frame_equal(test5, test5_actual, check_less_precise=True)
-        pd.testing.assert_frame_equal(test6, test5_actual.apply(np.sign), check_less_precise=True)
+        pd.testing.assert_frame_equal(test4, test4_actual, rtol=1e-3)
+        pd.testing.assert_frame_equal(test5, test5_actual, rtol=1e-3)
+        pd.testing.assert_frame_equal(test6, test5_actual.apply(np.sign), rtol=1e-3)
 
     def test_forward(self):
         """
@@ -138,10 +138,10 @@ class TestLabelingOverMedian(unittest.TestCase):
             index=monthly_index,
         )
 
-        pd.testing.assert_frame_equal(test7, test7_actual, check_less_precise=True)
-        pd.testing.assert_frame_equal(test8, test7_actual.apply(np.sign), check_less_precise=True)
-        pd.testing.assert_frame_equal(test9, test9_actual, check_less_precise=True)
-        pd.testing.assert_frame_equal(test10, test9_actual.apply(np.sign), check_less_precise=True)
+        pd.testing.assert_frame_equal(test7, test7_actual, rtol=1e-3)
+        pd.testing.assert_frame_equal(test8, test7_actual.apply(np.sign), rtol=1e-3)
+        pd.testing.assert_frame_equal(test9, test9_actual, rtol=1e-3)
+        pd.testing.assert_frame_equal(test10, test9_actual.apply(np.sign), rtol=1e-3)
 
     def test_nan(self):
         """
@@ -154,4 +154,4 @@ class TestLabelingOverMedian(unittest.TestCase):
         )
         test11 = excess_over_median(with_nan)
         test11.drop("nan", axis=1, inplace=True)
-        pd.testing.assert_frame_equal(test11, excess_over_median(subset), check_less_precise=True)
+        pd.testing.assert_frame_equal(test11, excess_over_median(subset), rtol=1e-3)

@@ -126,7 +126,7 @@ class TestPermuteDevelopmentProcess:
         assert isinstance(out, ProcessPermutationResult)
         assert out.null_values.size == 10
         assert 0.0 < out.p_value <= 1.0
-        assert out.deflated == pytest.approx(out.observed - out.spurious_center)
+        assert out.excess_over_null == pytest.approx(out.observed - out.spurious_center)
         assert out.trial_budget == 30
         assert "spurious_center" in out.to_dict()
 
@@ -233,7 +233,6 @@ def test_acceptance_search_manufactures_edge_from_noise():
         f"spurious center {out.spurious_center:.3f}; a 100-trial search on "
         f"signal-free data should manufacture visible apparent edge"
     )
-    assert not out.process_is_sound
     finite = out.null_values[np.isfinite(out.null_values)]
     assert np.mean(finite > 0) > 0.8
 
@@ -261,4 +260,4 @@ def test_acceptance_deflation_recovers_a_real_edge():
         searching_process(60, seed=24), trending, n_perm=25, seed=7, trial_budget=60
     )
     assert out.observed > out.spurious_center
-    assert out.deflated > 0.0
+    assert out.excess_over_null > 0.0

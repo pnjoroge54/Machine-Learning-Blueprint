@@ -29,7 +29,6 @@ from ..bet_sizing.ch10_snippets import (
     limit_price,
     limit_price_power,
     limit_price_sigmoid,
-    mp_avg_active_signals,
 )
 
 
@@ -38,7 +37,6 @@ class TestCh10Snippets(unittest.TestCase):
     Tests the following functions in ch10_snippets.py:
     - get_signal
     - avg_active_signals
-    - mp_avg_active_signals
     - discrete_signal
     """
 
@@ -47,8 +45,7 @@ class TestCh10Snippets(unittest.TestCase):
         Sets up the data to be used for the following tests.
         """
         # ======================================================================
-        # Unit test setup for get_signal, avg_active_signals,
-        # mp_avg_active_signals, and discrete_signal.
+        # Unit test setup for get_signal, avg_active_signals and discrete_signal.
 
         # Setup the array of values, length of 6 for testing.
         prob_arr = np.array([0.711, 0.898, 0.992, 0.595, 0.544, 0.775])
@@ -112,18 +109,10 @@ class TestCh10Snippets(unittest.TestCase):
 
     def test_avg_active_signals(self):
         """
-        Tests the avg_active_signals function. Also implicitly tests the
-        molecular multiprocessing function mp_avg_active_signals.
+        Tests the avg_active_signals function.
         """
         test_avg_active = avg_active_signals(self.events_2)
         self.assertEqual(self.avg_active.equals(test_avg_active), True)
-
-    def test_mp_avg_active_signals(self):
-        """
-        An explicit test of the mp_avg_active_signals subroutine.
-        """
-        test_mp_avg_active = mp_avg_active_signals(self.events_2, self.t_pnts)
-        self.assertEqual(self.avg_active.equals(test_mp_avg_active), True)
 
     def test_discrete_signal(self):
         """

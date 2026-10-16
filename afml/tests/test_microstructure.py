@@ -6,7 +6,6 @@ Pytest suite for src/features/microstructure.py and its dependencies.
 Covers:
     - All Numba kernels directly (pure array inputs)
     - All public feature functions (Series / DataFrame inputs)
-    - compute_all_features (integration test)
     - bar_microstructure_features (tick → bar mapping)
     - Edge cases: NaN propagation, zero volume, flat prices,
                   misaligned indices, empty inputs
@@ -19,8 +18,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from src.bars.information_bars import _tick_rule
-from src.features.microstructure import (
+from afml.data_structures.information_bars import _tick_rule
+from afml.features.microstructure import (
     _amihud_lambda_kernel,
     _bar_features_kernel,
     _corwin_schultz_kernel,
@@ -33,7 +32,6 @@ from src.features.microstructure import (
     _wrap,
     amihud_lambda,
     bar_microstructure_features,
-    compute_all_features,
     corwin_schultz_spread,
     hasbrouck_lambda,
     kyle_lambda,
@@ -850,100 +848,6 @@ class TestBarMicrostructureFeatures:
         """Every bar in ohlc_df should appear in the result index."""
         result = bar_microstructure_features(tick_df, ohlc_df)
         assert len(result) == len(ohlc_df)
-
-
-# ---------------------------------------------------------------------------
-# 18. compute_all_features — integration tests
-# ---------------------------------------------------------------------------
-
-
-class TestComputeAllFeatures:
-    def test_returns_dataframe(self, ohlc_df, tick_df):
-        result = compute_all_features(ohlc_df, tick_df=tick_df)
-        assert isinstance(result, pd.DataFrame)
-
-    def test_index_matches_ohlc(self, ohlc_df, tick_df):
-        result = compute_all_features(ohlc_df, tick_df=tick_df)
-        pd.testing.assert_index_equal(result.index, ohlc_df.index)
-
-    def test_expected_columns_present(self, ohlc_df, tick_df):
-        result = compute_all_features(ohlc_df, tick_df=tick_df)
-        expected = {
-            "roll_measure",
-            "roll_impact",
-            "cs_spread",
-            "cs_sigma",
-            "kyle_lambda",
-            "amihud_lambda",
-            "hasbrouck_lambda",
-            "tick_imbalance",
-            "volume_imbalance",
-            "dollar_imbalance",
-            "buy_fraction",
-            "vpin",
-        }
-        missing = expected - set(result.columns)
-        assert not missing, f"Missing columns: {missing}"
-
-    def test_all_float32(self, ohlc_df, tick_df):
-        result = compute_all_features(ohlc_df, tick_df=tick_df)
-        for col in result.columns:
-            assert result[col].dtype == np.float32, f"Column '{col}' dtype = {result[col].dtype}"
-
-    def test_without_tick_df(self, ohlc_df):
-        """Without tick_df, bar features and VPIN should be omitted."""
-        result = compute_all_features(ohlc_df, tick_df=None)
-        assert isinstance(result, pd.DataFrame)
-
-        tick_only_cols = {
-            "tick_imbalance",
-            "volume_imbalance",
-            "dollar_imbalance",
-            "buy_fraction",
-            "vpin",
-        }
-        assert not tick_only_cols.intersection(set(result.columns)), (
-            "tick-dependent columns should not appear when tick_df=None"
-        )
-
-    def test_without_volume_column(self, ohlc_df, tick_df):
-        """ohlc_df without volume → volume-dependent features skipped."""
-        ohlc_no_vol = ohlc_df.drop(columns=["volume"])
-        result = compute_all_features(ohlc_no_vol, tick_df=tick_df)
-        vol_cols = {"roll_impact", "kyle_lambda", "amihud_lambda", "hasbrouck_lambda"}
-        assert not vol_cols.intersection(set(result.columns))
-
-    def test_missing_close_raises(self, ohlc_df, tick_df):
-        ohlc_no_close = ohlc_df.drop(columns=["close"])
-        with pytest.raises(KeyError, match="close"):
-            compute_all_features(ohlc_no_close, tick_df=tick_df)
-
-    def test_custom_window(self, ohlc_df, tick_df):
-        result = compute_all_features(ohlc_df, tick_df=tick_df, window=10)
-        assert isinstance(result, pd.DataFrame)
-
-    def test_include_flags(self, ohlc_df, tick_df):
-        result = compute_all_features(
-            ohlc_df,
-            tick_df=tick_df,
-            include_bar_features=False,
-            include_vpin=False,
-        )
-        excluded = {
-            "tick_imbalance",
-            "volume_imbalance",
-            "dollar_imbalance",
-            "buy_fraction",
-            "vpin",
-        }
-        assert not excluded.intersection(set(result.columns))
-
-    def test_no_inf_values(self, ohlc_df, tick_df):
-        result = compute_all_features(ohlc_df, tick_df=tick_df)
-        for col in result.columns:
-            assert not np.any(np.isinf(result[col].to_numpy(na_value=0.0))), (
-                f"Inf found in column '{col}'"
-            )
 
 
 # ---------------------------------------------------------------------------

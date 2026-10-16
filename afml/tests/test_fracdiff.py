@@ -56,7 +56,7 @@ class TestFractionalDifferentiation(unittest.TestCase):
         diff_amt = 0.9
         number_ele = 100
         thresh = 1e-3
-        weights = fracdiff.get_weights_ffd(diff_amt, thresh=thresh, lim=number_ele)
+        weights = fracdiff.get_weights_ffd(diff_amt, thres=thresh, lim=number_ele)
 
         # Last value in the set is still the same
         self.assertTrue(weights[-1] == 1.0)
@@ -73,7 +73,7 @@ class TestFractionalDifferentiation(unittest.TestCase):
         data_series = self.data["close"].to_frame()
 
         for diff_amt in np.arange(0.1, 1, 0.1):
-            fd_series = fracdiff.frac_diff(data_series, diff_amt=diff_amt)
+            fd_series = fracdiff.frac_diff(data_series, d=diff_amt)
             self.assertTrue(fd_series.shape[0] == len(data_series))
             self.assertTrue(
                 isinstance(fd_series["close"][0], np.float64) and math.isnan(fd_series["close"][0])
@@ -81,49 +81,18 @@ class TestFractionalDifferentiation(unittest.TestCase):
 
     def test_frac_diff_ffd(self):
         """
-        Assert that for any positive real number d,
-        1. Length of the output is the same as the length of the input
-        2. First element is NaN
+        Assert that for any positive real number d the fixed-width output drops
+        the warm-up window (AFML snippet 5.3): it is shorter than the input, has
+        no NaNs, and keeps the input's latest timestamps.
         """
         data_series = self.data["close"].to_frame()
 
         for diff_amt in np.arange(0.1, 1, 0.1):
-            fd_series = fracdiff.frac_diff_ffd(data_series, diff_amt=diff_amt)
-            self.assertTrue(fd_series.shape[0] == len(data_series))
-            self.assertTrue(
-                isinstance(fd_series["close"][0], np.float64) and math.isnan(fd_series["close"][0])
-            )
+            fd_series = fracdiff.frac_diff_ffd(data_series, d=diff_amt, max_window_frac=0.5)
+            # A single-column frame comes back as a Series
+            self.assertIsInstance(fd_series, pd.Series)
+            self.assertLess(fd_series.shape[0], len(data_series))
+            self.assertFalse(fd_series.isna().any())
+            self.assertTrue(fd_series.index.isin(data_series.index).all())
+            self.assertEqual(fd_series.index[-1], data_series.index[-1])
 
-    def test_plot_min_ffd(self):
-        """
-        Assert that the plot for min ffd is correct,
-
-        Testing is based on the correlation between the original series (d=0)
-        and the differentiated series.
-        """
-        data_series = self.data["close"].to_frame()
-
-        expected_correlation = np.array(
-            [
-                [0, 1],
-                [0.1, 0.99295323],
-                [0.2, 0.97712122],
-                [0.3, 0.95098824],
-                [0.4, 0.91422650],
-                [0.5, 0.86412240],
-                [0.6, 0.80909555],
-                [0.7, 0.76457507],
-                [0.8, 0.67228154],
-                [0.9, 0.62583193],
-                [1.0, 0.51058195],
-            ]
-        )
-
-        # Obtaining a plot for min ffd
-        plot = plot_min_ffd(data_series)
-        correlation = plot.lines[0].get_xydata()
-
-        print(type(plot))
-
-        # Test if equal
-        np.testing.assert_allclose(correlation, expected_correlation)

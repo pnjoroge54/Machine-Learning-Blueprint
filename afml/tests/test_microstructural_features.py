@@ -8,13 +8,12 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from ..data_structures import get_volume_bars
 from ..microstructural_features import (
     MicrostructuralFeaturesGenerator,
     get_bar_based_amihud_lambda,
     get_bar_based_hasbrouck_lambda,
     get_bar_based_kyle_lambda,
-    get_bekker_parkinson_vol,
+    get_becker_parkinson_vol,
     get_corwin_schultz_estimator,
     get_roll_impact,
     get_roll_measure,
@@ -30,7 +29,41 @@ from ..microstructural_features.entropy import (
     get_plug_in_entropy,
     get_shannon_entropy,
 )
-from ..util import get_bvc_buy_volume
+
+
+
+def get_bvc_buy_volume(close, volume, window=20):
+    """Bulk volume classification of buy volume (Easley et al.), input for VPIN."""
+    from scipy.stats import norm
+
+    diff = close.diff()
+    return volume * norm.cdf(diff / diff.rolling(window=window).std())
+
+
+def get_volume_bars(path, threshold, verbose=False):
+    """
+    Volume bars from a (date_time, price, volume) tick CSV, as built by the old
+    mlfinlab ``get_volume_bars``: a bar closes on the tick at which cumulative
+    volume reaches ``threshold``. ``tick_num`` is the 1-based index of that tick.
+    """
+    ticks = pd.read_csv(path)
+    ticks.columns = ["date_time", "price", "volume"]
+    rows, cum_volume, start = [], 0, 0
+    for i, volume in enumerate(ticks["volume"].to_numpy()):
+        cum_volume += volume
+        if cum_volume >= threshold:
+            window = ticks["price"].iloc[start : i + 1]
+            rows.append({
+                "date_time": ticks["date_time"].iloc[i],
+                "tick_num": i + 1,
+                "open": window.iloc[0],
+                "high": window.max(),
+                "low": window.min(),
+                "close": window.iloc[-1],
+                "volume": cum_volume,
+            })
+            cum_volume, start = 0, i + 1
+    return pd.DataFrame(rows)
 
 
 class TestMicrostructuralFeatures(unittest.TestCase):
@@ -56,7 +89,7 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         roll_measure = get_roll_measure(self.data.close, window=20)
         roll_impact = get_roll_impact(self.data.close, self.data.cum_dollar, window=20)
         corwin_schultz = get_corwin_schultz_estimator(self.data.high, self.data.low, window=20)
-        bekker_parkinson = get_bekker_parkinson_vol(self.data.high, self.data.low, window=20)
+        bekker_parkinson = get_becker_parkinson_vol(self.data.high, self.data.low, window=20)
 
         # Shape assertions
         self.assertEqual(self.data.shape[0], roll_measure.shape[0])

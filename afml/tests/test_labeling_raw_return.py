@@ -58,9 +58,9 @@ class TestLabelingRawReturns(unittest.TestCase):
             index=self.idx5,
         )
 
-        pd.testing.assert_frame_equal(test1, test1_actual, check_less_precise=True)
+        pd.testing.assert_frame_equal(test1, test1_actual, rtol=1e-3)
         pd.testing.assert_frame_equal(test2, test1_actual.apply(np.sign))
-        pd.testing.assert_frame_equal(test3, test3_actual, check_less_precise=True)
+        pd.testing.assert_frame_equal(test3, test3_actual, rtol=1e-3)
         pd.testing.assert_frame_equal(test4, test3_actual.apply(np.sign))
 
     def test_series(self):
@@ -101,8 +101,8 @@ class TestLabelingRawReturns(unittest.TestCase):
                 0.04879016,
             ]
         )
-        pd.testing.assert_series_equal(test4, test4_actual, check_less_precise=True)
-        pd.testing.assert_series_equal(test5, test5_actual, check_less_precise=True)
+        pd.testing.assert_series_equal(test4, test4_actual, rtol=1e-3)
+        pd.testing.assert_series_equal(test5, test5_actual, rtol=1e-3)
         pd.testing.assert_series_equal(test6, test5_actual.apply(np.sign))
 
     def test_resample(self):
@@ -166,6 +166,6 @@ class TestLabelingRawReturns(unittest.TestCase):
             },
             index=year_index,
         )
-        pd.testing.assert_frame_equal(test6, test6_actual, check_less_precise=True)
-        pd.testing.assert_frame_equal(test7, test7_actual, check_less_precise=True)
+        pd.testing.assert_frame_equal(test6, test6_actual, rtol=1e-3)
+        pd.testing.assert_frame_equal(test7, test7_actual, rtol=1e-3)
         pd.testing.assert_frame_equal(test8, test7_actual.apply(np.sign))

@@ -21,7 +21,7 @@ from ..feature_importance.orthogonal import (
     feature_pca_analysis,
     get_orthogonal_features,
 )
-from ..util.generate_dataset import get_classification_data
+from ._datasets import get_classification_data
 
 
 # pylint: disable=invalid-name
@@ -45,7 +45,7 @@ class TestFeatureImportance(unittest.TestCase):
         )
 
         self.bag_clf = BaggingClassifier(
-            base_estimator=self.clf_base,
+            estimator=self.clf_base,
             max_features=1.0,
             n_estimators=100,
             oob_score=True,

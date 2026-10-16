@@ -8,15 +8,14 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from ..structural_breaks import (
+from ..structural_breaks.structural_breaks import (
     get_chow_type_stat,
     get_chu_stinchcombe_white_statistics,
     get_sadf,
 )
 
 # pylint: disable=unsubscriptable-object
-from ..structural_breaks.cusum import _get_values_diff
-from ..structural_breaks.sadf import get_betas
+from ..structural_breaks.structural_breaks import get_betas
 
 
 class TesStructuralBreaks(unittest.TestCase):
@@ -38,35 +37,13 @@ class TesStructuralBreaks(unittest.TestCase):
         """
         min_length = 10
         log_prices = np.log(self.data.close)
-        stats = get_chow_type_stat(log_prices, min_length=min_length, verbose=True)
+        stats = get_chow_type_stat(log_prices, min_length=min_length)
 
         # We drop first and last # of min_length values
         self.assertEqual(log_prices.shape[0] - min_length * 2, stats.shape[0])
         self.assertAlmostEqual(stats.max(), 0.179, delta=1e-3)
         self.assertAlmostEqual(stats.mean(), -0.653, delta=1e-3)
         self.assertAlmostEqual(stats[3], -0.6649, delta=1e-3)
-
-    def test_chu_stinchcombe_value_diff_function(self):
-        """
-        Test the values diff hidden function.
-        """
-        # Test values diff function
-        one_sided_diff = _get_values_diff(
-            test_type="one_sided", series=pd.Series([1, 2, 3, 4, 5]), index=0, ind=1
-        )
-        two_sided_diff = _get_values_diff(
-            test_type="two_sided", series=pd.Series([1, 2, 3, 4, 5]), index=0, ind=1
-        )
-        self.assertEqual(-1, one_sided_diff)
-        self.assertEqual(1, two_sided_diff)
-        self.assertRaises(
-            ValueError,
-            _get_values_diff,
-            test_type="rubbish",
-            series=pd.Series([1, 2, 3, 4, 5]),
-            index=0,
-            ind=1,
-        )
 
     def test_chu_stinchcombe_white_test(self):
         """
@@ -75,10 +52,10 @@ class TesStructuralBreaks(unittest.TestCase):
 
         log_prices = np.log(self.data.close)
         one_sided_test = get_chu_stinchcombe_white_statistics(
-            log_prices, test_type="one_sided", verbose=True
+            log_prices, test_type="one_sided"
         )
         two_sided_test = get_chu_stinchcombe_white_statistics(
-            log_prices, test_type="two_sided", verbose=True
+            log_prices, test_type="two_sided"
         )
 
         # For the first two values we don't have enough info
@@ -121,7 +98,7 @@ class TesStructuralBreaks(unittest.TestCase):
             add_const=True,
             min_length=min_length,
             lags=lags_int,
-            verbose=True,
+            
         )
         linear_sadf_no_const_lags_arr = get_sadf(
             log_prices,
@@ -129,7 +106,7 @@ class TesStructuralBreaks(unittest.TestCase):
             add_const=False,
             min_length=min_length,
             lags=lags_array,
-            verbose=True,
+            
         )
         quadratic_sadf = get_sadf(
             log_prices,
@@ -137,7 +114,7 @@ class TesStructuralBreaks(unittest.TestCase):
             add_const=True,
             min_length=min_length,
             lags=lags_int,
-            verbose=True,
+            
         )
 
         sm_poly_1_sadf = get_sadf(
@@ -146,7 +123,7 @@ class TesStructuralBreaks(unittest.TestCase):
             add_const=True,
             min_length=min_length,
             lags=lags_int,
-            verbose=True,
+            
         )
         sm_poly_2_sadf = get_sadf(
             log_prices,
@@ -154,7 +131,7 @@ class TesStructuralBreaks(unittest.TestCase):
             add_const=True,
             min_length=min_length,
             lags=lags_int,
-            verbose=True,
+            
         )
         sm_power_sadf = get_sadf(
             log_prices,
@@ -162,7 +139,7 @@ class TesStructuralBreaks(unittest.TestCase):
             add_const=True,
             min_length=min_length,
             lags=lags_int,
-            verbose=True,
+            
         )
         sm_exp_sadf = get_sadf(
             log_prices,
@@ -170,7 +147,7 @@ class TesStructuralBreaks(unittest.TestCase):
             add_const=True,
             min_length=min_length,
             lags=lags_int,
-            verbose=True,
+            
         )
 
         sm_power_sadf_phi = get_sadf(
@@ -180,7 +157,7 @@ class TesStructuralBreaks(unittest.TestCase):
             min_length=min_length,
             lags=lags_int,
             phi=0.5,
-            verbose=True,
+            
         )
         sm_exp_sadf_phi = get_sadf(
             log_prices,
@@ -189,7 +166,7 @@ class TesStructuralBreaks(unittest.TestCase):
             min_length=min_length,
             lags=lags_int,
             phi=0.5,
-            verbose=True,
+            
         )
 
         self.assertEqual(
@@ -238,7 +215,7 @@ class TesStructuralBreaks(unittest.TestCase):
             min_length=min_length,
             lags=lags_int,
             phi=0.5,
-            verbose=True,
+            
         )
 
         self.assertTrue((trivial_sadf.unique() == [-np.inf]).all())  # All values should be -np.inf

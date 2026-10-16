@@ -139,7 +139,7 @@ class TestCrossValidation(unittest.TestCase):
         self.log(f"dataset=\n{dataset}")
 
         try:
-            PurgedKFold(n_splits=3, samples_info_sets=samples_info_sets, pct_embargo=0.0)
+            PurgedKFold(n_splits=3, t1=samples_info_sets, pct_embargo=0.0)
         except ValueError:
             pass
         else:
@@ -162,7 +162,7 @@ class TestCrossValidation(unittest.TestCase):
         )
         self.log(f"dataset=\n{dataset}")
 
-        pkf = PurgedKFold(n_splits=3, samples_info_sets=info_sets, pct_embargo=0.0)
+        pkf = PurgedKFold(n_splits=3, t1=info_sets, pct_embargo=0.0)
         try:
             for _, _ in pkf.split(dataset):
                 pass
@@ -191,7 +191,7 @@ class TestCrossValidation(unittest.TestCase):
         )
         self.log(f"dataset=\n{dataset}")
 
-        pkf = PurgedKFold(n_splits=3, samples_info_sets=info_sets, pct_embargo=0.0)
+        pkf = PurgedKFold(n_splits=3, t1=info_sets, pct_embargo=0.0)
         for train_indices, test_indices in pkf.split(dataset):
             self.log(f"test_times_ret=\n{info_sets[test_indices]}")
 
@@ -229,7 +229,7 @@ class TestCrossValidation(unittest.TestCase):
         self.log(f"pct_points_test= {pct_points_test}")
 
         pkf = PurgedKFold(
-            n_splits=3, samples_info_sets=info_sets, pct_embargo=0.01 * pct_points_test
+            n_splits=3, t1=info_sets, pct_embargo=0.01 * pct_points_test
         )
 
         # Also test that X can be an np.ndarray by passing in the .values of the pd.DataFrame
@@ -302,7 +302,7 @@ class TestCrossValidation(unittest.TestCase):
         info_sets, records, labels, sample_weights, decision_tree = (
             self._test_ml_cross_val_score__data()
         )
-        cv_gen = PurgedKFold(samples_info_sets=info_sets, n_splits=3, pct_embargo=0.01)
+        cv_gen = PurgedKFold(t1=info_sets, n_splits=3, pct_embargo=0.01)
         scores = ml_cross_val_score(
             classifier=decision_tree,
             X=records,
@@ -324,7 +324,7 @@ class TestCrossValidation(unittest.TestCase):
         info_sets, records, labels, sample_weights, decision_tree = (
             self._test_ml_cross_val_score__data()
         )
-        cv_gen = PurgedKFold(samples_info_sets=info_sets, n_splits=3, pct_embargo=0.01)
+        cv_gen = PurgedKFold(t1=info_sets, n_splits=3, pct_embargo=0.01)
         scores = ml_cross_val_score(
             classifier=decision_tree,
             X=records,
@@ -367,7 +367,7 @@ class TestCrossValidation(unittest.TestCase):
         Test the ml_cross_val_score function with an artificial dataset.
         """
         info_sets, records, labels, _, decision_tree = self._test_ml_cross_val_score__data()
-        cv_gen = PurgedKFold(samples_info_sets=info_sets, n_splits=3, pct_embargo=0.01)
+        cv_gen = PurgedKFold(t1=info_sets, n_splits=3, pct_embargo=0.01)
         scores = ml_cross_val_score(
             classifier=decision_tree,
             X=records,

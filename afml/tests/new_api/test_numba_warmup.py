@@ -14,23 +14,7 @@ from ...numba_warmup import (
     _NUMBA_DUMMY_ARGS,
     lazy_warmup,
     register_numba_dummy,
-    warmup_all,
 )
-
-
-class TestWarmupAll(unittest.TestCase):
-    def test_returns_int(self):
-        result = warmup_all(verbose=False)
-        self.assertIsInstance(result, int)
-        self.assertGreaterEqual(result, 0)
-
-    def test_idempotent_second_call_returns_zero(self):
-        warmup_all(verbose=False)
-        second = warmup_all(verbose=False)
-        self.assertEqual(second, 0)
-
-    def test_verbose_does_not_raise(self):
-        warmup_all(verbose=True)
 
 
 class TestRegisterNumbaDummy(unittest.TestCase):

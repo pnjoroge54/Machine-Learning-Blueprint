@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ..filters.filters import cusum_filter
-from ..labeling.labeling import add_vertical_barrier, drop_labels, get_bins, get_events
+from ..labeling.triple_barrier import add_vertical_barrier, drop_labels, get_bins, get_events
 from ..util.volatility import get_daily_vol
 
 
@@ -55,31 +55,31 @@ class TestChapter3(unittest.TestCase):
         # Compute vertical barrier
         for days in [1, 2, 3, 4, 5]:
             vertical_barriers = add_vertical_barrier(
-                t_events=cusum_events, close=self.data["close"], num_days=days
+                t_events=cusum_events, close=self.data["close"], days=days
             )
 
             # For each row assert the time delta is correct
-            for start_date, end_date in vertical_barriers.iteritems():
+            for start_date, end_date in vertical_barriers.items():
                 self.assertTrue((end_date - start_date).days >= 1)
 
         # Check hourly barriers
         for hours in [1, 2, 3, 4, 5]:
             vertical_barriers = add_vertical_barrier(
-                t_events=cusum_events, close=self.data["close"], num_hours=hours
+                t_events=cusum_events, close=self.data["close"], hours=hours
             )
 
             # For each row assert the time delta is correct
-            for start_date, end_date in vertical_barriers.iteritems():
+            for start_date, end_date in vertical_barriers.items():
                 self.assertTrue((end_date - start_date).seconds >= 3600)
 
         # Check minute barriers
         for minutes in [1, 2, 3, 4, 5]:
             vertical_barriers = add_vertical_barrier(
-                t_events=cusum_events, close=self.data["close"], num_minutes=minutes
+                t_events=cusum_events, close=self.data["close"], minutes=minutes
             )
 
             # For each row assert the time delta is correct
-            for start_date, end_date in vertical_barriers.iteritems():
+            for start_date, end_date in vertical_barriers.items():
                 self.assertTrue((end_date - start_date).seconds >= 60)
 
         # Check seconds barriers
@@ -89,7 +89,7 @@ class TestChapter3(unittest.TestCase):
             )
 
             # For each row assert the time delta is correct
-            for start_date, end_date in vertical_barriers.iteritems():
+            for start_date, end_date in vertical_barriers.items():
                 self.assertTrue((end_date - start_date).seconds >= 1)
 
     def test_triple_barrier_events(self):
@@ -103,7 +103,7 @@ class TestChapter3(unittest.TestCase):
         daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
         cusum_events = cusum_filter(self.data["close"], threshold=0.02)
         vertical_barriers = add_vertical_barrier(
-            t_events=cusum_events, close=self.data["close"], num_days=1
+            t_events=cusum_events, close=self.data["close"], days=1
         )
 
         # No meta-labeling
@@ -113,10 +113,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[1, 1],
             target=daily_vol,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=None,
-            verbose=False,
         )
 
         # Test that the events are the same as expected (naive test)
@@ -138,10 +136,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[1, 1],
             target=daily_vol,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=self.data["side"],
-            verbose=False,
         )
 
         # Assert that the two different events are the the same as they are generated using same data
@@ -159,10 +155,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[1, 1],
             target=daily_vol,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=False,
             side_prediction=None,
-            verbose=False,
         )
 
         # Assert targets match other events trgts
@@ -180,7 +174,7 @@ class TestChapter3(unittest.TestCase):
         daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
         cusum_events = cusum_filter(self.data["close"], threshold=0.02)
         vertical_barriers = add_vertical_barrier(
-            t_events=cusum_events, close=self.data["close"], num_days=1
+            t_events=cusum_events, close=self.data["close"], days=1
         )
 
         # ----------------------
@@ -191,10 +185,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[1, 1],
             target=daily_vol,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=None,
-            verbose=False,
         )
 
         triple_labels = get_bins(triple_barrier_events, self.data["close"])
@@ -210,10 +202,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[1, 1],
             target=daily_vol,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=self.data["side"],
-            verbose=False,
         )
 
         triple_labels = get_bins(triple_barrier_events, self.data["close"])
@@ -241,7 +231,7 @@ class TestChapter3(unittest.TestCase):
         target = get_daily_vol(close=self.data["close"], lookback=100)
         cusum_events = cusum_filter(self.data["close"], threshold=0.02)
         vertical_barriers = add_vertical_barrier(
-            t_events=cusum_events, close=self.data["close"], num_days=1
+            t_events=cusum_events, close=self.data["close"], days=1
         )
 
         # --------------------------------------------------------------------------------------------------------
@@ -254,10 +244,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=pt_sl,
             target=target,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=None,
-            verbose=False,
         )
 
         triple_labels_ptsl_large = get_bins(triple_barrier_events_ptsl, self.data["close"])
@@ -273,10 +261,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[0.00000001, 0.00000001],
             target=target,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=None,
-            verbose=False,
         )
 
         triple_labels_ptsl_small = get_bins(triple_barrier_events_ptsl, self.data["close"])
@@ -292,10 +278,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[10000, 0.00000001],
             target=target,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=None,
-            verbose=False,
         )
 
         labels_no_ones = get_bins(triple_barrier_events_ptsl, self.data["close"])["bin"]
@@ -312,7 +296,7 @@ class TestChapter3(unittest.TestCase):
         daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
         cusum_events = cusum_filter(self.data["close"], threshold=0.02)
         vertical_barriers = add_vertical_barrier(
-            t_events=cusum_events, close=self.data["close"], num_days=1
+            t_events=cusum_events, close=self.data["close"], days=1
         )
         triple_barrier_events = get_events(
             close=self.data["close"],
@@ -320,10 +304,8 @@ class TestChapter3(unittest.TestCase):
             pt_sl=[1, 1],
             target=daily_vol,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=None,
-            verbose=False,
         )
         triple_labels = get_bins(triple_barrier_events, self.data["close"])
 

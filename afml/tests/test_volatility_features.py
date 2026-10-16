@@ -7,7 +7,7 @@ import unittest
 
 import pandas as pd
 
-from ..util import get_garman_class_vol, get_parksinson_vol, get_yang_zhang_vol
+from ..util.volatility import get_garman_klass_vol, get_parkinson_vol, get_yang_zhang_vol
 
 
 class TestVolatilityEstimators(unittest.TestCase):
@@ -29,13 +29,13 @@ class TestVolatilityEstimators(unittest.TestCase):
         """
         Test volatility estimators
         """
-        gm_vol = get_garman_class_vol(
+        gm_vol = get_garman_klass_vol(
             self.data.open, self.data.high, self.data.low, self.data.close, window=20
         )
         yz_vol = get_yang_zhang_vol(
             self.data.open, self.data.high, self.data.low, self.data.close, window=20
         )
-        park_vol = get_parksinson_vol(self.data.high, self.data.low, window=20)
+        park_vol = get_parkinson_vol(self.data.high, self.data.low, window=20)
 
         self.assertEqual(self.data.shape[0], gm_vol.shape[0])
         self.assertEqual(self.data.shape[0], yz_vol.shape[0])

@@ -5,7 +5,7 @@ Test various methods of generating feature clusters
 import unittest
 
 from ..clustering.feature_clusters import get_feature_clusters
-from ..util.generate_dataset import get_classification_data
+from ._datasets import get_classification_data
 
 
 # pylint: disable=invalid-name

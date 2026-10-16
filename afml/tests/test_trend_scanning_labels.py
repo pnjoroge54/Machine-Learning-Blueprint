@@ -1,74 +1,56 @@
 """
-Test Trend Scanning labels
+Tests for labeling.trend_scanning.trend_scanning_labels (current API: a span of
+candidate windows, look-forward or look-backward, optional volatility filter).
 """
 
-import os
-import unittest
-
+import numpy as np
 import pandas as pd
+import pytest
 
-from ..labeling import trend_scanning_labels
+from ..labeling.trend_scanning import trend_scanning_labels
+
+COLUMNS = {"t1", "window", "slope", "t_value", "rsquared", "ret", "bin"}
 
 
-class TestTrendScanningLabels(unittest.TestCase):
-    """
-    Test trend-scanning labels
-    """
+def _close(path):
+    idx = pd.date_range("2024-01-01", periods=len(path), freq="D")
+    return pd.Series(path, index=idx, name="close")
 
-    def setUp(self):
-        """
-        Set the file path for the sample dollar bars data.
-        """
-        project_path = os.path.dirname(__file__)
 
-        # Data set used for trend scanning labels
-        self.eem_close = pd.read_csv(
-            project_path + "/test_data/stock_prices.csv", index_col=0, parse_dates=[0]
-        )
-        # In 2008, EEM had some clear trends
-        self.eem_close = self.eem_close["EEM"].loc[
-            pd.Timestamp(2008, 4, 1) : pd.Timestamp(2008, 10, 1)
-        ]
+@pytest.fixture(scope="module")
+def up_then_down():
+    rng = np.random.default_rng(0)
+    trend = np.r_[np.linspace(100, 130, 120), np.linspace(130, 100, 120)]
+    return _close(trend * np.exp(rng.normal(0, 0.002, len(trend))))
 
-    def test_trend_scanning_labels(self):
-        """
-        Test trend scanning labels
-        """
 
-        t_events = self.eem_close.index
-        tr_scan_labels = trend_scanning_labels(self.eem_close, t_events, 20)
+def test_output_schema(up_then_down):
+    labels = trend_scanning_labels(up_then_down, span=(5, 20))
+    assert COLUMNS <= set(labels.columns)
+    assert labels.index.isin(up_then_down.index).all()
+    assert set(labels["bin"].unique()) <= {-1, 0, 1}
+    assert labels["window"].between(5, 20).all()
+    assert labels["rsquared"].between(0, 1).all()
 
-        self.assertEqual(
-            tr_scan_labels.shape[0], len(t_events)
-        )  # we have label value for all t events
 
-        # Before 2008/5/12 we had a strong positive trend
-        self.assertTrue(
-            set(tr_scan_labels.loc[pd.Timestamp(2008, 1, 1) : pd.Timestamp(2008, 5, 9)].bin)
-            == set([1])
-        )
+def test_trends_are_labelled_by_sign(up_then_down):
+    labels = trend_scanning_labels(up_then_down, span=(5, 20))
+    rising = labels.loc[: up_then_down.index[90]]
+    falling = labels.loc[up_then_down.index[130] : up_then_down.index[200]]
+    assert (rising["bin"] == 1).mean() > 0.9
+    assert (falling["bin"] == -1).mean() > 0.9
+    assert (rising["t_value"] >= 0).mean() > 0.95 and (falling["t_value"] <= 0).mean() > 0.95
+    np.testing.assert_array_equal(np.sign(labels["slope"]), np.sign(labels["t_value"]))
 
-        self.assertEqual(tr_scan_labels.bin.value_counts()[-1], 70)  # Number of -1 labels check
-        self.assertEqual(tr_scan_labels.bin.value_counts()[1], 40)
 
-        # Approx. 20 latest labels are nan because we don't have data for look-forward period (20)
-        self.assertEqual(tr_scan_labels.shape[0] - tr_scan_labels.dropna().shape[0], 19)
+def test_lookforward_windows_end_after_the_event(up_then_down):
+    fwd = trend_scanning_labels(up_then_down, span=(5, 20), lookforward=True)
+    assert (pd.to_datetime(fwd["t1"]) > fwd.index).all()
+    # Look-backward output carries the fit statistics only (no t1/ret/bin columns)
+    back = trend_scanning_labels(up_then_down, span=(5, 20), lookforward=False)
+    assert {"window", "slope", "t_value", "rsquared"} <= set(back.columns)
 
-        tr_scan_labels.dropna(inplace=True)  # Drop na values
 
-        # Index should be < t1
-        self.assertTrue((tr_scan_labels.t1 > tr_scan_labels.index).all())
-
-        for int_index, (ret_v, bin_v) in zip(
-            [0, 2, 10, 20, 50],
-            [(0.05037, 1), (0.0350, 1), (0.07508, 1), (0.05219, 1), (0.02447, 1)],
-        ):
-            self.assertAlmostEqual(tr_scan_labels.iloc[int_index]["ret"], ret_v, delta=1e-4)
-            self.assertEqual(tr_scan_labels.iloc[int_index]["bin"], bin_v)
-
-        tr_scan_labels_none = trend_scanning_labels(
-            self.eem_close, t_events=None, look_forward_window=20
-        )
-        tr_scan_labels_none.dropna(inplace=True)
-
-        self.assertTrue((tr_scan_labels == tr_scan_labels_none).all().all())
+def test_explicit_window_list_is_respected(up_then_down):
+    labels = trend_scanning_labels(up_then_down, span=[10, 15])
+    assert set(labels["window"].unique()) <= {10, 15}

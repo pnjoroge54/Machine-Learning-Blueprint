@@ -85,7 +85,7 @@ class TestBetSizeProbability(unittest.TestCase):
         # Calculate correct output.
         signal_0 = get_signal(events_test["prob"], 2, events_test["side"])
         df_signal_0 = signal_0.to_frame("signal").join(events_test["t1"], how="left")
-        signal_1 = avg_active_signals(df_signal_0, 1)
+        signal_1 = avg_active_signals(df_signal_0)
         # Evaluate test.
         self.assertTrue(
             signal_1.equals(
@@ -257,7 +257,7 @@ class TestBetSizeReserve(unittest.TestCase):
     Tests the 'bet_size_reserve' function.
     """
 
-    @patch("mlfinlab.bet_sizing.bet_sizing.most_likely_parameters")
+    @patch("afml.bet_sizing.bet_sizing.most_likely_parameters")
     def test_bet_size_reserve_default(self, mock_likely_parameters):
         """
         Tests for successful execution of 'bet_size_reserve' using default arguments, return_parameters=False.
@@ -307,7 +307,7 @@ class TestBetSizeReserve(unittest.TestCase):
         df_bet = bet_size_reserve(df_events["t1"], df_events["side"], fit_runs=10)
         self.assertTrue(events_active.equals(df_bet))
 
-    @patch("mlfinlab.bet_sizing.bet_sizing.most_likely_parameters")
+    @patch("afml.bet_sizing.bet_sizing.most_likely_parameters")
     def test_bet_size_reserve_return_params(self, mock_likely_parameters):
         """
         Tests for successful execution of 'bet_size_reserve' using return_parameters=True.

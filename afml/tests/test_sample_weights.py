@@ -8,7 +8,7 @@ import unittest
 import pandas as pd
 
 from ..filters.filters import cusum_filter
-from ..labeling.labeling import add_vertical_barrier, get_events
+from ..labeling.triple_barrier import add_vertical_barrier, get_events
 from ..sample_weights.attribution import (
     get_weights_by_return,
     get_weights_by_time_decay,
@@ -33,7 +33,7 @@ class TestSampling(unittest.TestCase):
         daily_vol = get_daily_vol(close=self.data["close"], lookback=100)
         cusum_events = cusum_filter(self.data["close"], threshold=0.02)
         vertical_barriers = add_vertical_barrier(
-            t_events=cusum_events, close=self.data["close"], num_days=2
+            t_events=cusum_events, close=self.data["close"], days=2
         )
 
         self.data["side"] = 1
@@ -43,10 +43,8 @@ class TestSampling(unittest.TestCase):
             pt_sl=[4, 4],
             target=daily_vol,
             min_ret=0.005,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=self.data["side"],
-            verbose=False,
         )
 
     def test_ret_attribution(self):

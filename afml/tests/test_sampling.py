@@ -8,9 +8,7 @@ import numpy as np
 import pandas as pd
 
 from ..sampling.bootstrapping import (
-    _bootstrap_loop_run,
     get_ind_mat_average_uniqueness,
-    get_ind_mat_label_uniqueness,
     get_ind_matrix,
     seq_bootstrap,
 )  # pylint: disable=protected-access
@@ -25,7 +23,7 @@ def book_ind_mat_implementation(bar_index, label_endtime):
     Book implementation of get_ind_matrix function
     """
     ind_mat = pd.DataFrame(0, index=bar_index, columns=range(label_endtime.shape[0]))
-    for i, (start, end) in enumerate(label_endtime.iteritems()):
+    for i, (start, end) in enumerate(label_endtime.items()):
         ind_mat.loc[start:end, i] = 1.0
     return ind_mat
 
@@ -88,7 +86,7 @@ class TestSampling(unittest.TestCase):
         Test sequential bootstrapping length, indicator matrix length and NaN checks
         """
 
-        ind_mat = get_ind_matrix(self.samples_info_sets.t1, self.price_bars)
+        ind_mat = get_ind_matrix(self.samples_info_sets.t1, self.price_bars.index)
 
         label_endtime = self.samples_info_sets.t1
         trimmed_price_bars_index = self.price_bars[
@@ -161,54 +159,6 @@ class TestSampling(unittest.TestCase):
         labels_av_uniqueness = get_ind_mat_average_uniqueness(ind_mat)
         self.assertTrue(abs(labels_av_uniqueness - 0.8571) <= 1e-4)  # Test matrix av.uniqueness
 
-    def test_get_ind_mat_uniqueness(self):
-        """
-        Tests get_ind_mat_uniqueness function using indicator matrix from the book example
-        """
-
-        ind_mat = pd.DataFrame(index=range(6), columns=range(3))
-        ind_mat.loc[:, 0] = [1, 1, 1, 0, 0, 0]
-        ind_mat.loc[:, 1] = [0, 0, 1, 1, 0, 0]
-        ind_mat.loc[:, 2] = [0, 0, 0, 0, 1, 1]
-        ind_mat = ind_mat.values
-
-        labels_av_uniqueness = get_ind_mat_label_uniqueness(ind_mat)
-        first_sample_unq = labels_av_uniqueness[0]
-        second_sample_unq = labels_av_uniqueness[1]
-        third_sample_unq = labels_av_uniqueness[2]
-
-        self.assertTrue(abs(first_sample_unq[first_sample_unq > 0].mean() - 0.8333) <= 1e-4)
-        self.assertTrue(abs(second_sample_unq[second_sample_unq > 0].mean() - 0.75) <= 1e-4)
-        self.assertTrue(abs(third_sample_unq[third_sample_unq > 0].mean() - 1.0) <= 1e-4)
-        # Test matrix av.uniqueness
-        self.assertTrue(abs(labels_av_uniqueness[labels_av_uniqueness > 0].mean() - 0.8571) <= 1e-4)
-
-    def test_bootstrap_loop_run(self):
-        """
-        Test one loop iteration of Sequential Bootstrapping
-        """
-        ind_mat = pd.DataFrame(index=range(6), columns=range(3))
-        ind_mat.loc[:, 0] = [1, 1, 1, 0, 0, 0]
-        ind_mat.loc[:, 1] = [0, 0, 1, 1, 0, 0]
-        ind_mat.loc[:, 2] = [0, 0, 0, 0, 1, 1]
-        ind_mat = ind_mat.values
-
-        prev_concurrency = np.zeros(ind_mat.shape[0])
-
-        first_iteration = _bootstrap_loop_run(ind_mat, prev_concurrency)
-        self.assertTrue(
-            (first_iteration == np.array([1.0, 1.0, 1.0])).all()
-        )  # First iteration should always yield 1
-
-        prev_concurrency += ind_mat[:, 1]  # Repeat example from the book
-        second_iteration = _bootstrap_loop_run(ind_mat, prev_concurrency)
-        second_iteration_prob = second_iteration / second_iteration.sum()
-
-        self.assertTrue(
-            abs((second_iteration_prob - np.array([0.35714286, 0.21428571, 0.42857143])).sum())
-            <= 1e-8
-        )
-
     def test_value_error_raise(self):
         """
         Test seq_bootstrap and ind_matrix functions for raising ValueError on nan values
@@ -216,4 +166,4 @@ class TestSampling(unittest.TestCase):
         nan_samples_info_sets = self.samples_info_sets.copy()
         nan_samples_info_sets.loc[pd.Timestamp(2019, 1, 1), "t1"] = None
         with self.assertRaises(ValueError):
-            get_ind_matrix(nan_samples_info_sets.t1, self.price_bars)
+            get_ind_matrix(nan_samples_info_sets.t1, self.price_bars.index)
