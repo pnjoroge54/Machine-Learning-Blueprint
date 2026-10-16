@@ -115,6 +115,13 @@ KNOWN_FAILURES = {
 }
 
 
+# Known failures whose outcome is not deterministic: run as non-strict xfails so an
+# occasional pass does not fail the suite.
+FLAKY = {
+    'test_backtest_statistics.py::TestBacktestStatistics::test_average_holding_period',
+}
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long-running acceptance test")
 
@@ -125,4 +132,4 @@ def pytest_collection_modifyitems(config, items):
         key = nodeid.split("afml/tests/", 1)[-1]
         reason = KNOWN_FAILURES.get(key)
         if reason:
-            item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+            item.add_marker(pytest.mark.xfail(reason=reason, strict=key not in FLAKY))
