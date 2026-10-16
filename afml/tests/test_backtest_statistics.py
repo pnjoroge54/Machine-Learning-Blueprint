@@ -98,6 +98,22 @@ class TestBacktestStatistics(unittest.TestCase):
         self.assertAlmostEqual(average_holding, 2, delta=1e-4)
         self.assertTrue(np.isnan(nan_average_holding))
 
+    def test_average_holding_period_is_deterministic(self):
+        """Regression: unwritten slots held stale memory, so results varied per call."""
+        for _ in range(200):
+            np.full(9, 7.0)  # churn the allocator between calls
+            self.assertTrue(np.isnan(average_holding_period(self.no_closed_positions)))
+            self.assertAlmostEqual(average_holding_period(self.hold_positions), 2, delta=1e-4)
+
+    def test_average_holding_period_counts_a_trade_closed_on_the_last_bar(self):
+        """Regression: the last bar's close was written one past the end and lost."""
+        positions = pd.Series(
+            [0.0, 1.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0, 0.0],
+            index=self.hold_positions.index,
+        )
+        # 1 lot held 1 day, then 3 lots held 4 days: (1 * 1 + 3 * 4) / 4 = 3.25
+        self.assertAlmostEqual(average_holding_period(positions), 3.25, delta=1e-9)
+
     def test_bets_concentration(self):
         """
         Check if concentration is balanced and correctly calculated

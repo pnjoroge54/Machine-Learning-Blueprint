@@ -87,8 +87,12 @@ def average_holding_period(target_positions: pd.Series) -> float:
 
 @njit(cache=True)
 def _average_holding_period_numba(target_positions, position_difference, time_difference):
-    holding_time = np.empty(target_positions.size - 1, dtype=np.float64)
-    holding_weight = np.empty(target_positions.size - 1, dtype=np.float64)
+    # One zero-filled slot per bar: the loop writes slot i for i in 1..n-1 and only
+    # on bars that close (part of) a position, so every other slot must stay at
+    # weight 0. np.empty(n - 1) left those slots holding stale memory and made the
+    # last bar's write land one past the end of the array.
+    holding_time = np.zeros(target_positions.size, dtype=np.float64)
+    holding_weight = np.zeros(target_positions.size, dtype=np.float64)
     entry_time = 0.0
 
     for i in range(1, target_positions.size):

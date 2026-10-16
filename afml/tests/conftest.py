@@ -30,8 +30,6 @@ KNOWN_FAILURES = {
         'AssertionError: 329 != 330',
     'new_api/test_incremental_bar_cache_integration.py::TestIncrementalPath::test_tick_leftover_offset_is_exact':
         'AssertionError',
-    'test_backtest_statistics.py::TestBacktestStatistics::test_average_holding_period':
-        'AssertionError: False is not true',
     'test_backtest_statistics.py::TestBacktestStatistics::test_drawdown_and_time_under_water':
         'AssertionError: 4.0 != 0.010951 within 0.0001 delta (3.989049 difference)',
     'test_cross_validation.py::TestCrossValidation::test_ml_cross_val_score_01_accuracy':
@@ -117,9 +115,7 @@ KNOWN_FAILURES = {
 
 # Known failures whose outcome is not deterministic: run as non-strict xfails so an
 # occasional pass does not fail the suite.
-FLAKY = {
-    'test_backtest_statistics.py::TestBacktestStatistics::test_average_holding_period',
-}
+FLAKY = set()
 
 
 def pytest_configure(config):
