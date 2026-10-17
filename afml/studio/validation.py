@@ -235,3 +235,75 @@ def close_family(family_id: str, reason: str, run_id: str, ledger: Optional[Ledg
         con.execute("UPDATE families SET closed = 1 WHERE family_id = ?", (family_id,))
     ledger.add_trial(run_id=run_id, family_id=family_id, kind="family_closed",
                      params={"reason": reason, "at": utcnow()})
+
+
+# =========================================================================== hold-out registration
+
+
+def battery_verdict(validation_run: str, ledger: Optional[Ledger] = None) -> Dict[str, Any]:
+    """
+    The verdict for a validation run, joined with the latest test 7 run against the
+    same pre-registration. The family passes only when every test ran and passed.
+    """
+    import pandas as pd
+
+    ledger = ledger or get_ledger()
+    run = ledger.get_run(validation_run)
+    if run is None or run["stage"] != "validation" or run["status"] != "done":
+        raise GateError(f"{validation_run} is not a completed validation run")
+    v = run["summary"]["validation"]
+    verdict = pd.read_parquet(f"{run['run_dir']}/tables/verdict.parquet")
+    perm = [r for r in ledger.list_runs(family_id=run["family_id"], stage="process_permutation", limit=200)
+            if r["status"] == "done" and (r.get("summary") or {}).get("process_permutation", {})
+            .get("preregistration_id") == v["preregistration_id"]]
+    t7_run = perm[0]["run_id"] if perm else None
+    if t7_run:
+        verdict = pd.concat([verdict, pd.read_parquet(f"{perm[0]['run_dir']}/tables/verdict.parquet")])
+    complete = set(verdict.index) >= set(BATTERY)
+    return {"verdict": verdict, "summary": v, "process_permutation_run": t7_run, "complete": complete,
+            "passed": bool(complete and verdict["passed"].astype(bool).all())}
+
+
+def register_holdout(validation_run: str, ledger: Optional[Ledger] = None) -> Dict[str, Any]:
+    """
+    Register the family for its one hold-out evaluation (run in Phase 4).
+
+    Needs every test of the battery, test 7 included, to have passed. Refuses a
+    hold-out shorter than the minimum track record length at the observed Sharpe:
+    such a test could not pass even with a real edge.
+    """
+    import numpy as np
+    from afml.backtest_statistics.perfomance_statistics import minimum_track_record_length
+
+    ledger = ledger or get_ledger()
+    bv = battery_verdict(validation_run, ledger)
+    if not bv["passed"]:
+        raise GateError("hold-out registration needs every test, test 7 included, to have passed")
+    run = ledger.get_run(validation_run)
+    v = bv["summary"]
+    reg = get_preregistration(v["preregistration_id"], ledger)
+    rule = reg["payload"]["holdout"]
+    if not rule.get("holdout_end"):
+        raise GateError("the pre-registration has no holdout_end; register a new version with one")
+    cfg = jobs.clone_spec(validation_run, ledger)
+    boundary = vault.get_research_end(cfg["data"]["symbol"], ledger)
+    t3 = v["tests"]["3"] if "3" in v["tests"] else v["tests"][3]
+    ppy = float(t3["periods_per_year"])
+    sr = float(t3["observed_sharpe"]) / np.sqrt(ppy)  # per event
+    min_events = float(minimum_track_record_length(sr, 0.0, t3["skewness"], t3["excess_kurtosis"] + 3.0,
+                                                   alpha=1.0 - rule["psr_min"])) if sr > 0 else float("inf")
+    days = (vault._as_date(rule["holdout_end"]) - boundary).days
+    events_per_day = v["n_events"] / max(1, (vault._as_date(cfg["data"]["end_date"])
+                                             - vault._as_date(cfg["data"]["start_date"])).days + 1)
+    expected = events_per_day * max(days, 0)
+    record = {"validation_run": validation_run, "process_permutation_run": bv["process_permutation_run"],
+              "preregistration_id": reg["id"], "holdout_start": str(boundary), "holdout_end": rule["holdout_end"],
+              "expected_events": expected, "min_track_record_events": min_events,
+              "observed_sharpe": t3["observed_sharpe"]}
+    if not expected >= min_events:
+        raise GateError(f"the hold-out ({expected:.0f} expected events to {rule['holdout_end']}) is shorter than "
+                        f"the minimum track record length ({min_events:.0f} events at the observed Sharpe); "
+                        "no result there could pass")
+    ledger.add_trial(run_id=validation_run, family_id=run["family_id"], kind="holdout_registration",
+                     params=record)
+    return record

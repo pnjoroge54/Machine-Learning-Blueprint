@@ -222,7 +222,7 @@ def test_deflated_sharpe(trial_returns: pd.DataFrame, best: int, n_eff: float, n
         for n in curve["n_trials"]]
     return ({"t3_expected_max": curve, "t3_trial_sharpes": ann_sharpes.rename("sharpe").to_frame()},
             {"dsr": float(dsr), "observed_sharpe": float(metrics["sharpe_ratio"]), "n_eff": float(n_eff),
-             "n_raw": int(n_raw), "sr_std": sr_std, "n_returns": int(len(r)),
+             "n_raw": int(n_raw), "sr_std": sr_std, "n_returns": int(len(r)), "periods_per_year": ppy,
              "skewness": float(metrics["skewness"]), "excess_kurtosis": float(metrics["kurtosis"])})
 
 

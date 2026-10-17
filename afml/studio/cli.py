@@ -17,6 +17,7 @@
   gate RUN_ID                    what still blocks validation of a model run
   validate RUN_ID                queue the validation battery (tests 1-6)
   process-permutation RUN_ID     queue test 7 (overnight)
+  calibrate [--noise N] [--signal M]  run the battery on synthetic families with known answers
   example [--stage S]            print an example config
   app [--address A] [--port P]   launch the Streamlit app
 """
@@ -235,6 +236,15 @@ def cmd_process_permutation(args) -> int:
     return 0
 
 
+def cmd_calibrate(args) -> int:
+    from . import calibration
+
+    res = calibration.run_calibration(n_noise=args.noise, n_signal=args.signal,
+                                      signal_strength=args.strength, months=args.months)
+    print(f"false-pass rate {res['false_pass_rate']} (level {res['alpha']}); power {res['power']}")
+    return 0
+
+
 def cmd_example(args) -> int:
     print(json.dumps(example_config(args.stage, args.symbol), indent=2))
     return 0
@@ -284,6 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("validate"); p.add_argument("run_id"); p.set_defaults(fn=cmd_validate)
     p = sub.add_parser("process-permutation"); p.add_argument("run_id")
     p.set_defaults(fn=cmd_process_permutation)
+    p = sub.add_parser("calibrate")
+    p.add_argument("--noise", type=int, default=20); p.add_argument("--signal", type=int, default=6)
+    p.add_argument("--strength", type=float, default=0.3); p.add_argument("--months", type=int, default=6)
+    p.set_defaults(fn=cmd_calibrate)
     p = sub.add_parser("example")
     p.add_argument("--stage", default="importance",
                    choices=["bars", "labels", "features", "screening", "importance", "model"])

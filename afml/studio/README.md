@@ -80,6 +80,30 @@ along with the estimator's `search_space`, and scores every fold with `events['w
 It supports estimators that take `sample_weight` directly (`random_forest`,
 `extra_trees`).
 
+## Validation (Phase 3)
+
+Validation can only reject. A model run reaches it through an entry gate: its config
+is frozen and pre-registered, its Optuna study is closed, the ledger has per-fold
+scores for the family's trials, and its data ends at or before `research_end`.
+
+1. **Freeze and pre-register** (`afml.studio.validation.preregister`, page 6, or
+   `python -m afml.studio freeze RUN_ID`): thresholds, significance level, hold-out
+   decision rule, the prop-firm rule set and the account traded. Registering again
+   writes a new version; earlier ones stay.
+2. **Battery** (`validate RUN_ID`, tests 1-6, `adapters/validation.py`): signal
+   permutation, CPCV path distribution, deflated Sharpe with the family's effective
+   N, PBO across the trials' OOF returns, anchored walk-forward degradation, and
+   block-bootstrap sequence risk. Every test runs and is reported.
+3. **Process permutation** (`process-permutation RUN_ID`, test 7, overnight): the
+   whole development process on permuted bars; refuses to start when
+   `assert_cache_isolation` fails.
+4. **Calibration** (`calibrate`): the battery on synthetic noise and planted-signal
+   families in a throwaway home; page 6 shows the false-pass rate and power.
+
+Every battery run is a new run and a new trial. After a full pass, page 6 can register
+the family for its one hold-out evaluation (refused when the hold-out is shorter than
+the minimum track record length); after a fail, it can close the family.
+
 ## Rewiring to the newer afml
 
 afml also has `FeatureEngineeringPipeline`, `ModelDevelopmentPipeline`,

@@ -22,8 +22,8 @@ pages = {
         st.Page("views/feature_importance.py", title="4 · Feature importance", icon=":material/bar_chart:"),
         st.Page("views/model_development.py", title="5 · Model development", icon=":material/model_training:"),
     ],
-    "Locked until a config is frozen": [
-        st.Page("views/validation.py", title="6 · Validation", icon=":material/lock:"),
+    "After a config is frozen": [
+        st.Page("views/validation.py", title="6 · Validation", icon=":material/verified:"),
         st.Page("views/holdout_export.py", title="7 · Hold-out and export", icon=":material/lock:"),
     ],
 }

@@ -147,3 +147,51 @@ def test_process_permutation_job_reports_test_7(frozen):
     assert list(verdict.index) == [7]
     kinds = [t["kind"] for t in led.trials(run["family_id"])]
     assert "process_permutation" in kinds
+
+
+def test_validation_page_shows_the_report(frozen):
+    import sys
+
+    from afml.studio import paths
+
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+    led, model_run = frozen
+    app = paths.repo_root() / "app"
+    if str(app) not in sys.path:
+        sys.path.insert(0, str(app))
+    at = streamlit_testing.AppTest.from_file(str(app / "views" / "validation.py"), default_timeout=120)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Report" in h.value for h in at.subheader)
+    assert any(e.label.startswith("3 · Deflated Sharpe") for e in at.expander)
+    assert len(at.dataframe) >= 2  # verdict panel and the pre-registration versions
+
+
+def test_calibration_summary_and_page_panel(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from afml.studio import calibration, paths
+
+    monkeypatch.setenv("AFML_STUDIO_HOME", str(tmp_path / "studio"))
+    records = ([{"kind": "noise", "passed": False, "tests": {"1": i % 10 == 0, "4": i % 2 == 0}} for i in range(20)]
+               + [{"kind": "signal", "passed": i < 3, "tests": {"1": True, "4": i < 3}} for i in range(4)]
+               + [{"kind": "noise", "passed": None, "tests": {}, "error": "boom"}])
+    s = calibration.summarize(records, alpha=0.05)
+    assert s["false_pass_rate"] == 0.0 and s["false_pass_ok"]
+    assert s["power"] == 0.75 and s["power_ok"]
+    assert s["kinds"]["noise"]["tests"]["1"]["pass_rate"] == pytest.approx(0.1)
+    assert s["kinds"]["noise"]["n_errors"] == 1
+    lo, hi = calibration.wilson(0, 20)
+    assert lo == 0.0 and 0.1 < hi < 0.2
+
+    s.update(created_at="2026-10-17T00:00:00", months=6, signal_strength=0.3)
+    (calibration.calibration_dir() / "latest.json").write_text(json.dumps(s), encoding="utf-8")
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+    app = paths.repo_root() / "app"
+    if str(app) not in sys.path:
+        sys.path.insert(0, str(app))
+    at = streamlit_testing.AppTest.from_file(str(app / "views" / "validation.py"), default_timeout=120)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any(m.label == "False-pass rate on noise" for m in at.metric)
