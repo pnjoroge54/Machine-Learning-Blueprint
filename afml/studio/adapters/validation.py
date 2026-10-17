@@ -435,3 +435,83 @@ def run_battery(X: pd.DataFrame, events: pd.DataFrame, bars: pd.DataFrame, model
     summary["n_failed"] = int((~verdict["passed"].astype(bool)).sum())
     progress(1.0, "battery done")
     return tables, summary
+
+
+# =========================================================================== test 7
+
+
+def development_process(labels_cfg: Dict[str, Any], features_cfg: Dict[str, Any], model_cfg: Dict[str, Any],
+                        rule_set, seed: int) -> Callable[[pd.DataFrame], float]:
+    """
+    The whole development process as a function of bars: labels, features, the Optuna
+    search with the frozen trial budget, then the selected trial's OOF strategy Sharpe
+    under the frozen sizing rule. Seeds are fixed, so the same bars give the same value.
+    """
+    import shutil
+    import tempfile
+
+    from . import pipelines as P
+
+    def develop(bars: pd.DataFrame) -> float:
+        events = P.compute_events(bars, labels_cfg)
+        X, _ = P.build_feature_matrix(bars, features_cfg)
+        tmp = Path(tempfile.mkdtemp(prefix="afml_procperm_"))
+        try:
+            _, summary, _ = P.run_optuna(X, events, model_cfg, bars.index, seed=seed, storage_dir=tmp)
+            probs = pd.read_parquet(tmp / "oof" / f"trial_{summary['best_trial']:04d}.parquet")["p"]
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        r = strategy_returns(probs.astype(float), events, rule_set)
+        return _sharpe(r) * np.sqrt(_periods_per_year(r.index))
+
+    return develop
+
+
+def run_process_permutation(bars: pd.DataFrame, cfg: Dict[str, Any], prereg: Dict[str, Any], seed: int = 42,
+                            progress: Progress = _noop_progress,
+                            develop_fn: Optional[Callable[[pd.DataFrame], float]] = None
+                            ) -> Tuple[Tables, Dict]:
+    """
+    Test 7: does the whole development process manufacture edge from noise?
+
+    ``permute_development_process`` on ``bar_permutation`` bars with the frozen trial
+    budget. ``assert_cache_isolation`` runs first and the job refuses to start when
+    it fails: a cache key that ignores bar content returns the real result for every
+    permutation and makes a broken process look sound.
+    """
+    from afml.cross_validation.process_permutation import assert_cache_isolation, permute_development_process
+
+    th = prereg["thresholds"]
+    n_perm = int(prereg["n_perm_process"])
+    develop = develop_fn or development_process(cfg["labels"], cfg["features"], cfg["model"],
+                                                _rule_set(prereg["rule_set"]), seed)
+    calls = {"n": 0}
+    total = n_perm + 4  # isolation probes (3), the real bars, then the replicates
+
+    def tracked(b: pd.DataFrame) -> float:
+        calls["n"] += 1
+        progress(min(calls["n"] / total, 0.99), f"development process {calls['n']}/{total}")
+        return develop(b)
+
+    progress(0.0, "checking cache isolation")
+    assert_cache_isolation(tracked, bars, seed=seed)  # raises: the job refuses to start
+    res = permute_development_process(tracked, bars, n_perm=n_perm, seed=seed,
+                                      trial_budget=int(cfg["model"].get("n_trials", 0)),
+                                      check_cache_isolation=False)
+    lo, hi, _ = res.median_ci()
+    center_above_zero = res.selection_effect_exceeds(0.0)
+    p_ok = res.p_value <= th["permutation_p_max"]
+    summary = {
+        "observed_sharpe": float(res.observed), "spurious_center": float(res.spurious_center),
+        "center_ci_low": float(lo), "center_ci_high": float(hi), "p_value": float(res.p_value),
+        "n_perm": n_perm, "n_failed": len(res.failures), "trial_budget": res.trial_budget,
+        "robust_z": float(res.robust_z), "passed": bool(p_ok and not center_above_zero),
+        "cache_isolation": "passed",
+    }
+    note = (f"null median {res.spurious_center:.3f} (95% CI {lo:.3f} to {hi:.3f})"
+            + ("; credibly above zero" if center_above_zero else ""))
+    verdict = pd.DataFrame([_verdict(7, float(res.p_value),
+                                     f"p <= {th['permutation_p_max']} and null median not credibly above 0",
+                                     summary["passed"], note)]).set_index("test")
+    progress(1.0, "process permutation done")
+    return {"t7_null": pd.DataFrame({"sharpe": res.null_values}), "verdict": verdict}, summary

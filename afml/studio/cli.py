@@ -13,6 +13,10 @@
   set-research-end SYMBOL DATE   set a symbol's hold-out boundary (once)
   research-ends                  list hold-out boundaries
   preregister FAMILY CONFIG_HASH pre-register a frozen config for hold-out
+  freeze RUN_ID [--json FILE]    freeze a model run and pre-register its validation thresholds
+  gate RUN_ID                    what still blocks validation of a model run
+  validate RUN_ID                queue the validation battery (tests 1-6)
+  process-permutation RUN_ID     queue test 7 (overnight)
   example [--stage S]            print an example config
   app [--address A] [--port P]   launch the Streamlit app
 """
@@ -200,6 +204,37 @@ def cmd_preregister(args) -> int:
     return 0
 
 
+def cmd_freeze(args) -> int:
+    from . import validation
+
+    extra = json.loads(Path(args.json).read_text(encoding="utf-8")) if args.json else {}
+    reg_id = validation.preregister(validation.Preregistration(source_run=args.run_id, **extra))
+    print(f"pre-registration {reg_id} freezes {args.run_id}")
+    return 0
+
+
+def cmd_gate(args) -> int:
+    from . import validation
+
+    problems = validation.entry_gate(args.run_id)
+    print("\n".join(problems) if problems else "ready for validation")
+    return 1 if problems else 0
+
+
+def cmd_validate(args) -> int:
+    from . import validation
+
+    print(validation.submit_validation(args.run_id))
+    return 0
+
+
+def cmd_process_permutation(args) -> int:
+    from . import validation
+
+    print(validation.submit_process_permutation(args.run_id))
+    return 0
+
+
 def cmd_example(args) -> int:
     print(json.dumps(example_config(args.stage, args.symbol), indent=2))
     return 0
@@ -242,9 +277,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("research-ends"); p.set_defaults(fn=cmd_research_ends)
     p = sub.add_parser("preregister")
     p.add_argument("family_id"); p.add_argument("config_hash"); p.set_defaults(fn=cmd_preregister)
+    p = sub.add_parser("freeze"); p.add_argument("run_id")
+    p.add_argument("--json", help="JSON file of Preregistration fields (thresholds, rule_set, account, ...)")
+    p.set_defaults(fn=cmd_freeze)
+    p = sub.add_parser("gate"); p.add_argument("run_id"); p.set_defaults(fn=cmd_gate)
+    p = sub.add_parser("validate"); p.add_argument("run_id"); p.set_defaults(fn=cmd_validate)
+    p = sub.add_parser("process-permutation"); p.add_argument("run_id")
+    p.set_defaults(fn=cmd_process_permutation)
     p = sub.add_parser("example")
     p.add_argument("--stage", default="importance",
-                   choices=["bars", "labels", "features", "screening", "importance", "model"])  # validation: see `validate`
+                   choices=["bars", "labels", "features", "screening", "importance", "model"])
     p.add_argument("--symbol", default="SYNTH")
     p.set_defaults(fn=cmd_example)
     p = sub.add_parser("app")

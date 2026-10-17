@@ -116,3 +116,34 @@ def test_close_family_sets_the_flag_and_logs_the_reason(home):
     SV.close_family("f-c", "failed tests 3 and 4", "v", home)
     assert home.get_family("f-c")["closed"] == 1
     assert [t["kind"] for t in home.trials("f-c")] == ["family_closed"]
+
+
+def test_process_permutation_refuses_to_start_when_cache_isolation_fails():
+    from afml.studio.adapters import validation as V
+
+    idx = pd.date_range("2024-01-01", periods=300, freq="15min")
+    close = pd.Series(1.1 + 0.0001 * pd.Series(range(300)).sample(frac=1, random_state=0).cumsum().to_numpy(),
+                      index=idx)
+    bars = pd.DataFrame({"open": close, "high": close + 1e-4, "low": close - 1e-4, "close": close,
+                         "volume": 100.0}, index=idx)
+    calls = []
+    stale = lambda b: calls.append(1) or 1.25  # noqa: E731  (a cache serving one stale answer)
+    prereg = SV.Preregistration(source_run="x", n_perm_process=5).model_dump(mode="json")
+    with pytest.raises(RuntimeError, match="not responding to its input"):
+        V.run_process_permutation(bars, {"model": {"n_trials": 3}}, prereg, develop_fn=stale)
+    assert len(calls) == 3  # the isolation probes only; no replicate ran
+
+
+def test_process_permutation_job_reports_test_7(frozen):
+    led, model_run = frozen
+    SV.preregister(SV.Preregistration(source_run=model_run, n_perm_process=5, n_boot=500), led)
+    run_id = SV.submit_process_permutation(model_run, led)
+    _run(led)
+    run = led.get_run(run_id)
+    assert run["status"] == "done", run["error"]
+    s = run["summary"]["process_permutation"]
+    assert s["cache_isolation"] == "passed" and s["n_perm"] == 5 and s["trial_budget"] == 8
+    verdict = pd.read_parquet(Path(run["run_dir"]) / "tables" / "verdict.parquet")
+    assert list(verdict.index) == [7]
+    kinds = [t["kind"] for t in led.trials(run["family_id"])]
+    assert "process_permutation" in kinds

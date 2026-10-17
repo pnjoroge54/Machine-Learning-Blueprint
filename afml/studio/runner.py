@@ -247,9 +247,26 @@ def step_validation(ctx: RunContext, state: Dict[str, Any]) -> None:
     report(1.0, "battery " + ("passed" if summary["passed"] else f"failed {summary['n_failed']} test(s)"))
 
 
+def step_process_permutation(ctx: RunContext, state: Dict[str, Any]) -> None:
+    from .adapters import validation as V
+
+    report = ctx.progress_for("process_permutation")
+    source, reg = _frozen_source(ctx, "process_permutation")
+    tables, summary = V.run_process_permutation(state["bars"], ctx.cfg, reg["payload"], seed=ctx.cfg["seed"],
+                                                progress=report)
+    summary.update(source_run=source["run_id"], preregistration_id=reg["id"],
+                   preregistration_version=reg["version"])
+    ctx.write_tables(tables)
+    ctx.summary["process_permutation"] = summary
+    ctx.ledger.add_trial(run_id=ctx.run_id, family_id=ctx.family_id, kind="process_permutation",
+                         params={"source_run": source["run_id"], "preregistration_id": reg["id"],
+                                 "passed": summary["passed"], "p_value": summary["p_value"]})
+    report(1.0, "test 7 " + ("passed" if summary["passed"] else "failed"))
+
+
 STEPS = {"bars": step_bars, "labels": step_labels, "features": step_features,
          "screening": step_screening, "importance": step_importance, "model": step_model,
-         "validation": step_validation}
+         "validation": step_validation, "process_permutation": step_process_permutation}
 
 
 # =========================================================================== replay script
