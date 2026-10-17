@@ -360,3 +360,23 @@ def test_news_window_factor_applies_only_in_funded_window():
     assert news_window_factor(inside, news, 0.4, 5.0, Phase.CHALLENGE_PHASE_1) == 1.0
     assert news_window_factor(inside, [], 0.4, 5.0, Phase.FUNDED) == 1.0
     assert news_window_factor(inside, news, 1.0, 5.0, Phase.FUNDED) == 1.0
+
+
+# ── Sizer: the side survives the w-param modifier ────────────────────────────
+
+
+def test_sizer_keeps_short_positions_short():
+    from ..prop_firms import PropFirmAccountState, PropFirmAwareSizer, WParamCalibrator
+
+    idx = pd.date_range("2025-03-03", periods=4, freq="h")
+    events = pd.DataFrame({"t1": idx + pd.Timedelta(minutes=30)}, index=idx)
+    prob = pd.Series([0.75, 0.75, 0.40, 0.75], index=idx)
+    side = pd.Series([1, -1, 1, -1], index=idx)
+    state = PropFirmAccountState(100_000, Phase.CHALLENGE_PHASE_1, FUNDEDNEXT_STELLAR_2STEP)
+    out = PropFirmAwareSizer(WParamCalibrator()).size(events=events, prob=prob, pred=side, state=state,
+                                                       average_active=False)
+    size = out["final_size"]
+    assert size.iloc[0] > 0 and size.iloc[1] < 0          # confident long and short
+    assert size.iloc[1] == pytest.approx(-size.iloc[0])   # same confidence, same magnitude
+    assert size.iloc[2] == 0                              # below 0.5: no edge, no position
+    assert (out["sigmoid_scale"] >= 0).all()

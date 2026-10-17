@@ -398,8 +398,10 @@ class PropFirmAwareSizer:
             )
         )
 
+        # A magnitude modifier: the side comes from stage 1 alone. Left signed, it
+        # multiplies a short signal's sign by itself and turns every short long.
         sigmoid_scale = pd.Series(
-            [bet_size_sigmoid(w_param, float(s)) for s in stage1],
+            [abs(bet_size_sigmoid(w_param, float(s))) for s in stage1],
             index=stage1.index,
         )
 
