@@ -11,11 +11,11 @@ Architecture (four-phase)
   Phase 2 — Assemble:   Recombine per-split OOF predictions into φ[N, k]
                           backtest paths via recombine_test_predictions().
 
-  Phase 2.5 — Calibrate: Optionally fit an isotonic or Platt calibration map
-                          on the pooled OOF predictions and apply it to each
-                          path.  This replaces CalibratorCV's internal CV loop
-                          while using the same OOF predictions that CPCV
-                          already produced.
+  Phase 2.5 — Calibrate: Optionally calibrate the path predictions with an
+                          isotonic or Platt map, cross-fitted by CPCV group:
+                          each group's predictions go through a map fit on
+                          the other groups' predictions and labels, so no
+                          prediction is calibrated with its own label.
 
   Phase 3 — Simulate:   Run a bar-by-bar P&L simulation on each assembled
                           (and optionally calibrated) path with a fresh
@@ -42,6 +42,7 @@ from sklearn.base import clone
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 
+from ..backtest_statistics.performance_analysis import get_annualization_factors
 from ..cross_validation.combinatorial import CombinatorialPurgedCV
 from ..prop_firms import (
     FUNDEDNEXT_STELLAR_2STEP,
@@ -183,11 +184,13 @@ def _fit_calibrator(
     method: str,
 ) -> IsotonicRegression | LogisticRegression:
     """
-    Fit a calibration map on pooled OOF predictions from all paths.
+    Fit a calibration map on OOF predictions averaged across paths.
 
-    Each observation appears in exactly one path, so pooling all path
-    predictions produces a full-length OOF probability array suitable
-    for fitting the calibration map without data leakage.
+    recombine_test_predictions puts every observation in every path, so the
+    average is a mean of several predictions and less dispersed than any one
+    path's. A map fit this way has also seen every label, so it must not be
+    applied back to these observations: use it only for new predictions, and
+    calibrate the paths themselves with _calibrate_paths_crossfit.
 
     Parameters
     ----------
@@ -202,10 +205,7 @@ def _fit_calibrator(
     -------
     calibrator : fitted IsotonicRegression or LogisticRegression
     """
-    # Pool: average across paths at each observation.
-    # recombine_test_predictions returns one array per path, each of length
-    # n_observations.  At each index the observation appeared OOS in exactly
-    # one path, so averaging recovers the single OOF prediction per bar.
+    # Average across paths at each observation (one column passes through unchanged)
     stacked = np.column_stack(path_predictions)  # (n_obs, n_paths)
     pooled = np.nanmean(stacked, axis=1)
 
@@ -223,6 +223,56 @@ def _fit_calibrator(
         raise ValueError(f"Unknown calibration method: {method!r}. Use 'isotonic' or 'platt'.")
 
     return cal
+
+
+def _calibrate_paths_crossfit(
+    path_predictions: list[np.ndarray],
+    y: pd.Series,
+    method: str,
+    groups: np.ndarray,
+) -> list[np.ndarray]:
+    """
+    Cross-fitted calibration of every path's predictions.
+
+    A map fit on pooled predictions and every label, then applied to those same
+    observations, has seen the labels it is scored on. Here the map applied to
+    group ``g`` is fit only on observations outside ``g`` (their predictions on
+    every path, with their labels), then applied to group ``g`` on every path.
+
+    Parameters
+    ----------
+    path_predictions : list of np.ndarray
+        Raw OOF probabilities per path, each of length n_observations.
+    y : pd.Series
+        True labels aligned with X.
+    method : str
+        'isotonic' or 'platt'.
+    groups : np.ndarray
+        CPCV group (fold) id of each observation, positionally aligned with y.
+
+    Returns
+    -------
+    list of np.ndarray
+        Calibrated predictions per path.
+    """
+    stacked = np.column_stack(path_predictions)  # (n_obs, n_paths)
+    groups = np.asarray(groups)
+    if len(groups) != stacked.shape[0]:
+        raise ValueError(f"groups has {len(groups)} entries for {stacked.shape[0]} observations")
+    y_arr = np.asarray(y, dtype=int)
+    out = np.full_like(stacked, np.nan, dtype=float)
+    for g in np.unique(groups):
+        held = groups == g
+        p_fit = stacked[~held].ravel()
+        y_fit = np.repeat(y_arr[~held], stacked.shape[1])
+        ok = ~np.isnan(p_fit)
+        cal = _fit_calibrator([p_fit[ok]], pd.Series(y_fit[ok]), method)
+        block = stacked[held]
+        finite = ~np.isnan(block)
+        cal_block = np.full_like(block, np.nan, dtype=float)
+        cal_block[finite] = _apply_calibrator(block[finite], cal, method)
+        out[held] = cal_block
+    return [out[:, j] for j in range(out.shape[1])]
 
 
 def _apply_calibrator(
@@ -414,8 +464,9 @@ def _simulate_path(
     equity_curve = pd.Series(equity_values, index=px.index[: len(equity_values)])
     returns = equity_curve.pct_change().fillna(0.0)
 
-    # Path metrics
-    sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() > 1e-9 else 0.0
+    # Path metrics. Bars are rarely daily, so annualize from the bar index, not sqrt(252)
+    ann_factor, _ = get_annualization_factors(data_index=pd.DatetimeIndex(equity_curve.index))
+    sharpe = returns.mean() / returns.std() * ann_factor if returns.std() > 1e-9 else 0.0
 
     rolling_max = equity_curve.cummax()
     drawdown = (equity_curve - rolling_max) / rolling_max
@@ -527,7 +578,7 @@ class CPCVDynamicBacktest:
     ... )
     >>> backtest.run(X=X, y=y, events=events, sample_weight=sw)
     >>> backtest.distribution_report()
-    >>> backtest.pbo_audit(n_folds=8)
+    >>> backtest.pbo_audit(trial_returns, n_folds=8)  # time x trial OOF returns
     >>> backtest.plot_equity_distribution()
     """
 
@@ -610,14 +661,16 @@ class CPCVDynamicBacktest:
 
         # ── Phase 2: Recombine into φ backtest paths ────────────────────
         path_predictions = self.cv_gen.recombine_test_predictions(split_predictions)
+        path_predictions_raw = path_predictions
 
         # ── Phase 2.5: Calibrate (optional) ─────────────────────────────
         if self.calibration_method is not None:
-            self.calibrator_ = _fit_calibrator(path_predictions, y, self.calibration_method)
-            path_predictions = [
-                _apply_calibrator(preds, self.calibrator_, self.calibration_method)
-                for preds in path_predictions
-            ]
+            # Paths are calibrated cross-fitted by group. The map on all the data is
+            # kept only for calibrating new, unseen predictions.
+            path_predictions = _calibrate_paths_crossfit(
+                path_predictions, y, self.calibration_method, self.cv_gen._fold_index_num
+            )
+            self.calibrator_ = _fit_calibrator(path_predictions_raw, y, self.calibration_method)
 
         # ── Phase 3: Simulate each assembled path ───────────────────────
         self.results_ = [
@@ -684,42 +737,43 @@ class CPCVDynamicBacktest:
 
         return df
 
-    def pbo_audit(self, n_folds: int = 8) -> float:
+    def pbo_audit(self, trial_returns: pd.DataFrame | None = None, n_folds: int = 8) -> float:
         """
-        Compute the Probability of Backtest Overfitting (CSCV) from path returns.
+        Probability of Backtest Overfitting (CSCV) across competing configurations.
+
+        PBO asks how often the in-sample winner among competing configurations
+        falls below the out-of-sample median. The CPCV paths of this one
+        configuration are not competing configurations, so they cannot answer
+        it. Pass the family's trials instead: a time x trial matrix of each
+        trial's out-of-fold strategy returns, built with the same sizing rule.
 
         Parameters
         ----------
+        trial_returns : pd.DataFrame, shape (T, n_trials)
+            Per-period strategy returns of each competing trial.
         n_folds : int
-            Number of subsets S for CSCV (typically 8-16).
+            Number of subsets S for CSCV (even, typically 8-16).
 
         Returns
         -------
         float
             PBO in [0, 1].
         """
-        try:
-            from ..cross_validation.pbo import compute_pbo
-        except ImportError:
-            raise ImportError(
-                "compute_pbo not found. Ensure the Unified Validation Pipeline "
-                "module is installed in afml.cross_validation.pbo."
+        from ..cross_validation.pbo import compute_pbo
+
+        if trial_returns is None:
+            raise ValueError(
+                "pbo_audit needs trial_returns: the paths of one configuration are not "
+                "competing configurations, so PBO across them measures no selection. "
+                "Pass a (time x trial) matrix of each trial's OOF strategy returns."
             )
+        if trial_returns.shape[1] < 2:
+            raise ValueError("PBO needs at least two competing trials")
 
-        if not self.results_:
-            raise RuntimeError("Call run() before pbo_audit().")
-
-        returns_matrix = pd.concat(
-            [r.returns.rename(r.path_id) for r in self.results_],
-            axis=1,
-        ).fillna(0.0)
-
+        returns_matrix = trial_returns.sort_index().fillna(0.0)
         t1_neutral = pd.Series(returns_matrix.index, index=returns_matrix.index)
-
         result = compute_pbo(returns_matrix, t1=t1_neutral, n_folds=n_folds)
-        pbo = result["pbo"]
-        print(f"\n  PBO (CSCV, S={n_folds}): {pbo:.4f}")
-        return pbo
+        return float(result["pbo"])
 
     def plot_equity_distribution(
         self,

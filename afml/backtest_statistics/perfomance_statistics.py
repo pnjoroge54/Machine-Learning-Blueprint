@@ -399,6 +399,62 @@ def deflated_sharpe_ratio(
     return deflated_sr
 
 
+def deflated_sharpe_from_metrics(
+    metrics: dict,
+    periods_per_year: float,
+    number_of_returns: int,
+    sr_std_annualized: float,
+    n_trials: float,
+    benchmark_out: bool = False,
+) -> float:
+    """
+    Deflated Sharpe ratio from the output of ``calculate_performance_metrics``.
+
+    ``deflated_sharpe_ratio`` and ``probabilistic_sharpe_ratio`` expect a
+    per-observation Sharpe ratio and raw kurtosis (3 for a normal distribution).
+    ``calculate_performance_metrics`` reports an annualized Sharpe ratio and
+    SciPy's excess kurtosis (0 for a normal distribution). Passed straight
+    through, both overstate the DSR. This adapter de-annualizes the observed
+    Sharpe and the cross-trial Sharpe dispersion and adds 3 to the kurtosis;
+    every DSR computed from performance metrics should go through it.
+
+    :param metrics: (dict) Output of calculate_performance_metrics, with
+        ``sharpe_ratio`` (annualized), ``skewness`` and ``kurtosis`` (excess).
+    :param periods_per_year: (float) Periods per year used to annualize, from
+        get_annualization_factors.
+    :param number_of_returns: (int) Number of returns behind the Sharpe ratio.
+    :param sr_std_annualized: (float) Standard deviation of the annualized Sharpe
+        ratios across the trials of the family.
+    :param n_trials: (float) Number of independent trials, ideally the effective
+        trial count.
+    :param benchmark_out: (bool) Return the per-period expected maximum Sharpe
+        (the deflation benchmark) instead of the DSR.
+    :return: (float) Deflated Sharpe ratio, or the benchmark.
+    """
+    scale = np.sqrt(periods_per_year)
+    observed_sr = float(metrics["sharpe_ratio"]) / scale
+    skewness = float(metrics.get("skewness", 0.0))
+    kurtosis_raw = float(metrics.get("kurtosis", 0.0)) + 3.0
+    sr_std = float(sr_std_annualized) / scale
+    if n_trials <= 1:
+        # A single trial has no selection to deflate for: test against zero
+        benchmark = 0.0
+        if benchmark_out:
+            return benchmark
+        return probabilistic_sharpe_ratio(
+            observed_sr, benchmark, number_of_returns, skewness, kurtosis_raw
+        )
+    return deflated_sharpe_ratio(
+        observed_sr,
+        [sr_std, n_trials],
+        number_of_returns,
+        skewness,
+        kurtosis_raw,
+        estimates_param=True,
+        benchmark_out=benchmark_out,
+    )
+
+
 def minimum_track_record_length(
     observed_sr: float,
     benchmark_sr: float,

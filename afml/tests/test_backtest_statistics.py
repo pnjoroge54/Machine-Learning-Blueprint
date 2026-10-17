@@ -8,6 +8,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from ..backtest_statistics.perfomance_statistics import (
     all_bets_concentration,
@@ -271,3 +272,53 @@ class TestBacktestStatistics(unittest.TestCase):
         )
 
         self.assertAlmostEqual(result_min_track_rec, 228.73497, delta=1e-4)
+
+
+# ── Defect 5: DSR inputs must be per-period Sharpe and raw kurtosis ──────────
+
+
+def _metrics_for(returns, index):
+    from afml.backtest_statistics.performance_analysis import calculate_performance_metrics
+
+    return calculate_performance_metrics(returns, index)
+
+
+def test_dsr_adapter_deannualizes_and_uses_raw_kurtosis():
+    from scipy.stats import kurtosis as sp_kurtosis
+    from scipy.stats import skew as sp_skew
+
+    from afml.backtest_statistics import deflated_sharpe_from_metrics, deflated_sharpe_ratio
+    from afml.backtest_statistics.performance_analysis import get_annualization_factors
+
+    rng = np.random.default_rng(0)
+    index = pd.date_range("2024-01-01", periods=2000, freq="h")
+    returns = pd.Series(rng.normal(2e-4, 2e-3, len(index)), index=index)
+    metrics = _metrics_for(returns, index)
+    _, ppy = get_annualization_factors(data_index=index)
+    sr_std_ann, n_trials = 0.8, 20
+
+    dsr = deflated_sharpe_from_metrics(metrics, ppy, len(returns), sr_std_ann, n_trials)
+    expected = deflated_sharpe_ratio(
+        returns.mean() / returns.std(),
+        [sr_std_ann / np.sqrt(ppy), n_trials],
+        len(returns),
+        sp_skew(returns),
+        sp_kurtosis(returns, fisher=False),
+        estimates_param=True,
+    )
+    assert dsr == pytest.approx(expected, rel=1e-6)
+
+    # The defect: annualized Sharpe and excess kurtosis passed straight through give
+    # a wrong answer (here the variance term goes negative and the DSR is NaN)
+    with pytest.warns(UserWarning):
+        naive = deflated_sharpe_ratio(metrics["sharpe_ratio"], [sr_std_ann, n_trials], len(returns),
+                                      metrics["skewness"], metrics["kurtosis"], estimates_param=True)
+    assert np.isnan(naive) or naive > dsr
+
+
+def test_dsr_adapter_with_one_trial_tests_against_zero():
+    from afml.backtest_statistics import deflated_sharpe_from_metrics, probabilistic_sharpe_ratio
+
+    metrics = {"sharpe_ratio": 1.0, "skewness": 0.0, "kurtosis": 0.0}
+    got = deflated_sharpe_from_metrics(metrics, 252, 500, sr_std_annualized=0.5, n_trials=1)
+    assert got == pytest.approx(probabilistic_sharpe_ratio(1.0 / np.sqrt(252), 0.0, 500, 0.0, 3.0))

@@ -158,3 +158,106 @@ def test_hit_target_reads_the_rule_set(rules, hit):
     res, _ = _run(prices, sizes, cfg)
     assert res.final_balance == pytest.approx(cfg.initial_balance * 1.09, rel=1e-6)
     assert res.hit_target is hit  # FundedNext phase 1 target 8%, FTMO 10%
+
+
+# ── Defect 2: calibration must not see the labels it is applied to ───────────
+
+
+def _noise_paths(n=400, n_paths=3, n_groups=8, seed=0):
+    rng = np.random.default_rng(seed)
+    groups = np.repeat(np.arange(n_groups), n // n_groups)
+    y = pd.Series(rng.integers(0, 2, n))
+    paths = [rng.uniform(0, 1, n) for _ in range(n_paths)]
+    return paths, y, groups
+
+
+@pytest.mark.parametrize("method", ["isotonic", "platt"])
+def test_crossfit_calibration_ignores_each_groups_own_labels(method):
+    from ..backtester.cpcv_dynamic_backtest import _calibrate_paths_crossfit
+
+    paths, y, groups = _noise_paths()
+    flipped = y.copy()
+    held = groups == 3
+    flipped[held] = 1 - flipped[held]
+    a = np.column_stack(_calibrate_paths_crossfit(paths, y, method, groups))
+    b = np.column_stack(_calibrate_paths_crossfit(paths, flipped, method, groups))
+    np.testing.assert_allclose(a[held], b[held])
+    assert not np.allclose(a[~held], b[~held])  # other groups do learn from group 3
+
+
+def test_pooled_calibration_leaks_labels():
+    """The old Phase 2.5: one map on every label, applied back to the same rows."""
+    from ..backtester.cpcv_dynamic_backtest import _apply_calibrator, _fit_calibrator
+
+    paths, y, groups = _noise_paths()
+    flipped = y.copy()
+    held = groups == 3
+    flipped[held] = 1 - flipped[held]
+    old = [_apply_calibrator(paths[0], _fit_calibrator(paths, lab, "isotonic"), "isotonic")
+           for lab in (y, flipped)]
+    assert not np.allclose(old[0][held], old[1][held])
+
+
+def test_backtest_run_calibrates_paths_cross_fitted():
+    from ..backtester.cpcv_dynamic_backtest import CPCVDynamicBacktest
+    from ..cross_validation.combinatorial import CombinatorialPurgedCV
+    from sklearn.linear_model import LogisticRegression
+
+    prices = _bars(n=240, vol=0.0005)
+    idx = prices.index
+    rng = np.random.default_rng(1)
+    X = pd.DataFrame(rng.normal(size=(len(idx), 3)), index=idx, columns=list("abc"))
+    y = pd.Series(rng.integers(0, 2, len(idx)), index=idx)
+    events = pd.DataFrame({"t1": idx + pd.Timedelta(hours=2)}, index=idx)
+    cv = CombinatorialPurgedCV(n_folds=6, n_test_folds=2, t1=events["t1"], pct_embargo=0.0)
+    bt = CPCVDynamicBacktest(cv, LogisticRegression(), _FixedSizer(pd.Series(0.0, index=idx)),
+                             BacktestConfig(lot_size=1.0), prices, pd.Series(1, index=idx),
+                             calibration_method="isotonic")
+    bt.run(X, y, events)
+    assert len(bt.results_) == cv.n_test_paths and bt.calibrator_ is not None
+
+
+# ── Defect 3: PBO is a statement about competing configurations ──────────────
+
+
+def _trial_returns(n_trials=10, n=800, edge=0.0, seed=0):
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    df = pd.DataFrame(rng.normal(0, 1e-3, size=(n, n_trials)), index=idx,
+                      columns=[f"t{i}" for i in range(n_trials)])
+    df["t0"] += edge
+    return df
+
+
+def _ran_backtest():
+    from ..backtester.cpcv_dynamic_backtest import CPCVDynamicBacktest
+
+    bt = CPCVDynamicBacktest.__new__(CPCVDynamicBacktest)
+    bt.results_ = [object()]  # a completed run
+    return bt
+
+
+def test_pbo_audit_refuses_the_paths_of_one_configuration():
+    with pytest.raises(ValueError, match="competing configurations"):
+        _ran_backtest().pbo_audit()
+
+
+def test_pbo_across_trials_separates_noise_from_a_real_edge():
+    bt = _ran_backtest()
+    noise = bt.pbo_audit(_trial_returns(edge=0.0), n_folds=8)
+    real = bt.pbo_audit(_trial_returns(edge=5e-4), n_folds=8)
+    assert 0.2 <= noise <= 0.8   # selection among noise: the winner is a coin flip OOS
+    assert real < 0.1
+
+
+# ── Defect 4: annualize from the bar frequency, not sqrt(252) ────────────────
+
+
+@pytest.mark.parametrize("freq, periods", [("h", 252 * 24), ("15min", 252 * 96), ("D", 252)])
+def test_path_sharpe_is_annualized_from_the_bar_index(freq, periods):
+    prices = _bars(n=200, vol=0.0005)
+    prices.index = pd.date_range("2025-03-03", periods=len(prices), freq=freq)
+    sizes = _alternating(prices.index)
+    res, _ = _run(prices, sizes, BacktestConfig(lot_size=1.0, commission_per_lot=0.0, slippage_pips=0.0))
+    r = res.returns
+    assert res.sharpe == pytest.approx(r.mean() / r.std() * np.sqrt(periods), rel=1e-9)
