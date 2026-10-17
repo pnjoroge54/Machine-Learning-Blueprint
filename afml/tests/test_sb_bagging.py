@@ -24,8 +24,8 @@ from ..ensemble.sb_bagging import (
     SequentiallyBootstrappedBaggingRegressor,
 )
 from ..filters.filters import cusum_filter
-from ..labeling.labeling import add_vertical_barrier, get_bins, get_events
-from ..sampling.bootstrapping import get_ind_mat_label_uniqueness, get_ind_matrix
+from ..labeling.triple_barrier import add_vertical_barrier, get_bins, get_events
+from ..sampling.bootstrapping import get_ind_matrix
 from ..util.volatility import get_daily_vol
 
 # pylint: disable=invalid-name
@@ -41,6 +41,13 @@ def _generate_label_with_prob(x, prob, random_state=np.random.RandomState(1)):
     return int(not x)
 
 
+def _label_uniqueness(ind_mat):
+    """Uniqueness of each label at each bar (labels x bars), AFML snippet 4.4."""
+    ind_mat = np.asarray(ind_mat, dtype=float)
+    concurrency = ind_mat.sum(axis=1)
+    return np.divide(ind_mat.T, concurrency, out=np.zeros_like(ind_mat.T), where=concurrency != 0)
+
+
 def _get_synthetic_samples(ind_mat, good_samples_thresh, bad_samples_thresh):
     """
     Get samples with uniqueness either > good_samples_thresh or uniqueness < bad_samples_thresh
@@ -48,7 +55,7 @@ def _get_synthetic_samples(ind_mat, good_samples_thresh, bad_samples_thresh):
     # Get mix of samples where some of them are extremely non-overlapping, the other one are highly overlapping
     i = 0
     unique_samples = []
-    for label in get_ind_mat_label_uniqueness(ind_mat):
+    for label in _label_uniqueness(ind_mat):
         if (
             np.mean(label[label > 0]) > good_samples_thresh
             or np.mean(label[label > 0]) < bad_samples_thresh
@@ -94,7 +101,7 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         daily_vol = get_daily_vol(close=self.data["close"], lookback=50) * 0.5
         cusum_events = cusum_filter(self.data["close"], threshold=0.005)
         vertical_barriers = add_vertical_barrier(
-            t_events=cusum_events, close=self.data["close"], num_hours=2
+            t_events=cusum_events, close=self.data["close"], hours=2
         )
         meta_labeled_events = get_events(
             close=self.data["close"],
@@ -102,16 +109,14 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
             pt_sl=[1, 4],
             target=daily_vol,
             min_ret=5e-5,
-            num_threads=3,
             vertical_barrier_times=vertical_barriers,
             side_prediction=self.data["side"],
-            verbose=False,
         )
         meta_labeled_events.dropna(inplace=True)
         labels = get_bins(meta_labeled_events, self.data["close"])
 
         # Generate data set which shows the power of SB Bagging vs Standard Bagging
-        ind_mat = get_ind_matrix(meta_labeled_events.t1, self.data.close)
+        ind_mat = get_ind_matrix(meta_labeled_events.t1, self.data.close.index)
 
         unique_samples = _get_synthetic_samples(ind_mat, 0.5, 0.1)
 
@@ -122,20 +127,23 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         X.loc[labels.index, "y"] = labels.bin
 
         # Generate features (some of them are informative, others are just noise)
-        for index, value in X.y.iteritems():
+        for index, value in X.y.items():
             X.loc[index, "label_prob_0.6"] = _generate_label_with_prob(value, 0.6)
             X.loc[index, "label_prob_0.5"] = _generate_label_with_prob(value, 0.5)
             X.loc[index, "label_prob_0.3"] = _generate_label_with_prob(value, 0.3)
             X.loc[index, "label_prob_0.2"] = _generate_label_with_prob(value, 0.2)
             X.loc[index, "label_prob_0.1"] = _generate_label_with_prob(value, 0.1)
 
-        features = ["label_prob_0.6", "label_prob_0.2"]  # Two super-informative features
+        features = [
+            "label_prob_0.6",
+            "label_prob_0.2",
+        ]  # Two super-informative features
         for prob in [0.5, 0.3, 0.2, 0.1]:
             for window in [2, 5, 10]:
-                X["label_prob_{}_sma_{}".format(prob, window)] = (
-                    X["label_prob_{}".format(prob)].rolling(window=window).mean()
+                X[f"label_prob_{prob}_sma_{window}"] = (
+                    X[f"label_prob_{prob}"].rolling(window=window).mean()
                 )
-                features.append("label_prob_{}_sma_{}".format(prob, window))
+                features.append(f"label_prob_{prob}_sma_{window}")
         X.dropna(inplace=True)
         y = X.pop("y")
 
@@ -157,9 +165,9 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         """
         clf = KNeighborsClassifier()
         sb_clf = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             samples_info_sets=self.samples_info_sets,
-            price_bars=self.price_bars_trim,
+            price_bars_index=self.price_bars_trim.index,
         )
         sb_clf.fit(self.X_train, self.y_train_clf)
         self.assertTrue(
@@ -174,11 +182,11 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         clf = LinearSVC()
 
         sb_clf = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             max_features=0.2,
             n_estimators=2,
             samples_info_sets=self.samples_info_sets,
-            price_bars=self.price_bars_trim,
+            price_bars_index=self.price_bars_trim.index,
             oob_score=True,
             random_state=1,
             bootstrap_features=True,
@@ -205,11 +213,11 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
 
         sb_clf = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             max_features=0.2,
             n_estimators=2,
             samples_info_sets=self.samples_info_sets,
-            price_bars=self.price_bars_trim,
+            price_bars_index=self.price_bars_trim.index,
             oob_score=True,
             random_state=1,
             bootstrap_features=True,
@@ -217,7 +225,9 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
         with self.assertWarns(UserWarning):
             sb_clf.fit(
-                self.X_train, self.y_train_clf, sample_weight=np.ones((self.X_train.shape[0],))
+                self.X_train,
+                self.y_train_clf,
+                sample_weight=np.ones((self.X_train.shape[0],)),
             )
         self.assertTrue(
             (sb_clf.predict(self.X_train)[:10] == np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0])).all
@@ -236,11 +246,11 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         )
 
         sb_clf = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             max_features=7,
             n_estimators=2,
             samples_info_sets=self.samples_info_sets,
-            price_bars=self.price_bars_trim,
+            price_bars_index=self.price_bars_trim.index,
             oob_score=False,
             random_state=1,
             bootstrap_features=True,
@@ -278,41 +288,43 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         """
         clf = KNeighborsClassifier()
         bagging_clf_1 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf, samples_info_sets=self.samples_info_sets, price_bars=self.data
+            estimator=clf,
+            samples_info_sets=self.samples_info_sets,
+            price_bars=self.data,
         )
         bagging_clf_2 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             samples_info_sets=self.samples_info_sets,
             price_bars=self.data,
             max_samples=2000000,
         )
         bagging_clf_3 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             samples_info_sets=self.samples_info_sets,
             price_bars=self.data,
             max_features="20",
         )
         bagging_clf_4 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             samples_info_sets=self.samples_info_sets,
             price_bars=self.data,
             max_features=2000000,
         )
         bagging_clf_5 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             samples_info_sets=self.samples_info_sets,
             price_bars=self.data,
             oob_score=True,
             warm_start=True,
         )
         bagging_clf_6 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             samples_info_sets=self.samples_info_sets,
             price_bars=self.data,
             warm_start=True,
         )
         bagging_clf_7 = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf,
+            estimator=clf,
             samples_info_sets=self.samples_info_sets,
             price_bars=self.data,
             warm_start=True,
@@ -371,15 +383,18 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
 
         # Init classifiers
         clf_base = RandomForestClassifier(
-            n_estimators=1, criterion="entropy", bootstrap=False, class_weight="balanced_subsample"
+            n_estimators=1,
+            criterion="entropy",
+            bootstrap=False,
+            class_weight="balanced_subsample",
         )
 
         sb_clf = SequentiallyBootstrappedBaggingClassifier(
-            base_estimator=clf_base,
+            estimator=clf_base,
             max_features=1.0,
             n_estimators=100,
             samples_info_sets=self.samples_info_sets,
-            price_bars=self.price_bars_trim,
+            price_bars_index=self.price_bars_trim.index,
             oob_score=True,
             random_state=1,
         )
@@ -410,20 +425,20 @@ class TestSequentiallyBootstrappedBagging(unittest.TestCase):
         # Init regressors
         reg = RandomForestRegressor(n_estimators=1, bootstrap=False)
         sb_reg = SequentiallyBootstrappedBaggingRegressor(
-            base_estimator=reg,
+            estimator=reg,
             max_features=1.0,
             n_estimators=100,
             samples_info_sets=self.samples_info_sets,
-            price_bars=self.price_bars_trim,
+            price_bars_index=self.price_bars_trim.index,
             oob_score=True,
             random_state=1,
         )
         sb_reg_1 = SequentiallyBootstrappedBaggingRegressor(
-            base_estimator=reg,
+            estimator=reg,
             max_features=1.0,
             n_estimators=1,
             samples_info_sets=self.samples_info_sets,
-            price_bars=self.price_bars_trim,
+            price_bars_index=self.price_bars_trim.index,
             oob_score=True,
             random_state=1,
         )

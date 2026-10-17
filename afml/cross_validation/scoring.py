@@ -54,7 +54,7 @@ def probability_weighted_accuracy(y_true, y_pred, sample_weight=None, labels=Non
     # 5) Shape checks
     if y_pred.ndim != 2 or y_pred.shape[1] != n_classes:
         raise ValueError(
-            f"y_pred must be shape (n_samples, n_classes={n_classes}), " f"but got {y_pred.shape}"
+            f"y_pred must be shape (n_samples, n_classes={n_classes}), but got {y_pred.shape}"
         )
 
     if not np.all(np.isin(y_true, classes)):

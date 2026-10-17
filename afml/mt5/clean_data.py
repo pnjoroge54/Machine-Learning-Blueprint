@@ -3,7 +3,6 @@ Clean Raw MetaTrader 5 Data and Save.
 """
 
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 from loguru import logger
@@ -11,7 +10,7 @@ from loguru import logger
 
 def clean_tick_data(
     df: pd.DataFrame, timezone: str = "UTC", min_spread: float = 1e-5
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """
     Clean and validate Forex tick data with comprehensive quality checks.
 

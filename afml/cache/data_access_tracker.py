@@ -7,7 +7,6 @@ import inspect
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -22,7 +21,7 @@ class DataAccessTracker:
     iterative optimization.
     """
 
-    def __init__(self, log_file: Optional[Path] = None):
+    def __init__(self, log_file: Path | None = None):
         """
         Initialize data access tracker.
 
@@ -35,7 +34,7 @@ class DataAccessTracker:
         self.log_file = log_file or CACHE_DIRS["base"] / "data_access_log.csv"
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        self.access_log: List[Dict] = []
+        self.access_log: list[dict] = []
         self._load_existing_log()
 
     def _load_existing_log(self):
@@ -55,7 +54,7 @@ class DataAccessTracker:
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
         purpose: str,
-        data_shape: Optional[Tuple[int, int]] = None,
+        data_shape: tuple[int, int] | None = None,
     ):
         """
         Log a dataset access with metadata.
@@ -83,8 +82,7 @@ class DataAccessTracker:
         try:
             self._save_log_immediate()  # New helper method
             logger.debug(
-                f"Logged & saved access: {dataset_name} "
-                f"[{start_date} to {end_date}] for {purpose}"
+                f"Logged & saved access: {dataset_name} [{start_date} to {end_date}] for {purpose}"
             )
         except Exception as e:
             logger.error(f"Failed to save access log: {e}")
@@ -120,8 +118,8 @@ class DataAccessTracker:
             logger.error(f"Failed to save access log: {e}")
 
     def analyze_contamination(
-        self, dataset_name: str, exclude_purposes: Optional[List[str]] = None
-    ) -> Tuple[int, str, List[Dict]]:
+        self, dataset_name: str, exclude_purposes: list[str] | None = None
+    ) -> tuple[int, str, list[dict]]:
         """
         Analyze how many times a dataset was accessed.
 
@@ -214,7 +212,7 @@ class DataAccessTracker:
             print(f"\nDataset: {row['dataset']}")
             print(f"  Warning Level: {row['warning_level']}")
             print(f"  Total Accesses: {row['total_accesses']}")
-            print(f"  Breakdown:")
+            print("  Breakdown:")
             print(f"    - Train: {row['train_accesses']}")
             print(f"    - Test: {row['test_accesses']} {'⚠️' if row['test_accesses'] > 2 else ''}")
             print(
@@ -225,8 +223,8 @@ class DataAccessTracker:
             print(f"  Last Access: {row['last_access']}")
 
             if row["warning_level"] in ["WARNING", "CONTAMINATED"]:
-                print(f"\n  ⚠️  WARNING: This dataset may be contaminated!")
-                print(f"  ⚠️  Test/validation results on this data are unreliable.")
+                print("\n  ⚠️  WARNING: This dataset may be contaminated!")
+                print("  ⚠️  Test/validation results on this data are unreliable.")
 
         print("\n" + "=" * 80)
 
@@ -293,7 +291,7 @@ class DataAccessTracker:
 # Global instance and convenience functions
 # =============================================================================
 
-_global_tracker: Optional[DataAccessTracker] = None
+_global_tracker: DataAccessTracker | None = None
 
 
 def get_data_tracker() -> DataAccessTracker:
@@ -309,7 +307,7 @@ def log_data_access(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     purpose: str,
-    data_shape: Optional[Tuple[int, int]] = None,
+    data_shape: tuple[int, int] | None = None,
 ):
     """Convenience function to log data access."""
     tracker = get_data_tracker()
@@ -330,8 +328,8 @@ def clear_data_access_log():
 
 __all__ = [
     "DataAccessTracker",
+    "clear_data_access_log",
     "get_data_tracker",
     "log_data_access",
     "print_contamination_report",
-    "clear_data_access_log",
 ]

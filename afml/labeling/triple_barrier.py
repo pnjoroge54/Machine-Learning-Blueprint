@@ -15,6 +15,7 @@ from ..sampling.optimized_concurrent import (
     get_av_uniqueness_from_triple_barrier_optimized,
     get_num_conc_events_optimized,
 )
+from ..util.misc import optimize_dtypes
 
 # pylint: disable=invalid-name, too-many-arguments, too-many-locals, too-many-statements, too-many-branches
 
@@ -42,10 +43,10 @@ def apply_pt_sl_on_t1_optimized(close: pd.Series, events: pd.DataFrame, pt_sl: l
     t1_locs = close.index.get_indexer_for(events["t1"].values)
 
     # Convert pandas objects to NumPy arrays for Numba compatibility
-    close_val = close.values
+    close_val = close.to_numpy()
     t1_locs[t1_locs == -1] = len(close_val) - 1  # Handle NaT in t1
-    trgt_val = events["trgt"].values
-    side_val = events["side"].values
+    trgt_val = events["trgt"].to_numpy()
+    side_val = events["side"].to_numpy()
     pt_sl_arr = np.array(pt_sl)
 
     # 2. Call the Numba-jitted function
@@ -53,10 +54,13 @@ def apply_pt_sl_on_t1_optimized(close: pd.Series, events: pd.DataFrame, pt_sl: l
         close_val, event_locs, t1_locs, trgt_val, side_val, pt_sl_arr
     )
 
-    # 3. Process results: Convert integer locations back to timestamps
+    # 3. Process results: Convert integer locations back to timestamps.
+    # Initialize sl/pt with the close index's dtype so tz-aware barrier timestamps
+    # assign cleanly. A bare `pd.NaT` column is tz-naive and would coerce to object
+    # on assignment, which later breaks the `.min(axis=1)` reduction in get_events.
     out = events[["t1"]].copy()
-    out["sl"] = pd.NaT
-    out["pt"] = pd.NaT
+    out["sl"] = pd.Series(pd.NaT, index=out.index, dtype=close.index.dtype)
+    out["pt"] = pd.Series(pd.NaT, index=out.index, dtype=close.index.dtype)
 
     # Find where hits occurred (locs are not -1)
     sl_hit_mask = sl_hit_locs != -1
@@ -183,7 +187,7 @@ def get_events(
     # Create a new df with [v_barrier, target, side] and drop rows that are NA in target
     events = pd.concat({"t1": vertical_barrier_times, "trgt": target, "side": side}, axis=1)
     events = events.dropna(subset=["trgt"])
-    events[["pt", "sl"]] = np.full((events.shape[0], 2), pt_sl, dtype="int8")
+    events[["pt", "sl"]] = np.full((events.shape[0], 2), pt_sl, dtype="float32")
 
     # Apply Triple Barrier
     first_touch_dates = apply_pt_sl_on_t1_optimized(close, events, pt_sl)
@@ -313,8 +317,8 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
     Compute event's outcome (including side information, if provided).
     events is a DataFrame where:
 
-    Now the possible values for labels in out['bin'] are {0,1}, as opposed to whether to take the bet or pass,
-    a purely binary prediction. When the predicted label the previous feasible values {−1,0,1}.
+    Now the possible values for labels in out['bin'] are {0,1}, whether to take the bet or pass,
+    a purely binary prediction, as opposed to the previous feasible values {−1,0,1}.
     The ML algorithm will be trained to decide is 1, we can use the probability of this secondary prediction
     to derive the size of the bet, where the side (sign) of the position has been set by the primary model.
 
@@ -358,19 +362,18 @@ def get_bins(triple_barrier_events, close, vertical_barrier_zero=False):
 
     if vertical_barrier_zero:
         # Label 0 when vertical barrier reached
-        pt_sl = events[["pt", "sl"]].iloc[0].values
-        out_df["bin"] = barrier_touched(out_df["ret"].values, out_df["trgt"].values, pt_sl)
+        pt_sl = events[["pt", "sl"]].iloc[0].to_numpy()
+        out_df["bin"] = barrier_touched(out_df["ret"].to_numpy(), out_df["trgt"].to_numpy(), pt_sl)
     else:
         # Label is the sign of the return
-        out_df["bin"] = np.where(out_df["ret"] > 0, 1, -1).astype("int8")
+        out_df["bin"] = np.sign(out_df["ret"]).astype("int8")
 
     # Meta labeling: label incorrect events with a 0
     if "side" in events:
-        out_df.loc[out_df["ret"] <= 0, "bin"] = 0
-
-    # Add the side to the output. This is useful for when a meta label model must be fit
-    if "side" in triple_barrier_events.columns:
+        out_df.loc[out_df["ret"].values <= 0, "bin"] = 0
         out_df["side"] = events["side"].astype("int8")
+
+    out_df = optimize_dtypes(out_df)
 
     return out_df
 
@@ -500,6 +503,15 @@ def get_event_weights(triple_barrier_events: pd.DataFrame, close: pd.Series, ver
         - Requires helper functions: get_num_conc_events_optimized, get_av_uniqueness_from_triple_barrier_optimized, and get_weights_by_return_optimized.
     """
     events = triple_barrier_events.copy()
+
+    # Normalize datetime resolution to nanoseconds before weighting. Resampled
+    # time bars can carry a datetime64[us] index while t1 is datetime64[ns];
+    # mixing units silently collapses concurrency/uniqueness (every label looks
+    # open through the end of the series). For ns-native bars this is a no-op.
+    close = close.copy()
+    close.index = pd.DatetimeIndex(close.index).astype("datetime64[ns]")
+    events.index = pd.DatetimeIndex(events.index).astype("datetime64[ns]")
+    events["t1"] = events["t1"].astype("datetime64[ns]")
 
     # Estimate the uniqueness of a triple_barrier_events
     num_conc_events = get_num_conc_events_optimized(close.index, events["t1"], verbose)

@@ -1,17 +1,17 @@
-"""
-Various useful functions
-"""
+"""Various useful functions."""
 
 import functools
 import io
 import os
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime as dt
 from datetime import timedelta
 from itertools import product
 from pathlib import Path
-from typing import Callable, Literal, Optional, Tuple, Union
+from pprint import pprint
+from typing import Literal
 
 import holidays
 import nbformat as nbf
@@ -64,13 +64,12 @@ def _count_max_decimals_numba(values: np.ndarray, max_places: int = 10) -> int:
     for val in values:
         for i in range(max_places + 1):
             if np.isclose(val, round(val, i)):
-                if i > max_dec:
-                    max_dec = i
+                max_dec = max(max_dec, i)
                 break
     return max_dec
 
 
-def count_max_decimals(values: Union[pd.Series, np.ndarray], max_places: int = 10) -> int:
+def count_max_decimals(values: pd.Series | np.ndarray, max_places: int = 10) -> int:
     """
     Determine the maximum number of decimal places in a numeric array or pandas Series
     without using string-based operations.
@@ -126,7 +125,7 @@ class DataFrameFormatter:
     @staticmethod
     def to_timecode(
         mode: Literal["string", "object"] = "string",
-    ) -> Callable[[Union[int, float]], Union[str, timedelta]]:
+    ) -> Callable[[int | float], str | timedelta]:
         """
         Converts seconds to hh:mm:ss format or timedelta objects.
 
@@ -233,7 +232,6 @@ def log_column_changes(func):
     return wrapper
 
 
-@log_column_changes
 def flatten_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """
     Returns a copy of the DataFrame with flattened column names.
@@ -253,12 +251,11 @@ def flatten_column_names(df: pd.DataFrame) -> pd.DataFrame:
     >>> df_flat.columns
     Index(['value_mean', 'value_sum'], dtype='object')
     """
-    df_copy = df.copy()
-    df_copy.columns = [
+    columns = [
         "_".join(map(str, col)).strip() if isinstance(col, tuple) else str(col)
         for col in df.columns
     ]
-    return df_copy
+    return columns
 
 
 def value_counts_data(
@@ -298,7 +295,7 @@ def value_counts_data(
 # ---  Logging Utilities ---
 
 
-def log_performance(func):
+def log_performance(func, logger=None):
     """
     Decorator that logs the memory usage and execution time of a function.
 
@@ -329,6 +326,9 @@ def log_performance(func):
         elapsed = time.perf_counter() - start_time
         elapsed = timedelta(seconds=elapsed)
         mem_after = process.memory_info().rss / 1024**2
+
+        if logger is None:
+            from loguru import logger
         logger.info(
             f"'{func.__name__}' - Time: {elapsed}. Memory increment: {mem_after - mem_before:.2f} MB ({mem_before:.2f} MB -> {mem_after:.2f} MB)"
         )
@@ -337,7 +337,7 @@ def log_performance(func):
     return wrapper
 
 
-def log_df_info(df: pd.DataFrame):
+def log_df_info(df: pd.DataFrame, logger=None):
     """
     Logs the output of `df.info()` for a given DataFrame.
 
@@ -355,6 +355,9 @@ def log_df_info(df: pd.DataFrame):
     Data columns (total 4 columns):
      ...
     """
+    if logger is None:
+        from loguru import logger  # fallback
+
     buffer = io.StringIO()
     df.info(buf=buffer)
     info_str = buffer.getvalue()
@@ -422,10 +425,10 @@ def set_resampling_freq(timeframe: str):
 
 
 def date_conversion(
-    start_date: Union[str, dt, pd.Timestamp],
-    end_date: Union[str, dt, pd.Timestamp],
+    start_date: str | dt | pd.Timestamp,
+    end_date: str | dt | pd.Timestamp,
     default_tz: str = "UTC",
-) -> Optional[Tuple[pd.Timestamp, pd.Timestamp]]:
+) -> tuple[pd.Timestamp, pd.Timestamp] | None:
     """
     Validates start and end dates, ensuring they are timezone-aware and in correct order.
 
@@ -464,7 +467,7 @@ def date_conversion(
             return ts
 
         except Exception as e:
-            raise ValueError(f"Cannot parse {date_name} '{date_val}': {str(e)}")
+            raise ValueError(f"Cannot parse {date_name} '{date_val}': {e!s}")
 
     # Convert both dates
     start_ts = convert_single_date(start_date, "start_date")
@@ -654,6 +657,9 @@ def get_folder_size(path: str) -> float:
     return total_size / (1024**2)  # MB
 
 
+# --- Dictionary helpers ---
+
+
 def expand_params(params: dict) -> list[dict]:
     """
     Expands a dictionary of parameters with list values into a list of all combinations.
@@ -664,3 +670,125 @@ def expand_params(params: dict) -> list[dict]:
     values = [params[k] for k in keys]
     combos = product(*values)
     return [dict(zip(keys, combo)) for combo in combos]
+
+
+def dict_to_key(strategy="json"):
+    """
+    Returns a closure that converts dicts into hashable keys.
+
+    Parameters
+    ----------
+    strategy : str
+        "frozenset" -> unordered, hashable
+        "tuple"     -> ordered, deterministic
+        "json"      -> string serialization
+
+    Returns
+    -------
+    converter : function
+        A function that takes a dict and returns a hashable key.
+
+    Usage
+    -----
+    # Create a converter using the recommended 'tuple' strategy
+    keyify = dict_to_key("tuple")
+
+    # Example dictionary
+    inner = {"a": 1, "b": 2}
+
+    # Use the converted dict as a key in another dictionary
+    outer = {keyify(inner): "stored value"}
+
+    # Equivalent dicts (different insertion order) resolve to the same key
+    print(outer[keyify({"b": 2, "a": 1})])  # "stored value"
+
+    # Switching strategies:
+    # frozenset ignores order entirely
+    keyify_fs = dict_to_key("frozenset")
+    print(keyify_fs({"x": 1, "y": 2}))  # frozenset({('x', 1), ('y', 2)})
+
+    # json produces a human-readable string key
+    keyify_json = dict_to_key("json")
+    print(keyify_json({"x": 1, "y": 2}))  # '{"x": 1, "y": 2}'
+    """
+    import json
+
+    def converter(d):
+        if not isinstance(d, dict):
+            raise TypeError(f"Expected dict, got {type(d)}")
+
+        if strategy == "frozenset":
+            return frozenset(d.items())
+        elif strategy == "tuple":
+            return tuple(sorted(d.items()))
+        elif strategy == "json":
+            return json.dumps(d, sort_keys=True)
+        else:
+            raise ValueError(f"Unknown strategy: {strategy}")
+
+    return converter
+
+
+def detect_distributed_frameworks():
+    """Detect which distributed computing frameworks are currently active.
+
+    Checks for the presence and state of the most common distributed frameworks
+    in the current Python process: Dask (distributed client), Ray, PySpark,
+    and MPI (via mpi4py). No framework is started or modified by this call.
+
+    Returns:
+        dict[str, str]: A dictionary with framework names as keys and their
+            status as values. Possible statuses are:
+            - ``"active"`` : the framework is initialised and available.
+            - ``"inactive"`` : the framework is installed but not initialised.
+            - ``"not installed"`` : the framework is not importable.
+
+    Example:
+        >>> status = detect_distributed_frameworks()
+        >>> print(status)
+        {'dask': 'active', 'ray': 'not installed', 'spark': 'inactive', 'mpi': '1 procs'}
+    """
+    import importlib
+    import importlib.util
+    import sys
+
+    import dask.distributed
+
+    results = {}
+
+    # Dask
+    try:
+        dask.distributed.get_client()
+        results["dask"] = "active"
+    except ValueError:
+        results["dask"] = "inactive"
+
+    # Ray
+    try:
+        ray = importlib.import_module("ray")
+        results["ray"] = "active" if ray.is_initialized() else "inactive"
+    except ImportError:
+        results["ray"] = "not installed"
+
+    # PySpark
+    try:
+        pyspark = importlib.import_module("pyspark.sql")
+        spark = pyspark.SparkSession.getActiveSession()
+        results["spark"] = "active" if spark else "inactive"
+    except ImportError:
+        results["spark"] = "not installed"
+
+    # MPI. Importing mpi4py.MPI calls MPI_Init, which starts MPI and aborts the whole
+    # process when no MPI runtime is configured, so only inspect it when the caller
+    # has already imported it.
+    mpi = sys.modules.get("mpi4py.MPI")
+    if mpi is not None:
+        results["mpi"] = f"{mpi.COMM_WORLD.Get_size()} procs"
+    elif importlib.util.find_spec("mpi4py") is not None:
+        results["mpi"] = "inactive"
+    else:
+        results["mpi"] = "not installed"
+
+    pprint(results, sort_dicts=False)
+
+    return any(v not in ["inactive", "1 procs"] for v in results.values() if v != "not installed")

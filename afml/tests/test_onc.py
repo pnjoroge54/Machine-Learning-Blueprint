@@ -3,6 +3,7 @@ Test Optimal Number of Clusters algorithm
 """
 
 import unittest
+
 import pandas as pd
 from sklearn.datasets import load_breast_cancer
 
@@ -40,7 +41,9 @@ class TestOptimalNumberOfClusters(unittest.TestCase):
 
         _, clusters, _ = get_onc_clusters(pd.DataFrame(self.data).corr(), repeat=50)
         self.assertGreaterEqual(len(clusters.keys()), 5)  # Optimal number of clusters
-        self.assertTrue(self._check_if_in_cluster([11, 14, 18], clusters))  # Check clusters components
+        self.assertTrue(
+            self._check_if_in_cluster([11, 14, 18], clusters)
+        )  # Check clusters components
         self.assertTrue(self._check_if_in_cluster([0, 2, 3, 10, 12, 13, 20, 22, 23], clusters))
         self.assertTrue(self._check_if_in_cluster([5, 6, 7, 25, 26, 27], clusters))
 

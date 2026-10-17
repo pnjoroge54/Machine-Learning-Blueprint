@@ -11,19 +11,17 @@ from __future__ import annotations
 import functools
 import importlib
 import pkgutil
-from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
-import numba
 import numpy as np
 from numba.core.registry import CPUDispatcher  # type: ignore
 
 # Registry for function-name → (args_tuple, kwargs_dict)
-_NUMBA_DUMMY_ARGS: Dict[str, Tuple[Tuple[Any, ...], Dict[str, Any]]] = {}
+_NUMBA_DUMMY_ARGS: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
 
 
 def register_numba_dummy(
-    fn_name: str, args: Tuple[Any, ...], kwargs: Dict[str, Any] | None = None
+    fn_name: str, args: tuple[Any, ...], kwargs: dict[str, Any] | None = None
 ) -> None:
     """
     Register tiny dummy args to use when compiling a specific numba dispatcher.
@@ -36,12 +34,16 @@ def register_numba_dummy(
     _NUMBA_DUMMY_ARGS[fn_name] = (args, kwargs or {})
 
 
-def _default_dummy_for_dispatcher() -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+def _default_dummy_for_dispatcher() -> tuple[tuple[Any, ...], dict[str, Any]]:
     """
     Very small default dummy args commonly compatible with simple array-based signatures.
     Adjust or register explicit dummies for functions with different signatures.
     """
-    return (np.array([np.int64(0)]), np.array([np.int64(0)]), np.array([np.int64(0)])), {}
+    return (
+        np.array([np.int64(0)]),
+        np.array([np.int64(0)]),
+        np.array([np.int64(0)]),
+    ), {}
 
 
 def lazy_warmup(numba_dispatcher: CPUDispatcher):

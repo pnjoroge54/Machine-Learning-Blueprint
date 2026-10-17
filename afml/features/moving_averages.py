@@ -1,5 +1,4 @@
 from itertools import combinations
-from typing import List, Tuple, Union
 
 import pandas as pd
 import pandas_ta as ta
@@ -11,7 +10,7 @@ from matplotlib import pyplot as plt
 
 def calculate_ma_differences(
     close: pd.Series,
-    windows: Union[List, Tuple],
+    windows: list | tuple,
     drop: bool = False,
     threshold: float = 0.75,
     verbose: bool = False,
@@ -67,7 +66,7 @@ def calculate_ma_differences(
 
 def get_ma_crossovers(
     close: pd.Series,
-    windows: Union[List, Tuple],
+    windows: list | tuple,
     as_signal: bool = False,
     drop: bool = False,
     threshold: float = 0.75,

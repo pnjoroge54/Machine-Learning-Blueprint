@@ -32,7 +32,7 @@ def identify_structural_breaks(df, df0, pen=30, verbose=False):
     regime_features = create_regime_duration_features(structural_breaks, df.index)
 
     if verbose:
-        print(f"Breakpoint Dates:")
+        print("Breakpoint Dates:")
         for i, date in enumerate(breakpoint_dates.strftime("%d-%m-%Y"), 1):
             print(f"\t{i:2d}. {date}")
 
@@ -91,9 +91,7 @@ def create_regime_duration_features(structural_breaks, index):
 
                 # Set previous regime duration for all observations after this regime ended
                 post_regime_mask = index > end_date
-                regime_features.loc[post_regime_mask, "previous_regime_duration"] = (
-                    duration
-                )
+                regime_features.loc[post_regime_mask, "previous_regime_duration"] = duration
 
         # Calculate typical duration for this regime type
         if regime_durations:
@@ -104,9 +102,7 @@ def create_regime_duration_features(structural_breaks, index):
         # Vectorized assignment of regime-specific features
         current_days = regime_features.loc[regime_mask, "days_since_regime_change"]
 
-        regime_features.loc[regime_mask, "regime_age_normalized"] = (
-            current_days / typical_duration
-        )
+        regime_features.loc[regime_mask, "regime_age_normalized"] = current_days / typical_duration
         regime_features.loc[regime_mask, "expected_regime_remaining"] = np.maximum(
             0, typical_duration - current_days
         )

@@ -6,9 +6,9 @@ from .sb_bagging import (
 )
 
 __all__ = [
-    "main_mc",
     "SequentiallyBootstrappedBaggingClassifier",
     "SequentiallyBootstrappedBaggingRegressor",
     "compute_custom_oob_metrics",
     "estimate_ensemble_size",
+    "main_mc",
 ]

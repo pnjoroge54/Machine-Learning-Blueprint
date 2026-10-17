@@ -8,15 +8,62 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from ..data_structures import get_volume_bars
-from ..microstructural_features import (get_vpin, get_bar_based_amihud_lambda, get_bar_based_kyle_lambda,
-                                               get_bekker_parkinson_vol, get_corwin_schultz_estimator,
-                                               get_bar_based_hasbrouck_lambda, get_roll_impact, get_roll_measure,
-                                               quantile_mapping, sigma_mapping, MicrostructuralFeaturesGenerator)
+from ..microstructural_features import (
+    MicrostructuralFeaturesGenerator,
+    get_bar_based_amihud_lambda,
+    get_bar_based_hasbrouck_lambda,
+    get_bar_based_kyle_lambda,
+    get_becker_parkinson_vol,
+    get_corwin_schultz_estimator,
+    get_roll_impact,
+    get_roll_measure,
+    get_vpin,
+    quantile_mapping,
+    sigma_mapping,
+)
 from ..microstructural_features.encoding import encode_tick_rule_array
-from ..microstructural_features.entropy import get_plug_in_entropy, get_shannon_entropy, get_lempel_ziv_entropy, \
-    get_konto_entropy, _match_length
-from ..util import get_bvc_buy_volume
+from ..microstructural_features.entropy import (
+    _match_length,
+    get_konto_entropy,
+    get_lempel_ziv_entropy,
+    get_plug_in_entropy,
+    get_shannon_entropy,
+)
+
+
+
+def get_bvc_buy_volume(close, volume, window=20):
+    """Bulk volume classification of buy volume (Easley et al.), input for VPIN."""
+    from scipy.stats import norm
+
+    diff = close.diff()
+    return volume * norm.cdf(diff / diff.rolling(window=window).std())
+
+
+def get_volume_bars(path, threshold, verbose=False):
+    """
+    Volume bars from a (date_time, price, volume) tick CSV, as built by the old
+    mlfinlab ``get_volume_bars``: a bar closes on the tick at which cumulative
+    volume reaches ``threshold``. ``tick_num`` is the 1-based index of that tick.
+    """
+    ticks = pd.read_csv(path)
+    ticks.columns = ["date_time", "price", "volume"]
+    rows, cum_volume, start = [], 0, 0
+    for i, volume in enumerate(ticks["volume"].to_numpy()):
+        cum_volume += volume
+        if cum_volume >= threshold:
+            window = ticks["price"].iloc[start : i + 1]
+            rows.append({
+                "date_time": ticks["date_time"].iloc[i],
+                "tick_num": i + 1,
+                "open": window.iloc[0],
+                "high": window.max(),
+                "low": window.min(),
+                "close": window.iloc[-1],
+                "volume": cum_volume,
+            })
+            cum_volume, start = 0, i + 1
+    return pd.DataFrame(rows)
 
 
 class TestMicrostructuralFeatures(unittest.TestCase):
@@ -29,9 +76,9 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         Set the file path for the sample dollar bars data.
         """
         project_path = os.path.dirname(__file__)
-        self.path = project_path + '/test_data/dollar_bar_sample.csv'
-        self.trades_path = project_path + '/test_data/tick_data.csv'
-        self.data = pd.read_csv(self.path, index_col='date_time', parse_dates=[0])
+        self.path = project_path + "/test_data/dollar_bar_sample.csv"
+        self.trades_path = project_path + "/test_data/tick_data.csv"
+        self.data = pd.read_csv(self.path, index_col="date_time", parse_dates=[0])
         self.data.index = pd.to_datetime(self.data.index)
 
     def test_first_generation(self):
@@ -42,7 +89,7 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         roll_measure = get_roll_measure(self.data.close, window=20)
         roll_impact = get_roll_impact(self.data.close, self.data.cum_dollar, window=20)
         corwin_schultz = get_corwin_schultz_estimator(self.data.high, self.data.low, window=20)
-        bekker_parkinson = get_bekker_parkinson_vol(self.data.high, self.data.low, window=20)
+        bekker_parkinson = get_becker_parkinson_vol(self.data.high, self.data.low, window=20)
 
         # Shape assertions
         self.assertEqual(self.data.shape[0], roll_measure.shape[0])
@@ -73,8 +120,12 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         Test intra-bar second generation features
         """
         kyle_lambda = get_bar_based_kyle_lambda(self.data.close, self.data.cum_vol, window=20)
-        amihud_lambda = get_bar_based_amihud_lambda(self.data.close, self.data.cum_dollar, window=20)
-        hasbrouck_lambda = get_bar_based_hasbrouck_lambda(self.data.close, self.data.cum_dollar, window=20)
+        amihud_lambda = get_bar_based_amihud_lambda(
+            self.data.close, self.data.cum_dollar, window=20
+        )
+        hasbrouck_lambda = get_bar_based_hasbrouck_lambda(
+            self.data.close, self.data.cum_dollar, window=20
+        )
 
         # Shape assertions
         self.assertEqual(self.data.shape[0], kyle_lambda.shape[0])
@@ -123,13 +174,13 @@ class TestMicrostructuralFeatures(unittest.TestCase):
             encode_tick_rule_array([-1, 1, 0, 20000000])
 
         encoded_tick_rule = encode_tick_rule_array([-1, 1, 0, 0])
-        self.assertEqual('bacc', encoded_tick_rule)
+        self.assertEqual("bacc", encoded_tick_rule)
 
     def test_entropy_calculations(self):
         """
         Test entropy functions
         """
-        message = '11100001'
+        message = "11100001"
         message_array = [1, 1, 1, 0, 0, 0, 0, 1]
         shannon = get_shannon_entropy(message)
         plug_in = get_plug_in_entropy(message, word_length=1)
@@ -145,9 +196,9 @@ class TestMicrostructuralFeatures(unittest.TestCase):
 
         # Konto entropy boundary conditions
         konto_2 = get_konto_entropy(message, 2)
-        _match_length('1101111', 2, 3)
+        _match_length("1101111", 2, 3)
         self.assertAlmostEqual(konto_2, 0.8453, delta=1e-4)
-        self.assertEqual(get_konto_entropy('a'), 0)  # one-character message entropy = 0
+        self.assertEqual(get_konto_entropy("a"), 0)  # one-character message entropy = 0
 
     def test_encoding_schemes(self):
         """
@@ -157,9 +208,9 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         quantile_dict = quantile_mapping(values, num_letters=10)
         sigma_dict = sigma_mapping(values, step=20)
         self.assertEqual(len(quantile_dict), 10)
-        self.assertEqual(quantile_dict[229.77], '\x02')
+        self.assertEqual(quantile_dict[229.77], "\x02")
         self.assertEqual(len(sigma_dict), np.ceil((max(values) - min(values)) / 20))
-        self.assertEqual(sigma_dict[100], '\x05')
+        self.assertEqual(sigma_dict[100], "\x05")
 
         with self.assertRaises(ValueError):
             sigma_mapping(values, step=1)  # Length of dice > ASCII table
@@ -168,27 +219,35 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         """
         Asserts that the csv data being passed is of the correct format.
         """
-        wrong_date = ['2019-41-30', 200.00, np.int64(5)]
-        wrong_price = ['2019-01-30', 'asd', np.int64(5)]
-        wrong_volume = ['2019-01-30', 200.00, '1.5']
-        too_many_cols = ['2019-01-30', 200.00, np.int64(5), 'Limit order', 'B23']
+        wrong_date = ["2019-41-30", 200.00, np.int64(5)]
+        wrong_price = ["2019-01-30", "asd", np.int64(5)]
+        wrong_volume = ["2019-01-30", 200.00, "1.5"]
+        too_many_cols = ["2019-01-30", 200.00, np.int64(5), "Limit order", "B23"]
 
         # pylint: disable=protected-access
         with self.assertWarns(DeprecationWarning):
-            self.assertRaises(ValueError,
-                              MicrostructuralFeaturesGenerator._assert_csv(pd.DataFrame(wrong_date).T))
+            self.assertRaises(
+                ValueError,
+                MicrostructuralFeaturesGenerator._assert_csv(pd.DataFrame(wrong_date).T),
+            )
         # pylint: disable=protected-access
-        self.assertRaises(AssertionError,
-                          MicrostructuralFeaturesGenerator._assert_csv,
-                          pd.DataFrame(too_many_cols).T)
+        self.assertRaises(
+            AssertionError,
+            MicrostructuralFeaturesGenerator._assert_csv,
+            pd.DataFrame(too_many_cols).T,
+        )
         # pylint: disable=protected-access
-        self.assertRaises(AssertionError,
-                          MicrostructuralFeaturesGenerator._assert_csv,
-                          pd.DataFrame(wrong_price).T)
+        self.assertRaises(
+            AssertionError,
+            MicrostructuralFeaturesGenerator._assert_csv,
+            pd.DataFrame(wrong_price).T,
+        )
         # pylint: disable=protected-access
-        self.assertRaises(AssertionError,
-                          MicrostructuralFeaturesGenerator._assert_csv,
-                          pd.DataFrame(wrong_volume).T)
+        self.assertRaises(
+            AssertionError,
+            MicrostructuralFeaturesGenerator._assert_csv,
+            pd.DataFrame(wrong_volume).T,
+        )
 
     def test_feature_generator_function(self):
         """
@@ -196,7 +255,7 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         """
         # Encode volumes and pct changes
         df_trades = pd.read_csv(self.trades_path, parse_dates=[0])
-        df_trades['log_ret'] = np.log(df_trades.Price / df_trades.Price.shift(1)).dropna()
+        df_trades["log_ret"] = np.log(df_trades.Price / df_trades.Price.shift(1)).dropna()
         non_null_log_ret = df_trades[df_trades.log_ret != 0].log_ret.dropna()
 
         # Take unique volumes only
@@ -206,27 +265,58 @@ class TestMicrostructuralFeatures(unittest.TestCase):
 
         # Compress bars from ticks
         compressed_bars = get_volume_bars(self.trades_path, threshold=20, verbose=False)
-        compressed_bars.set_index('date_time', inplace=True)
+        compressed_bars.set_index("date_time", inplace=True)
         compressed_bars.index = pd.to_datetime(compressed_bars.index)
         bar_index = compressed_bars.index
 
         # Test None input ValureError raise
         with self.assertRaises(ValueError):
-            MicrostructuralFeaturesGenerator(None, compressed_bars.tick_num, volume_encoding=volume_mapping,
-                                             pct_encoding=returns_mapping)
+            MicrostructuralFeaturesGenerator(
+                None,
+                compressed_bars.tick_num,
+                volume_encoding=volume_mapping,
+                pct_encoding=returns_mapping,
+            )
 
-        gen = MicrostructuralFeaturesGenerator(self.trades_path, compressed_bars.tick_num, volume_encoding=volume_mapping,
-                                               pct_encoding=returns_mapping)
-        gen_no_entropy = MicrostructuralFeaturesGenerator(self.trades_path, compressed_bars.tick_num, volume_encoding=None,
-                                                          pct_encoding=None)
-        gen_csv = MicrostructuralFeaturesGenerator(self.trades_path, compressed_bars.tick_num, volume_encoding=volume_mapping,
-                                                   pct_encoding=returns_mapping)
-        gen_1 = MicrostructuralFeaturesGenerator(self.trades_path, compressed_bars.tick_num, volume_encoding=volume_mapping,
-                                                 pct_encoding=returns_mapping, batch_size=1)
-        gen_20 = MicrostructuralFeaturesGenerator(self.trades_path, compressed_bars.tick_num, volume_encoding=volume_mapping,
-                                                  pct_encoding=returns_mapping, batch_size=20)
-        gen_df = MicrostructuralFeaturesGenerator(df_trades, compressed_bars.tick_num, volume_encoding=volume_mapping,
-                                                  pct_encoding=returns_mapping, batch_size=20)
+        gen = MicrostructuralFeaturesGenerator(
+            self.trades_path,
+            compressed_bars.tick_num,
+            volume_encoding=volume_mapping,
+            pct_encoding=returns_mapping,
+        )
+        gen_no_entropy = MicrostructuralFeaturesGenerator(
+            self.trades_path,
+            compressed_bars.tick_num,
+            volume_encoding=None,
+            pct_encoding=None,
+        )
+        gen_csv = MicrostructuralFeaturesGenerator(
+            self.trades_path,
+            compressed_bars.tick_num,
+            volume_encoding=volume_mapping,
+            pct_encoding=returns_mapping,
+        )
+        gen_1 = MicrostructuralFeaturesGenerator(
+            self.trades_path,
+            compressed_bars.tick_num,
+            volume_encoding=volume_mapping,
+            pct_encoding=returns_mapping,
+            batch_size=1,
+        )
+        gen_20 = MicrostructuralFeaturesGenerator(
+            self.trades_path,
+            compressed_bars.tick_num,
+            volume_encoding=volume_mapping,
+            pct_encoding=returns_mapping,
+            batch_size=20,
+        )
+        gen_df = MicrostructuralFeaturesGenerator(
+            df_trades,
+            compressed_bars.tick_num,
+            volume_encoding=volume_mapping,
+            pct_encoding=returns_mapping,
+            batch_size=20,
+        )
         features = gen.get_features(to_csv=False, verbose=False)
         features_1 = gen_1.get_features(to_csv=False, verbose=False)
         features_20 = gen_20.get_features(to_csv=False, verbose=False)
@@ -235,27 +325,27 @@ class TestMicrostructuralFeatures(unittest.TestCase):
 
         # No volume/pct entropy columns check
         with self.assertRaises(KeyError):
-            features['tick_rule_entropy'] += features_no_entropy['volume_entropy_plug_in']
+            features["tick_rule_entropy"] += features_no_entropy["volume_entropy_plug_in"]
 
         with self.assertRaises(KeyError):
-            features['tick_rule_entropy'] = features_no_entropy['pct_entropy_plug_in']
+            features["tick_rule_entropy"] = features_no_entropy["pct_entropy_plug_in"]
 
-        gen_csv.get_features(to_csv=True, output_path='features.csv')
-        features_from_csv = pd.read_csv('features.csv', parse_dates=[0])
+        gen_csv.get_features(to_csv=True, output_path="features.csv")
+        features_from_csv = pd.read_csv("features.csv", parse_dates=[0])
 
         self.assertTrue((features.dropna().values == features_1.dropna().values).all())
         self.assertTrue((features.dropna().values == features_20.dropna().values).all())
         self.assertTrue((features.dropna().values == features_from_df.dropna().values).all())
 
-        features.set_index('date_time', inplace=True)
-        features_from_csv.set_index('date_time', inplace=True)
+        features.set_index("date_time", inplace=True)
+        features_from_csv.set_index("date_time", inplace=True)
 
         self.assertAlmostEqual((features - features_from_csv).sum().sum(), 0, delta=1e-6)
 
         self.assertEqual(bar_index.shape[0], features.shape[0])
         self.assertEqual(compressed_bars.loc[features.index].shape[0], compressed_bars.shape[0])
 
-        os.remove('features.csv')
+        os.remove("features.csv")
 
     def test_inter_bar_feature_values(self):
         """
@@ -263,7 +353,7 @@ class TestMicrostructuralFeatures(unittest.TestCase):
         """
         # Encode volumes and pct changes
         df_trades = pd.read_csv(self.trades_path, parse_dates=[0])
-        df_trades['log_ret'] = np.log(df_trades.Price / df_trades.Price.shift(1)).dropna()
+        df_trades["log_ret"] = np.log(df_trades.Price / df_trades.Price.shift(1)).dropna()
         unique_volumes = df_trades.Volume.drop_duplicates()
         non_null_log_ret = df_trades[df_trades.log_ret != 0].log_ret.dropna()
 
@@ -272,14 +362,18 @@ class TestMicrostructuralFeatures(unittest.TestCase):
 
         # Compress bars from ticks
         compressed_bars = get_volume_bars(self.trades_path, threshold=20, verbose=False)
-        compressed_bars.set_index('date_time', inplace=True)
+        compressed_bars.set_index("date_time", inplace=True)
         compressed_bars.index = pd.to_datetime(compressed_bars.index)
 
-        gen = MicrostructuralFeaturesGenerator(self.trades_path, compressed_bars.tick_num, volume_encoding=volume_mapping,
-                                               pct_encoding=returns_mapping)
+        gen = MicrostructuralFeaturesGenerator(
+            self.trades_path,
+            compressed_bars.tick_num,
+            volume_encoding=volume_mapping,
+            pct_encoding=returns_mapping,
+        )
 
         features = gen.get_features(to_csv=False, verbose=False)
-        features.set_index('date_time', inplace=True)
+        features.set_index("date_time", inplace=True)
 
         # Check individual feature values
         # Avg tick size

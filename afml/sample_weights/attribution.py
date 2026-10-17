@@ -5,7 +5,6 @@ Logic regarding return and time decay attribution for sample weights from chapte
 import numpy as np
 import pandas as pd
 
-from ..cache import smart_cacheable
 from ..sampling.concurrent import (
     get_av_uniqueness_from_triple_barrier,
     num_concurrent_events,
@@ -40,7 +39,6 @@ def _apply_weight_by_return(label_endtime, num_conc_events, close_series, molecu
     return weights.abs()
 
 
-@smart_cacheable
 def get_weights_by_return(
     triple_barrier_events,
     close_series,
@@ -68,8 +66,10 @@ def get_weights_by_return(
         """Process concurrent events to ensure proper format and indexing."""
         ce = ce.loc[~ce.index.duplicated(keep="last")]
         ce = ce.reindex(close_series.index).fillna(0)
-        if isinstance(ce, pd.Series):
-            ce = ce.to_frame()
+        # Keep a Series: dividing a Series of returns by a one-column frame
+        # broadcasts, so every per-event value became a Series (object dtype)
+        if isinstance(ce, pd.DataFrame):
+            ce = ce.iloc[:, 0]
         return ce
 
     # Handle num_conc_events (whether provided or computed)
@@ -90,7 +90,7 @@ def get_weights_by_return(
         # Verify index compatibility
         missing_in_close = processed_ce.index.difference(close_series.index)
         assert missing_in_close.empty, (
-            f"num_conc_events contains {len(missing_in_close)} " "indices not in close_series"
+            f"num_conc_events contains {len(missing_in_close)} indices not in close_series"
         )
 
     # Compute weights using processed concurrent events
@@ -150,16 +150,13 @@ def get_weights_by_time_decay(
         return weights
     else:
         # Apply exponential decay
-        if last_weight == 1:
-            return pd.Series(1.0, index=cum_time_weights.index)
-
-        elif cum_time_weights.iloc[-1] == 0:
+        if last_weight == 1 or cum_time_weights.iloc[-1] == 0:
             return pd.Series(1.0, index=cum_time_weights.index)
 
         # Calculate normalized position (0 = newest, 1 = oldest)
         if last_weight >= 0:
             # For last_weight >= 0, use standard exponential decay
-            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (
+            normalized_position = (cum_time_weights.iloc[-1] - cum_time_weights) / (
                 cum_time_weights.iloc[-1] - cum_time_weights.iloc[0]
             )
             weights = last_weight**normalized_position
@@ -167,7 +164,7 @@ def get_weights_by_time_decay(
             # For last_weight < 0, implement cutoff (similar to linear case)
             # This is more complex for exponential - you might want to reconsider this case
             cutoff_threshold = abs(last_weight)
-            normalized_position = (cum_time_weights - cum_time_weights.iloc[0]) / (
+            normalized_position = (cum_time_weights.iloc[-1] - cum_time_weights) / (
                 cum_time_weights.iloc[-1] - cum_time_weights.iloc[0]
             )
             weights = (1 - cutoff_threshold) ** normalized_position

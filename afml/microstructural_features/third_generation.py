@@ -1,6 +1,7 @@
 """
 Third generation models implementation (VPIN)
 """
+
 import pandas as pd
 
 

@@ -1,21 +1,15 @@
 import warnings
-from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 from numba import njit
 from scipy.stats import kurtosis, skew
 
-from ..bet_sizing.bet_sizing import (
-    bet_size_budget,
-    bet_size_probability,
-    bet_size_reserve,
-)
-from .statistics import (
+from .perfomance_statistics import (
     all_bets_concentration,
     average_holding_period,
     drawdown_and_time_under_water,
-    information_ratio,
     timing_of_flattening_and_flips,
 )
 
@@ -23,9 +17,9 @@ from .statistics import (
 lower_is_better = [
     "max_drawdown",
     "avg_drawdown",
+    "avg_loss",
     "volatility",
     "downside_volatility",
-    "avg_loss",
     "worst_trade",
     "consecutive_losses",
     "var_95",
@@ -38,7 +32,7 @@ lower_is_better = [
 # --- Helper Functions for Trade Analysis ---
 
 
-def get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd.Series]:
+def get_trades(returns: pd.Series, positions: pd.Series) -> tuple[pd.Series, pd.Series]:
     """
     Identifies individual trades from a positions series and calculates their
     compounded returns and holding durations.
@@ -54,7 +48,7 @@ def get_trades(returns: pd.Series, positions: pd.Series) -> Tuple[pd.Series, pd.
 
     Returns:
         A tuple containing two lists:
-        - A list of compounded returns for each closed trade.
+        - A series of compounded returns for each closed trade.
         - A series of durations (as Timedelta objects) for each closed trade.
     """
     if positions.empty or returns.empty:
@@ -151,7 +145,7 @@ def _calculate_trade_stats(
     # Calculate basic win/loss metrics.
     win_rate = len(winning_trades) / num_trades if num_trades > 0 else 0
     avg_win = winning_trades.mean() if len(winning_trades) > 0 else 0
-    avg_loss = losing_trades.mean() if len(losing_trades) > 0 else 0
+    avg_loss = abs(losing_trades.mean()) if len(losing_trades) > 0 else 0
 
     # The profit factor is the gross profit divided by the gross loss.
     gross_profit = winning_trades.sum()
@@ -159,7 +153,7 @@ def _calculate_trade_stats(
     profit_factor = gross_profit / gross_loss if gross_loss != 0 else float("inf")
 
     # Expectancy is the average amount you expect to win or lose per trade.
-    expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
+    expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
 
     # The Kelly Criterion helps determine the optimal fraction of capital to allocate.
     if avg_loss != 0:
@@ -169,7 +163,7 @@ def _calculate_trade_stats(
         # If there are no losses, the Kelly fraction is infinite (or undefined).
         kelly_criterion = 0 if avg_win == 0 else float("inf")
 
-    def max_consecutive(arr: np.ndarray) -> Tuple[int, int]:
+    def max_consecutive(arr: np.ndarray) -> tuple[int, int]:
         """Helper to find the longest streaks of wins and losses."""
         is_positive = arr > 0
         is_negative = arr < 0
@@ -214,11 +208,11 @@ def _calculate_trade_stats(
 
 
 def get_annualization_factors(
-    timeframe: Optional[str] = None,
-    data_index: Optional[pd.DatetimeIndex] = None,
+    timeframe: str | None = None,
+    data_index: pd.DatetimeIndex | None = None,
     trading_days_per_year: int = 252,
     trading_hours_per_day: float = 6.5,
-) -> Tuple[float, int]:
+) -> tuple[float, int]:
     """
     Calculates the annualization factor (sqrt(N)) and periods per year (N).
 
@@ -284,10 +278,10 @@ def get_annualization_factors(
             # t = 365.25 if value_counts_index.nunique() == 1 else 252
             avg_delta = value_counts_index.idxmax()
             periods_per_year = pd.Timedelta(days=trading_days_per_year) / avg_delta
-            print(f"Inferred timeframe to be {avg_delta}.")
+            logger.debug(f"Inferred timeframe to be {avg_delta}.")
         else:
             median_delta = data_index.diff().median()
-            print(f"Inferred timeframe from median delta as {median_delta}.")
+            logger.debug(f"Inferred timeframe from median delta as {median_delta}.")
             if median_delta.total_seconds() == 0:
                 warnings.warn(
                     "Cannot infer frequency from index. Falling back to default daily.",
@@ -310,7 +304,7 @@ def get_annualization_factors(
 def calculate_performance_metrics(
     returns: pd.Series,
     data_index: pd.Index,
-    positions: Optional[pd.Series] = None,
+    positions: pd.Series | None = None,
     trading_days_per_year: int = 252,
     trading_hours_per_day: float = 24,
 ) -> dict:
@@ -448,6 +442,7 @@ def calculate_performance_metrics(
 
     # --- Trade Stats (if positions are provided) ---
     total_periods = len(data_index)
+    trade_stats = _calculate_trade_stats(returns, periods_per_year, total_periods)
 
     if positions is not None:
         hp = average_holding_period(positions)
@@ -459,14 +454,12 @@ def calculate_performance_metrics(
         metrics["bets_per_year"] = int(
             bet_frequency * (periods_per_year / total_periods) if total_periods > 0 else 0
         )
+        side = positions.loc[returns.index]
+        longs = (side > 0).sum()
+        shorts = (side < 0).sum()
+        trade_stats["ratio_of_longs"] = longs / (longs + shorts)
 
-    trade_stats = _calculate_trade_stats(returns, periods_per_year, total_periods)
-    side = positions.loc[returns.index]
-    longs = (side > 0).sum()
-    shorts = (side < 0).sum()
-    trade_stats["ratio_of_longs"] = longs / (longs + shorts)
     metrics.update(trade_stats)
-
     return metrics
 
 
@@ -517,157 +510,103 @@ def analyze_trading_behavior(positions: pd.Series, returns: pd.Series) -> dict:
 # --- Helper Functions for Meta-Labelling Analysis ---
 
 
+@njit(cache=True)
+def fill_sides_numba(num_close, t0_idx, t1_idx, side):
+    """
+    Maps event-based signals to a continuous timeline by additive accumulation.
+
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for the start (entry) of each bet.
+    t1_idx : np.ndarray (int64)
+        Integer indices for the end (exit) of each bet.
+    side : np.ndarray (float64)
+        The signal values/sizes to be mapped.
+
+    Returns
+    -------
+    np.ndarray (float64)
+        A continuous timeline of accumulated bet sizes.
+    """
+    full_side = np.zeros(num_close, dtype=np.float64)
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            full_side[start : end + 1] += side[i]
+    return full_side
+
+
+@njit(cache=True)
+def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
+    """
+    Maps event-based signals to a timeline by averaging concurrent signals.
+    Implementation of AFML Snippet 10.3 logic.
+
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for signal entries.
+    t1_idx : np.ndarray (int64)
+        Integer indices for signal exits.
+    side : np.ndarray (float64)
+        The conviction/probability signals.
+
+    Returns
+    -------
+    np.ndarray (float64)
+        The time-weighted average signal at every timestamp.
+    """
+    sum_side = np.zeros(num_close, dtype=np.float64)
+    active_count = np.zeros(num_close, dtype=np.int32)
+
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            sum_side[start : end + 1] += side[i]
+            active_count[start : end + 1] += 1
+
+    avg_side = np.zeros(num_close, dtype=np.float64)
+    for t in range(num_close):
+        if active_count[t] > 0:
+            avg_side[t] = sum_side[t] / active_count[t]
+    return avg_side
+
+
 def get_positions_from_events(
     data_index: pd.DatetimeIndex,
-    events_t1: pd.Series,
-    sides: pd.Series,
+    events: pd.DataFrame,
+    average_active=False,
 ):
     """
     Create series of target positions from event positions.
     Parameters
     ----------
     data_index : pd.DatetimeIndex
-        DateTime index of data.
-    events_t1 : pd.Series
-        End times of events
-    sides: pd.Series
-        Trade direction
+        DateTime index of data used to make events.
+    events: pd.DataFrame
+        t1 - End times of events
+        side - Trade position
+    average_active: bool
+        Average active positions.
 
     Returns
     -------
     pd.Series
         Series containing the target positions for data_index.
     """
-    end_times = pd.Index(events_t1).difference(events_t1.index)
-    positions = sides.reindex(data_index)
-    positions.loc[end_times] = 0  # End of trade
-    positions = positions.ffill().fillna(0)
-    return positions
+    num_close = len(data_index)
+    t0_idx = events.t1.index.view(np.int64)
+    t1_idx = events.t1.to_numpy(np.int64)
+    side = events.side.values
 
+    if average_active:
+        positions = fill_average_active_sides(num_close, t0_idx, t1_idx, side)
+    else:
+        positions = fill_sides_numba(num_close, t0_idx, t1_idx, side)
 
-def evaluate_meta_labeling_performance(
-    events: pd.DataFrame,
-    meta_probabilities: pd.Series,
-    close: pd.Series,
-    confidence_threshold: float = 0.5,
-    trading_days_per_year: int = 252,
-    trading_hours_per_day: int = 24,
-    strategy_name: str = "Strategy",
-    bet_sizing: str = None,
-    **kwargs,
-) -> dict:
-    """
-    Evaluates and compares the performance of a primary strategy against a
-    meta-labeled version of that strategy.
-
-    This function simulates two strategies:
-    1.  The primary strategy, which takes all signals.
-    2.  The meta-labeled strategy, which filters trades based on a confidence
-        threshold and sizes them according to the meta-model's probability.
-
-    Args:
-        events: A DataFrame of trade events that contains at least the columns 't1' and 'side'.
-            - index: Event start times
-            - t1: Event end times, i.e., the time of first barrier touch
-            - side: Trade direction
-        meta_probabilities: A Series or array of probabilities from the meta-model.
-        close: A Series of prices that cover the period encapsulated in events.
-        confidence_threshold: The minimum probability required to take a trade.
-        trading_days_per_year: The number of trading days in a year.
-        trading_hours_per_day: The number of trading hours per day.
-        strategy_name: The name of the strategy for reporting.
-
-    Returns:
-        A dictionary containing the performance metrics for both strategies,
-        their return series, and other comparison metadata.
-    """
-    data_index = close.index
-
-    # Calculate returns
-    events = events.dropna(subset=["t1"])
-    all_dates = events.index.union(other=events["t1"].array).drop_duplicates()
-    prices = close.reindex(all_dates, method="bfill")
-    returns = prices.loc[events["t1"].array].array / prices.loc[events.index] - 1
-    primary_returns = returns * events["side"]
-    primary_positions = get_positions_from_events(data_index, events["t1"], events["side"])
-
-    # Filter trades: Set position to 0 for trades below the confidence threshold.
-    aligned_probs = meta_probabilities.reindex(events.index, fill_value=0.5)
-    confident_trades = aligned_probs > confidence_threshold
-    meta_prob = aligned_probs[confident_trades]
-    meta_events = events[confident_trades]
-
-    # --- Bet Sizing Logic ---
-    if bet_sizing is None:
-
-        meta_bets = meta_events["side"].copy()
-        bet_sizing = "none"
-    elif bet_sizing == "probability":
-        meta_bets = bet_size_probability(
-            meta_events, meta_prob, num_classes=2, pred=meta_events["side"], **kwargs
-        )
-    elif bet_sizing == "budget":
-        meta_bets = bet_size_budget(meta_events["t1"], meta_events["side"])
-        meta_bets = meta_bets["bet_size"]
-    elif bet_sizing == "reserve":
-        meta_bets = bet_size_reserve(meta_events["t1"], meta_events["side"], **kwargs)
-        meta_bets = meta_bets["bet_size"]
-
-    msg = f"Bet Sizing Method: {bet_sizing.title()} | Confidence Threshold: {confidence_threshold}"
-    msg = msg + f"\n{kwargs}" if kwargs else msg
-    print(msg)
-
-    # Apply the calculated bet size to the signals that were not filtered out.
-    meta_positions = get_positions_from_events(data_index, meta_events["t1"], bets)
-    meta_returns = (returns.reindex(meta_events.index) * meta_positions).dropna()
-
-    # --- Performance Calculation ---
-    data_index = close.index
-    primary_positions = get_positions_from_events(data_index, events["t1"], events["side"])
-    meta_positions = get_positions_from_events(data_index, meta_events["t1"], bets)
-
-    primary_metrics = calculate_performance_metrics(
-        primary_returns,
-        data_index,
-        primary_positions,
-        trading_days_per_year,
-        trading_hours_per_day,
-    )
-    meta_metrics = calculate_performance_metrics(
-        meta_returns,
-        data_index,
-        meta_positions,
-        trading_days_per_year,
-        trading_hours_per_day,
-    )
-
-    # --- Meta-Specific Metrics ---
-    total_signals = len(events)
-    filtered_signals = len(meta_events)
-
-    # The percentage of trades that were filtered out by the meta-model.
-    meta_metrics["signal_filter_rate"] = (
-        1 - (filtered_signals / total_signals) if total_signals > 0 else 0
-    )
-    meta_metrics["confidence_threshold"] = confidence_threshold
-
-    # Information Ratio: Measures the meta-model's ability to generate excess return per unit of tracking error.
-    excess_returns = meta_returns - primary_returns.reindex(meta_returns.index, fill_value=0)
-    _, periods_per_year = get_annualization_factors(
-        data_index=data_index,
-        trading_days_per_year=trading_days_per_year,
-        trading_hours_per_day=trading_hours_per_day,
-    )
-    meta_metrics["information_ratio"] = information_ratio(
-        returns=excess_returns, benchmark=0, entries_per_year=periods_per_year
-    )
-
-    return {
-        "strategy_name": strategy_name,
-        "primary_metrics": primary_metrics,
-        "meta_metrics": meta_metrics,
-        "primary_returns": primary_returns,
-        "meta_returns": meta_returns,
-        "total_primary_signals": total_signals,
-        "filtered_signals": filtered_signals,
-    }
+    return pd.Series(positions, index=data_index, name="side")

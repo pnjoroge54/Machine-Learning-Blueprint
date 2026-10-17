@@ -1,13 +1,13 @@
 """
 Implements the book chapter 7 on Cross Validation for financial data,
-as well as Purged Walk-Forward Cross-Validation for financial data.
+as well as Purged Walk-Forward Cross Validation for financial data.
 """
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
-from sklearn.base import ClassifierMixin, clone
+from sklearn.base import BaseEstimator, clone
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
@@ -19,9 +19,8 @@ from sklearn.metrics import (
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection._split import _BaseKFold
 
-from afml.cache.cv_cache import cv_cache_with_classifier_state, cv_cacheable
-from afml.cross_validation.scoring import probability_weighted_accuracy
-from afml.ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from ..ensemble.sb_bagging import SequentiallyBootstrappedBaggingClassifier
+from .scoring import probability_weighted_accuracy
 
 
 def ml_get_train_times(t1: pd.Series, test_times: pd.Series) -> pd.Series:
@@ -83,7 +82,8 @@ class PurgedKFold(_BaseKFold):
 
         super().__init__(n_splits, shuffle=False, random_state=None)
 
-        self.t1 = t1
+        self.t1 = t1.array
+        self.t1_index = t1.index.array
         self.pct_embargo = pct_embargo
 
     def split(self, X, y=None, groups=None):
@@ -98,7 +98,7 @@ class PurgedKFold(_BaseKFold):
         :return: (tuple) [train list of sample indices, and test list of sample indices]
         """
 
-        if (X.index == self.t1.index).sum() != len(self.t1):
+        if (X.index == self.t1_index).sum() != len(self.t1):
             raise ValueError("X and ThruDateValues must have the same index")
 
         indices = np.arange(X.shape[0])
@@ -106,10 +106,10 @@ class PurgedKFold(_BaseKFold):
         test_starts = [(i[0], i[-1] + 1) for i in np.array_split(np.arange(len(X)), self.n_splits)]
 
         for i, j in test_starts:
-            t0 = self.t1.index[i]  # start of test set
+            t0 = self.t1_index[i]  # start of test set
             test_indices = indices[i:j]
-            max_t1_idx = self.t1.index.searchsorted(self.t1[test_indices].max())
-            train_indices = self.t1.index.searchsorted(self.t1[self.t1 <= t0].index)
+            max_t1_idx = np.searchsorted(self.t1_index, self.t1[test_indices].max())
+            train_indices = np.searchsorted(self.t1_index, self.t1_index[self.t1 <= t0])
             if max_t1_idx < X.shape[0]:  # right train (with embargo)
                 train_indices = np.concatenate((train_indices, indices[max_t1_idx + mbrg :]))
             yield train_indices, test_indices
@@ -122,7 +122,6 @@ class PurgedSplit:
         t1: pd.Series = None,
         test_size_pct=0.25,
     ):
-
         if not isinstance(t1, pd.Series):
             raise ValueError("The t1 param must be a pd.Series")
 
@@ -154,19 +153,125 @@ class PurgedSplit:
                     train_indices.extend(loc)
                 else:
                     train_indices.append(loc)
-            return np.array(train_indices), test_indices
+            return train_indices, test_indices
+
+
+class PurgedWalkForwardCV(_BaseKFold):
+    """
+    Purged Walk-Forward Cross-Validation
+
+    This class implements walk-forward cross-validation with purging to prevent
+    information leakage in financial time series data. In walk-forward validation:
+    - Training data always comes before test data (respects temporal order)
+    - The training window can be expanding or fixed-size
+    - Purging removes training samples that overlap with test labels
+    - Embargo prevents using samples immediately after the test set
+
+    :param n_splits: (int) Number of splits/folds. Default to 5
+    :param t1: (pd.Series) Information range for each observation
+        *t1.index*: Time when information extraction started
+        *t1.value*: Time when information extraction ended
+    :param pct_embargo: (float) Embargo as fraction of dataset (e.g., 0.01 = 1%)
+    :param expanding_window: (bool) If True, use expanding window; if False, use fixed-size window
+    :param min_train_size: (float) Minimum training set size as fraction of total (for fixed window)
+    """
+
+    def __init__(
+        self, n_splits=5, t1=None, pct_embargo=0.01, expanding_window=True, min_train_size=0.3
+    ):
+        if not isinstance(t1, pd.Series):
+            raise ValueError("t1 must be a pd.Series")
+
+        super().__init__(n_splits, shuffle=False, random_state=None)
+
+        self.t1 = t1
+        self.pct_embargo = pct_embargo
+        self.expanding_window = expanding_window
+        self.min_train_size = min_train_size
+
+    def split(self, X, y=None, groups=None):
+        """
+        Generate train/test splits for walk-forward cross-validation.
+
+        :param X: (pd.DataFrame) Feature dataset
+        :param y: (pd.Series) Labels (optional)
+        :param groups: (array-like) Group labels (optional)
+        :yield: (tuple) Train and test indices for each split
+        """
+        if (X.index == self.t1.index).sum() != len(self.t1):
+            raise ValueError("X and t1 must have the same index")
+
+        indices = np.arange(X.shape[0])
+        n_samples = X.shape[0]
+        embargo_size = int(n_samples * self.pct_embargo)
+
+        # Calculate test set boundaries
+        test_splits = np.array_split(np.arange(n_samples), self.n_splits)
+
+        for split_idx in range(self.n_splits):
+            # Define test set
+            test_indices = test_splits[split_idx]
+            test_start_idx = test_indices[0]
+            test_end_idx = test_indices[-1] + 1
+
+            # Get test times for purging
+            test_times = pd.Series(
+                index=[self.t1.index[test_start_idx]], data=[self.t1.iloc[test_end_idx - 1]]
+            )
+
+            # Determine training set based on window type
+            if self.expanding_window:
+                # Expanding window: use all data before test set
+                initial_train_indices = indices[:test_start_idx]
+            else:
+                # Fixed window: use minimum training size
+                min_train_samples = int(n_samples * self.min_train_size)
+                train_start = max(0, test_start_idx - min_train_samples)
+                initial_train_indices = indices[train_start:test_start_idx]
+
+            # Apply purging to remove overlapping observations
+            if len(initial_train_indices) > 0:
+                initial_train_times = self.t1.iloc[initial_train_indices]
+                purged_train_times = ml_get_train_times(initial_train_times, test_times)
+
+                # Convert purged times back to indices
+                train_indices = []
+                for train_time in purged_train_times.index:
+                    loc = self.t1.index.get_loc(train_time)
+                    if isinstance(loc, int):
+                        train_indices.append(loc)
+                    else:
+                        # Handle duplicate indices
+                        train_indices.extend(range(loc.start, loc.stop))
+
+                train_indices = np.array(train_indices)
+            else:
+                train_indices = np.array([])
+
+            # Apply embargo: remove samples immediately after test set
+            if len(train_indices) > 0:
+                # Remove any training indices that fall within the embargo period
+                embargo_start = test_end_idx
+                embargo_end = min(test_end_idx + embargo_size, n_samples)
+
+                # Create a boolean mask for indices NOT in embargo range
+                mask = ~((train_indices >= embargo_start) & (train_indices < embargo_end))
+                train_indices = train_indices[mask]
+
+            # Only yield if we have training data
+            if len(train_indices) > 0:
+                yield train_indices, test_indices
 
 
 # noinspection PyPep8Naming
-@cv_cacheable
 def ml_cross_val_score(
-    classifier: ClassifierMixin,
+    classifier: BaseEstimator,
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
-    sample_weight_train: Optional[Union[np.ndarray, pd.Series]] = None,
-    sample_weight_score: Optional[Union[np.ndarray, pd.Series]] = None,
-    scoring: Union[str, Callable[[np.ndarray, np.ndarray], float]] = log_loss,
+    sample_weight_train: np.ndarray | pd.Series | None = None,
+    sample_weight_score: np.ndarray | pd.Series | None = None,
+    scoring: str | Callable[[np.ndarray, np.ndarray], float] = log_loss,
 ):
     # pylint: disable=invalid-name
     # pylint: disable=comparison-with-callable
@@ -188,7 +293,7 @@ def ml_cross_val_score(
 
     Parameters
     ----------
-    classifier : ClassifierMixin
+    classifier : BaseEstimator
         A scikit-learn compatible classifier instance (must implement fit/predict and optionally
         predict_proba).
     X : pd.DataFrame
@@ -241,10 +346,10 @@ def ml_cross_val_score(
     """
     # If no sample_weight then broadcast a value of 1 to all samples (full weight).
     if sample_weight_train is None:
-        sample_weight_train = np.ones((X.shape[0],))
+        sample_weight_train = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     if sample_weight_score is None:
-        sample_weight_score = np.ones((X.shape[0],))
+        sample_weight_score = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     # Check for sequential bootstrap
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
@@ -268,25 +373,29 @@ def ml_cross_val_score(
                 samples_info_sets=t1.iloc[train], oob_score=False
             )  # Create new instance
         fit = classifier.fit(
-            X=X.iloc[train, :],
-            y=y.iloc[train],
-            sample_weight=sample_weight_train[train],
+            X=X.iloc[train, :].to_numpy(),
+            y=y.iloc[train].to_numpy(),
+            sample_weight=sample_weight_train.iloc[train].to_numpy(),
         )
         params = dict(
-            y_true=y.iloc[test],
+            y_true=y.iloc[test].to_numpy(),
             labels=classifier.classes_,
-            sample_weight=sample_weight_score[test],
+            sample_weight=sample_weight_score.iloc[test].to_numpy(),
         )
-        if scoring == (log_loss or probability_weighted_accuracy):
-            params["y_pred"] = fit.predict_proba(X.iloc[test, :])
+        # NB: use membership tests, not ``scoring == (a or b)`` — the latter is a bug
+        # (``a or b`` collapses to ``a``), so e.g. accuracy_score matched no branch and
+        # left ``score`` unbound. Probability scorers need predict_proba; everything else
+        # (f1, accuracy, precision, recall, …) is scored on hard predictions.
+        if scoring in (log_loss, probability_weighted_accuracy):
+            params["y_pred"] = fit.predict_proba(X.iloc[test, :].to_numpy())
             score = scoring(**params)
             if scoring == log_loss:
                 score *= -1
-        elif scoring == (f1_score or accuracy_score):
-            params["y_pred"] = fit.predict(X.iloc[test, :])
+        else:
+            params["y_pred"] = fit.predict(X.iloc[test, :].to_numpy())
             try:
                 score = scoring(**params)
-            except:
+            except Exception:
                 del params["labels"]
                 score = scoring(**params)
 
@@ -295,156 +404,13 @@ def ml_cross_val_score(
     return np.array(ret_scores)
 
 
-@cv_cache_with_classifier_state
-def ml_cross_val_score_with_models(
-    classifier: ClassifierMixin,
-    X: pd.DataFrame,
-    y: pd.Series,
-    cv_gen: BaseCrossValidator,
-    sample_weight_train: Optional[Union[np.ndarray, pd.Series]] = None,
-    sample_weight_score: Optional[Union[np.ndarray, pd.Series]] = None,
-    scoring: Union[str, Callable[[np.ndarray, np.ndarray], float]] = log_loss,
-):
-    # pylint: disable=invalid-name
-    # pylint: disable=comparison-with-callable
-    """
-    Run purged/embargoed cross-validation for a classifier and return per-fold scores.
-
-    This implements the evaluation pattern from López de Prado (Advances in Financial Machine Learning,
-    snippet 7.4) but requires the caller to provide a CV generator (e.g., PurgedKFold).
-
-    Behavior summary
-    - Trains the provided classifier on each train split and scores on the corresponding test split.
-    - Supports passing separate sample weights for training and scoring.
-    - Special-cases `SequentiallyBootstrappedBaggingClassifier`: clones the classifier per fold and
-      aligns its samples_info_sets with the train indices; disables internal OOB scoring during CV.
-    - Accepts `scoring` as either a string key (mapped to a function) or a callable metric. For
-      probability-based scorers (log_loss, probability_weighted_accuracy) the function expects
-      probability inputs from `predict_proba`. For label-based scorers the function expects discrete
-      predictions from `predict`.
-
-    Parameters
-    ----------
-    classifier : ClassifierMixin
-        A scikit-learn compatible classifier instance (must implement fit/predict and optionally
-        predict_proba).
-    X : pd.DataFrame
-        Feature matrix indexed consistently with y and (for SequentiallyBootstrappedBaggingClassifier)
-        with classifier.samples_info_sets.
-    y : pd.Series
-        Target labels aligned with X (index used to align samples_info_sets when required).
-    cv_gen : BaseCrossValidator
-        Cross-validation generator instance with a split(X, y) method (e.g., PurgedKFold).
-    sample_weight_train : Array-like, optional (default=None)
-        Per-sample weights used when calling classifier.fit on the train split. If None, all ones
-        are used (no weighting).
-    sample_weight_score : Array-like, optional (default=None)
-        Per-sample weights used when calling the scoring function on the test split. If None, all ones
-        are used.
-    scoring : str or callable, optional (default=log_loss)
-        - If a string, one of the supported keys: "neg_log_loss", "accuracy", "f1", "pwa".
-          "neg_log_loss" maps to sklearn.metrics.log_loss and is returned as positive (the function
-          multiplies log_loss by -1 to make larger-is-better consistent with other scorers).
-        - If a callable, signature should be compatible with either:
-            scorer(y_true, y_pred, sample_weight=None, labels=...)   # label-based or prob-based
-          The code attempts to pass `labels=classifier.classes_` where relevant, and falls back if
-          the scorer does not accept that argument.
-        - For probability scorers (log_loss, probability_weighted_accuracy) the function is called
-          with `predict_proba` output; for label-based scorers the function is called with `predict`.
-        The default is `log_loss`.
-
-    Returns
-    -------
-    tuple
-        np.ndarray
-            1-D array of per-fold scores (float). Order corresponds to the order of splits returned by
-            cv_gen.split(X, y).
-        list
-            List of per-fold fitted models.
-
-    Raises
-    ------
-    KeyError
-        If SequentiallyBootstrappedBaggingClassifier is used and its samples_info_sets are not aligned
-        with y (index mismatch).
-    TypeError / RuntimeError
-        If the provided `scoring` callable raises on the provided inputs; the function attempts a
-        robust call pattern but will propagate unexpected exceptions.
-
-    Notes
-    -----
-    - For classifiers that require average/probability inputs (e.g., AUC), pass an appropriate
-      scoring callable that accepts probability-like inputs and set scoring to that callable or the
-      corresponding string key.
-    - For Seq-Bagging classifiers the function disables the estimator's internal OOB scoring during
-      cross-validation to avoid interference with the CV scoring flow.
-    """
-    # If no sample_weight then broadcast a value of 1 to all samples (full weight).
-    if sample_weight_train is None:
-        sample_weight_train = np.ones((X.shape[0],))
-
-    if sample_weight_score is None:
-        sample_weight_score = np.ones((X.shape[0],))
-
-    # Check for sequential bootstrap
-    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
-    if seq_bootstrap:
-        t1 = classifier.samples_info_sets.copy()
-
-    if isinstance(scoring, str):
-        scoring_map = {
-            "neg_log_loss": log_loss,
-            "accuracy": accuracy_score,
-            "f1": f1_score,
-            "pwa": probability_weighted_accuracy,
-        }
-        scoring = scoring_map[scoring]
-
-    # Score model on KFolds
-    ret_scores = []
-    models = []
-    for train, test in cv_gen.split(X=X, y=y):
-        if seq_bootstrap:
-            classifier = clone(classifier).set_params(
-                samples_info_sets=t1.iloc[train], oob_score=False
-            )  # Create new instance
-        fit = classifier.fit(
-            X=X.iloc[train, :],
-            y=y.iloc[train],
-            sample_weight=sample_weight_train[train],
-        )
-        models.append(fit)
-        params = dict(
-            y_true=y.iloc[test],
-            labels=classifier.classes_,
-            sample_weight=sample_weight_score[test],
-        )
-        if scoring == (log_loss or probability_weighted_accuracy):
-            params["y_pred"] = fit.predict_proba(X.iloc[test, :])
-            score = scoring(**params)
-            if scoring == log_loss:
-                score *= -1
-        elif scoring == (f1_score or accuracy_score):
-            params["y_pred"] = fit.predict(X.iloc[test, :])
-            try:
-                score = scoring(**params)
-            except:
-                del params["labels"]
-                score = scoring(**params)
-
-        ret_scores.append(score)
-
-    return np.array(ret_scores), models
-
-
-@cv_cacheable
 def analyze_cross_val_scores(
-    classifier: ClassifierMixin,
+    classifier: BaseEstimator,
     X: pd.DataFrame,
     y: pd.Series,
     cv_gen: BaseCrossValidator,
-    sample_weight_train: Optional[pd.Series] = None,
-    sample_weight_score: Optional[pd.Series] = None,
+    sample_weight_train: pd.Series | None = None,
+    sample_weight_score: pd.Series | None = None,
 ):
     # pylint: disable=invalid-name
     # pylint: disable=comparison-with-callable
@@ -496,10 +462,10 @@ def analyze_cross_val_scores(
 
     # If no sample_weight then broadcast a value of 1 to all samples (full weight).
     if sample_weight_train is None:
-        sample_weight_train = np.ones((X.shape[0],))
+        sample_weight_train = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     if sample_weight_score is None:
-        sample_weight_score = np.ones((X.shape[0],))
+        sample_weight_score = pd.Series(np.ones((X.shape[0],)), index=y.index)
 
     seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
     if seq_bootstrap:
@@ -514,17 +480,17 @@ def analyze_cross_val_scores(
                 samples_info_sets=t1.iloc[train], oob_score=False
             )  # Create new instance
         fit = classifier.fit(
-            X=X.iloc[train, :],
-            y=y.iloc[train],
-            sample_weight=sample_weight_train[train],
+            X=X.iloc[train, :].to_numpy(),
+            y=y.iloc[train].to_numpy(),
+            sample_weight=sample_weight_train.iloc[train].to_numpy(),
         )
-        prob = fit.predict_proba(X.iloc[test, :])
+        prob = fit.predict_proba(X.iloc[test, :].to_numpy())
         pred = (prob[:, 1] > 0.5).astype(int)
         params = dict(
             y_true=y.iloc[test],
             y_pred=pred,
             labels=classifier.classes_,
-            sample_weight=sample_weight_score[test],
+            sample_weight=sample_weight_score.iloc[test].to_numpy(),
         )
 
         for method, scoring in zip(ret_scores.keys(), scoring_methods):
@@ -537,7 +503,7 @@ def analyze_cross_val_scores(
                 params["y_pred"] = pred
                 try:
                     score = scoring(**params)
-                except:
+                except Exception:
                     del params["labels"]
                     score = scoring(**params)
                     params["labels"] = classifier.classes_
@@ -563,135 +529,6 @@ def analyze_cross_val_scores(
             confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
         else:
             # For multi-class, you might want different handling
-            confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
-
-    return ret_scores, scores_df, confusion_matrix_breakdown
-
-
-@cv_cacheable
-def analyze_cross_val_scores_calibrated(
-    classifier: ClassifierMixin,
-    X: pd.DataFrame,
-    y: pd.Series,
-    cv_gen: BaseCrossValidator,
-    sample_weight_train: Optional[pd.Series] = None,
-    sample_weight_score: Optional[pd.Series] = None,
-    calibrate: bool = True,
-):
-    """
-    Cross-validation with optional per-fold calibration.
-
-    When calibrate=True, each fold is calibrated using a held-out
-    calibration set (further split from training data).
-    """
-    scoring_methods = [
-        accuracy_score,
-        probability_weighted_accuracy,
-        log_loss,
-        precision_score,
-        recall_score,
-        f1_score,
-    ]
-
-    ret_scores = {
-        scoring.__name__.replace("_score", "")
-        .replace("probability_weighted_accuracy", "pwa")
-        .replace("log_loss", "neg_log_loss"): np.zeros(cv_gen.n_splits)
-        for scoring in scoring_methods
-    }
-
-    if sample_weight_train is None:
-        sample_weight_train = np.ones((X.shape[0],))
-    if sample_weight_score is None:
-        sample_weight_score = np.ones((X.shape[0],))
-
-    seq_bootstrap = isinstance(classifier, SequentiallyBootstrappedBaggingClassifier)
-    if seq_bootstrap:
-        t1 = classifier.samples_info_sets.copy()
-
-    cms = []
-
-    for i, (train, test) in enumerate(cv_gen.split(X=X, y=y)):
-        # Split train into fit + calibration
-        if calibrate:
-            from sklearn.model_selection import train_test_split
-
-            train_fit, train_cal = train_test_split(
-                train, test_size=0.2, random_state=42, stratify=y.iloc[train]
-            )
-        else:
-            train_fit = train
-
-        # Fit model
-        if seq_bootstrap:
-            classifier = clone(classifier).set_params(
-                samples_info_sets=t1.iloc[train_fit], oob_score=False
-            )
-
-        fit = classifier.fit(
-            X=X.iloc[train_fit, :],
-            y=y.iloc[train_fit],
-            sample_weight=sample_weight_train[train_fit],
-        )
-
-        # Calibrate if requested
-        if calibrate:
-            from sklearn.isotonic import IsotonicRegression
-
-            cal_proba = fit.predict_proba(X.iloc[train_cal, :])[:, 1]
-            calibrator = IsotonicRegression(out_of_bounds="clip")
-            calibrator.fit(cal_proba, y.iloc[train_cal])
-
-            # Get calibrated predictions on test set
-            prob = fit.predict_proba(X.iloc[test, :])
-            prob[:, 1] = calibrator.predict(prob[:, 1])
-            prob[:, 0] = 1 - prob[:, 1]
-        else:
-            prob = fit.predict_proba(X.iloc[test, :])
-
-        pred = (prob[:, 1] > 0.5).astype(int)
-
-        # Compute metrics
-        params = dict(
-            y_true=y.iloc[test],
-            y_pred=pred,
-            labels=classifier.classes_,
-            sample_weight=sample_weight_score[test],
-        )
-
-        for method, scoring in zip(ret_scores.keys(), scoring_methods):
-            if scoring in (probability_weighted_accuracy, log_loss):
-                params["y_pred"] = prob
-                score = scoring(**params)
-                if method == "neg_log_loss":
-                    score *= -1
-            else:
-                params["y_pred"] = pred
-                try:
-                    score = scoring(**params)
-                except:
-                    del params["labels"]
-                    score = scoring(**params)
-                    params["labels"] = classifier.classes_
-
-            ret_scores[method][i] = score
-
-        cms.append(confusion_matrix(**params).round(2))
-
-    scores_df = pd.DataFrame.from_dict(
-        {
-            scoring: {"mean": scores.mean(), "std": scores.std()}
-            for scoring, scores in ret_scores.items()
-        },
-        orient="index",
-    )
-
-    confusion_matrix_breakdown = []
-    for i, cm in enumerate(cms, 1):
-        if cm.shape == (2, 2):
-            tn, fp, fn, tp = cm.ravel()
-            confusion_matrix_breakdown.append({"fold": i, "TN": tn, "FP": fp, "FN": fn, "TP": tp})
-        else:
             confusion_matrix_breakdown.append({"fold": i, "confusion_matrix": cm})
 
     return ret_scores, scores_df, confusion_matrix_breakdown

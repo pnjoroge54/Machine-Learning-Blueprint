@@ -9,13 +9,13 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
 from loguru import logger
 
 # Import AFML cache components
-from afml.cache import get_backtest_cache, get_data_tracker, robust_cacheable
+from afml.cache import backtest_cache, cacheable, get_data_tracker
 
 
 @dataclass
@@ -55,7 +55,7 @@ class BacktestSignal:
     take_profit: float
     confidence: float
     strategy_name: str
-    features: Dict[str, float]  # Feature values that generated this signal
+    features: dict[str, float]  # Feature values that generated this signal
 
 
 @dataclass
@@ -93,8 +93,8 @@ class AFMLBacktestBridge:
         self,
         host: str = "127.0.0.1",
         port: int = 80,
-        cache_dir: Optional[Path] = None,
-        data_dir: Optional[Path] = None,
+        cache_dir: Path | None = None,
+        data_dir: Path | None = None,
     ):
         """
         Initialize AFML Backtest Bridge.
@@ -116,19 +116,19 @@ class AFMLBacktestBridge:
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         # Communication
-        self.server_socket: Optional[socket.socket] = None
-        self.client_socket: Optional[socket.socket] = None
+        self.server_socket: socket.socket | None = None
+        self.client_socket: socket.socket | None = None
         self.is_running = False
         self.lock = threading.Lock()
 
         # Backtest state
-        self.current_config: Optional[BacktestConfig] = None
-        self.historical_bars: Dict[str, pd.DataFrame] = {}
-        self.trades: List[BacktestTrade] = []
-        self.signals: List[BacktestSignal] = []
+        self.current_config: BacktestConfig | None = None
+        self.historical_bars: dict[str, pd.DataFrame] = {}
+        self.trades: list[BacktestTrade] = []
+        self.signals: list[BacktestSignal] = []
 
         # Cache and tracking
-        self.backtest_cache = get_backtest_cache()
+        self.backtest_cache = backtest_cache
         self.data_tracker = get_data_tracker()
 
         logger.info(f"AFML Backtest Bridge initialized: {self.cache_dir}")
@@ -241,7 +241,7 @@ class AFMLBacktestBridge:
     # Feature Engineering (Cached)
     # =========================================================================
 
-    @robust_cacheable
+    @cacheable
     def engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Engineer features for ML model (cached for speed).
@@ -280,9 +280,9 @@ class AFMLBacktestBridge:
 
         return df.dropna()
 
-    @robust_cacheable
+    @cacheable
     def generate_ml_signal(
-        self, features: pd.DataFrame, model_path: Optional[Path] = None
+        self, features: pd.DataFrame, model_path: Path | None = None
     ) -> BacktestSignal:
         """
         Generate ML trading signal (cached).
@@ -306,7 +306,15 @@ class AFMLBacktestBridge:
 
         # Get last row for prediction
         X = features[
-            ["z_spike", "macd_hist", "rsi", "atr", "ema_lower", "ema_upper", "env_position"]
+            [
+                "z_spike",
+                "macd_hist",
+                "rsi",
+                "atr",
+                "ema_lower",
+                "ema_upper",
+                "env_position",
+            ]
         ].iloc[-1:]
 
         # Predict probabilities
@@ -357,8 +365,11 @@ class AFMLBacktestBridge:
     # =========================================================================
 
     def run_backtest(
-        self, config: BacktestConfig, model_path: Optional[Path] = None, save_results: bool = True
-    ) -> Dict[str, Any]:
+        self,
+        config: BacktestConfig,
+        model_path: Path | None = None,
+        save_results: bool = True,
+    ) -> dict[str, Any]:
         """
         Run complete backtest with cached feature engineering.
 
@@ -370,9 +381,7 @@ class AFMLBacktestBridge:
         Returns:
             Dict with backtest metrics and trade list
         """
-        logger.info(
-            f"Starting backtest: {config.symbol} " f"{config.start_date} to {config.end_date}"
-        )
+        logger.info(f"Starting backtest: {config.symbol} {config.start_date} to {config.end_date}")
 
         self.current_config = config
         self.trades = []
@@ -385,7 +394,7 @@ class AFMLBacktestBridge:
             parquet_file = self.data_dir / f"{symbol_key}_hist.parquet"
 
             if not parquet_file.exists():
-                raise FileNotFoundError(f"No historical data found. Run bootstrap first.")
+                raise FileNotFoundError("No historical data found. Run bootstrap first.")
 
             df = pd.read_parquet(parquet_file)
             self.historical_bars[symbol_key] = df
@@ -429,13 +438,13 @@ class AFMLBacktestBridge:
                 equity_curve=results["equity_curve"],
             )
 
-            logger.info(f"Backtest results cached")
+            logger.info("Backtest results cached")
 
         return results
 
     def _simulate_trading(
-        self, features: pd.DataFrame, model_path: Optional[Path]
-    ) -> Dict[str, Any]:
+        self, features: pd.DataFrame, model_path: Path | None
+    ) -> dict[str, Any]:
         """Simulate trading on historical data."""
 
         balance = self.current_config.initial_balance
@@ -462,7 +471,11 @@ class AFMLBacktestBridge:
                         pnl = current_position["stop_loss"] - current_position["entry_price"]
                         balance += pnl * current_position["size"]
                         self._record_trade(
-                            current_position, current_time, current_position["stop_loss"], "SL", pnl
+                            current_position,
+                            current_time,
+                            current_position["stop_loss"],
+                            "SL",
+                            pnl,
                         )
                         current_position = None
                     elif current_price >= current_position["take_profit"]:
@@ -484,7 +497,11 @@ class AFMLBacktestBridge:
                         pnl = current_position["entry_price"] - current_position["stop_loss"]
                         balance += pnl * current_position["size"]
                         self._record_trade(
-                            current_position, current_time, current_position["stop_loss"], "SL", pnl
+                            current_position,
+                            current_time,
+                            current_position["stop_loss"],
+                            "SL",
+                            pnl,
                         )
                         current_position = None
                     elif current_price <= current_position["take_profit"]:
@@ -541,7 +558,12 @@ class AFMLBacktestBridge:
         }
 
     def _record_trade(
-        self, position: Dict, exit_time: datetime, exit_price: float, exit_reason: str, pnl: float
+        self,
+        position: dict,
+        exit_time: datetime,
+        exit_price: float,
+        exit_reason: str,
+        pnl: float,
     ):
         """Record completed trade."""
         trade = BacktestTrade(
@@ -562,7 +584,7 @@ class AFMLBacktestBridge:
 
         self.trades.append(trade)
 
-    def _calculate_metrics(self, results: Dict) -> Dict[str, float]:
+    def _calculate_metrics(self, results: dict) -> dict[str, float]:
         """Calculate backtest performance metrics."""
         trades_df = pd.DataFrame([asdict(t) for t in self.trades])
 
@@ -601,15 +623,13 @@ class AFMLBacktestBridge:
     # Socket Communication (simplified helpers)
     # =========================================================================
 
-    def _send_message(self, message: Dict):
+    def _send_message(self, message: dict):
         """Send JSON message to MQL5."""
         # Implementation would be similar to your MQL5Bridge
-        pass
 
-    def _receive_bars_batch(self) -> List[Dict]:
+    def _receive_bars_batch(self) -> list[dict]:
         """Receive batch of bars from MQL5."""
         # Implementation would receive and parse bars
-        pass
 
 
 # =============================================================================
@@ -621,8 +641,8 @@ def run_quick_backtest(
     symbol: str,
     days_back: int = 30,
     initial_balance: float = 10000.0,
-    model_path: Optional[Path] = None,
-) -> Dict[str, Any]:
+    model_path: Path | None = None,
+) -> dict[str, Any]:
     """
     Quick backtest runner.
 

@@ -3,26 +3,20 @@ Various functions for message encoding (quantile)
 """
 
 import numpy as np
+from numba import jit
 
 
-def encode_tick_rule_array(tick_rule_array: list) -> str:
+def encode_tick_rule_array(tick_rule_array):
     """
     Encode array of tick signs (-1, 1, 0)
 
     :param tick_rule_array: (list) Tick rules
     :return: (str) Encoded message
     """
-    message = ""
-    for element in tick_rule_array:
-        if element == 1:
-            message += "a"
-        elif element == -1:
-            message += "b"
-        elif element == 0:
-            message += "c"
-        else:
-            raise ValueError(f"Unknown value for tick rule: {element}")
-    return message
+    arr = np.asarray(tick_rule_array, dtype=np.int8)
+    # map -1 -> 'b', 0 -> 'c', 1 -> 'a'
+    chars = np.array(["b", "c", "a"])[arr + 1]
+    return chars.tobytes().decode()  # or ''.join(chars)
 
 
 def _get_ascii_table() -> list:
@@ -101,6 +95,7 @@ def _get_letter_from_encoding(value: float, encoding_dict: dict) -> str:
     return encoding_dict[_find_nearest(list(encoding_dict.keys()), value)]
 
 
+@jit(cache=True, forceobj=True)
 def encode_array(array: list, encoding_dict: dict) -> str:
     """
     Encode array with strings using encoding dict, in case of multiple occurrences of the minimum values,
@@ -110,7 +105,19 @@ def encode_array(array: list, encoding_dict: dict) -> str:
     :param encoding_dict: (dict) Dict of quantile-symbol
     :return: (str) Encoded message
     """
-    message = ""
-    for element in array:
-        message += _get_letter_from_encoding(element, encoding_dict)
-    return message
+    # Get sorted thresholds and matching letters
+    thresholds = np.array(sorted(encoding_dict.keys()))
+    letters = [encoding_dict[t] for t in thresholds]
+    # digitize returns bin indices (1-based for right side, but careful)
+    # We'll use searchsorted on raw values
+    arr = np.asarray(array)
+    bin_indices = np.searchsorted(thresholds, arr, side="right") - 1
+    # Clip to valid range (values below first threshold map to last bin? depends on semantics)
+    # Actually your original _find_nearest grabs the nearest, not the first above.
+    # For quantile mapping the boundaries are quantiles, so nearest is fine.
+    # We can use digitize with nearest via custom logic, but simplest: compute distances.
+    # For a robust nearest-neighbor mapping:
+    idx = np.abs(arr[:, None] - thresholds[None, :]).argmin(axis=1)
+    # Map to letters:
+    chars = np.array(letters)[idx]
+    return chars.tobytes().decode()

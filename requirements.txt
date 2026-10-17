@@ -11,3 +11,8 @@ scipy
 sphinx==2.2.1 # needed for docs
 sphinx-rtd-theme==0.4.3 # needed for docs
 statsmodels
+distinctipy
+fredapi
+onnxruntime
+optuna
+polars

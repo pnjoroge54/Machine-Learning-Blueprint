@@ -74,7 +74,7 @@ def _compute_return_weights_numba(
         start_idx = start_indices[i]
         end_idx = end_indices[i]
 
-        if start_idx < end_idx and end_idx <= len(log_returns):
+        if start_idx < end_idx <= len(log_returns):
             weight_sum = 0.0
 
             # Sum weighted returns over event duration
@@ -128,9 +128,12 @@ def _apply_time_decay_numba(cumulative_time_weights, last_weight, linear_decay=T
         else:
             # last_weight < 0 case
             if max_cumulative > 1e-12:
+                # AFML snippet 4.11: the newest observation keeps weight 1 and the
+                # oldest |last_weight| share of cumulative uniqueness gets weight 0
                 slope = 1.0 / ((last_weight + 1.0) * max_cumulative)
+                const = 1.0 - slope * max_cumulative
                 for i in range(n):
-                    weight = slope * cumulative_time_weights[i]
+                    weight = const + slope * cumulative_time_weights[i]
                     decay_weights[i] = max(0.0, weight)
             else:
                 decay_weights[:] = 0.0
@@ -316,7 +319,7 @@ def get_weights_by_return_optimized(
         # Verify index compatibility
         missing_in_close = processed_ce.index.difference(close.index)
         assert missing_in_close.empty, (
-            f"num_conc_events contains {len(missing_in_close)} " "indices not in close"
+            f"num_conc_events contains {len(missing_in_close)} indices not in close"
         )
 
     # Compute weights using optimized parallel processing

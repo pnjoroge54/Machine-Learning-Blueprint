@@ -1,22 +1,18 @@
 import datetime
-from typing import Union
 
 import matplotlib.lines as mlines
 import mplfinance as mpf
+import numpy as np
 import pandas as pd
 
-from afml.cache.selective_cleaner import smart_cacheable
-from afml.features.moving_averages import calculate_ma_differences, get_ma_crossovers
-from afml.features.returns import get_lagged_returns, rolling_autocorr_numba
-from afml.util.misc import optimize_dtypes
-from afml.util.volatility import get_garman_klass_vol, get_period_vol
-
+from ..features.returns import get_lagged_returns, rolling_autocorr_numba
+from ..util.misc import optimize_dtypes
+from ..util.volatility import get_parkinson_vol, get_period_vol
 from .signal_processing import get_entries
-from .signals import BollingerStrategy
+from .trading_strategies import BollingerStrategy
 
 
-@smart_cacheable
-def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: float = 2):
+def create_bollinger_features(df: pd.DataFrame, window: int = 20, std: float = 2):
     """
     Create features for meta-labeling model
     """
@@ -25,35 +21,33 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
     # --- 1. Returns Features ---
     # Garman Volatility
-    features["vol"] = get_garman_klass_vol(
-        df["open"], df["high"], df["low"], df["close"], window=bb_period
-    )
+    features[f"parkinson_vol_{window}"] = get_parkinson_vol(df["high"], df["low"], window=window)
 
     # Hourly EWM(num_hours) Volatility
     for num_hours in (1, 4, 24):
         features[f"H{num_hours}_vol"] = get_period_vol(
-            df["close"], lookback=bb_period, hours=num_hours
+            df["close"], lookback=window, hours=num_hours
         )
     features.columns = features.columns.str.replace("H24", "D1")
 
     # Lagged returns normalized by volatility
     lagged_ret = get_lagged_returns(df["close"], lags=[1, 5, 10], nperiods=3)
-    features = features.join(lagged_ret.div(features["vol"], axis=0))  # Normalize returns
+    features = features.join(
+        lagged_ret.div(features[f"parkinson_vol_{window}"], axis=0)
+    )  # Normalize returns
 
     # Distribution
-    features["returns_skew"] = features["returns"].rolling(bb_period).skew()
-    features["returns_kurt"] = features["returns"].rolling(bb_period).kurt()
+    features["returns_skew"] = features["returns"].rolling(window).skew()
+    features["returns_kurt"] = features["returns"].rolling(window).kurt()
 
     # Autocorrelations of normalized returns
-    features["autocorr"] = rolling_autocorr_numba(
-        features["returns"].to_numpy(), lookback=bb_period
-    )
+    features["autocorr"] = rolling_autocorr_numba(features["returns"].to_numpy(), lookback=window)
     for t in range(1, 6):
         features[f"autocorr_{t}"] = features["autocorr"].shift(t)
 
     # --- 2. Technical Analysis Features ---
     # Bollinger Bands
-    bbands = df.ta.bbands(bb_period, bb_std).iloc[:, -2:]  # Use BBP and BBB only
+    bbands = df.ta.bbands(window, std, std).iloc[:, -2:]  # Use BBP and BBB only
 
     # Volatility
     tr = df.ta.true_range()
@@ -71,15 +65,24 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
     ta_features = [bbands, tr, atr, rsi, stochrsi, adx, macd]
     features = features.join(ta_features)
 
-    # --- 3. Moving Average Features ---
-    windows = (10, 20, 50, 100, 200)
-    ma_diffs = calculate_ma_differences(df["close"], windows, drop=False)
-    ma_diffs = ma_diffs.div(atr, axis=0)  # Normalize by ATR
-    ma_crossovers = get_ma_crossovers(df["close"], windows, drop=False)
-    features = features.join([ma_diffs, ma_crossovers])
+    # --- 3. Advanced Bollinger Features ---
+    # Normalize Bollinger Bands
+    bb_bandwidth = bbands.filter(regex="BBB")
+
+    # Add momentum features
+    features["bb_bandwidth_diff"] = bb_bandwidth.diff()  # Momentum
+    features["bb_bandwidth_ma"] = bb_bandwidth.rolling(5).mean()  # Smoothing
+    features["bb_bw_mom"] = bb_bandwidth.pct_change(3)
+    features["bb_bw_regime"] = (bb_bandwidth > bb_bandwidth.quantile(0.75)).astype(int)
+
+    # Calculate oscillators and volatility measures
+    bb_bandwidth_diff = features["bb_bandwidth_diff"].apply(np.sign).fillna(0)  # Bandwidth change
+    features["is_widening_bb"] = bb_bandwidth_diff.replace({-1: 0}).astype("int8")
+    features["is_shrinking_bb"] = bb_bandwidth_diff.replace({1: 0}).astype("int8")
 
     # --- 4. Add side prediction ---
-    features["side"] = BollingerStrategy(bb_period, bb_std).generate_signals(df)
+    # Previous because we shift after
+    features["prev_signal"] = BollingerStrategy(window, std).generate_signals(df)
 
     # --- 5. Lag features ---
     features = features.shift().dropna()
@@ -96,8 +99,8 @@ def create_bollinger_features(df: pd.DataFrame, bb_period: int = 20, bb_std: flo
 
 def plot_bbands(
     data: pd.DataFrame,
-    start: Union[str, datetime.datetime],
-    end: Union[str, datetime.datetime],
+    start: str | datetime.datetime,
+    end: str | datetime.datetime,
     window: int = 20,
     std: float = 1.5,
     width: float = 7.5,
@@ -212,16 +215,40 @@ def plot_bbands(
 
     # Create dummy line handles for the scatter markers to ensure correct order
     long_entry_handle = mlines.Line2D(
-        [], [], color="lime", marker="^", linestyle="None", markersize=10, label="Long Entry"
+        [],
+        [],
+        color="lime",
+        marker="^",
+        linestyle="None",
+        markersize=10,
+        label="Long Entry",
     )
     long_exit_handle = mlines.Line2D(
-        [], [], color="red", marker="v", linestyle="None", markersize=10, label="Long Exit"
+        [],
+        [],
+        color="red",
+        marker="v",
+        linestyle="None",
+        markersize=10,
+        label="Long Exit",
     )
     short_entry_handle = mlines.Line2D(
-        [], [], color="orange", marker="v", linestyle="None", markersize=10, label="Short Entry"
+        [],
+        [],
+        color="orange",
+        marker="v",
+        linestyle="None",
+        markersize=10,
+        label="Short Entry",
     )
     short_exit_handle = mlines.Line2D(
-        [], [], color="cyan", marker="^", linestyle="None", markersize=10, label="Short Exit"
+        [],
+        [],
+        color="cyan",
+        marker="^",
+        linestyle="None",
+        markersize=10,
+        label="Short Exit",
     )
 
     # Add the dummy handles to the lists
@@ -234,8 +261,8 @@ def plot_bbands(
 
 def plot_bbands_dual_bbp_bw(
     data: pd.DataFrame,
-    start: Union[str, datetime.datetime],
-    end: Union[str, datetime.datetime],
+    start: str | datetime.datetime,
+    end: str | datetime.datetime,
     window: int = 20,
     std: float = 2.0,
     width: float = 9,
@@ -321,7 +348,12 @@ def plot_bbands_dual_bbp_bw(
     indicator_plots = [
         mpf.make_addplot(df[bbp_col], color="yellow", width=1.2, panel=1, ylabel="%B"),
         mpf.make_addplot(
-            df[bbb_col], color="magenta", width=1.2, panel=1, secondary_y=True, ylabel="Bandwidth"
+            df[bbb_col],
+            color="magenta",
+            width=1.2,
+            panel=1,
+            secondary_y=True,
+            ylabel="Bandwidth",
         ),
     ]
 
@@ -364,3 +396,141 @@ def plot_bbands_dual_bbp_bw(
             labels.append(line.get_label())
 
     axes[0].legend(handles, labels, loc="best")
+
+
+# def generate_bollinger_mean_reverting_features(df, window=20, bb_dev=2, rsi_period=14):
+#     """
+#     Generate mean-reversion features using TA-Lib
+#     Requires: 'open', 'high', 'low', 'close' columns
+#     """
+#     if not {"open", "high", "low", "close"}.issubset(df.columns):
+#         raise ValueError("DataFrame must contain 'open', 'high', 'low', and 'close' columns.")
+
+#     # Calculate Bollinger Bands
+#     if not {"bb_upper", "bb_mid", "bb_lower"}.issubset(df.columns):
+#         df = bollinger_mean_reverting_entries(df.copy(), window=window, std=bb_dev)
+
+#     # Normalize Bollinger Bands
+#     df["bb_upper_dev"] = (df["bb_upper"] / df["close"] - 1) * 100
+#     df["bb_lower_dev"] = (1 - bb_lower / df["close"]) * 100
+
+#     # Add proper relative features
+#     std_dev = (df["bb_upper"] - df["bb_mid"]) / bb_dev
+#     df["bb_zscore"] = (df["close"] - df["bb_mid"]) / std_dev
+#     # df['bb_pctb'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+
+#     # Add momentum features
+#     df["bb_bandwidth_diff"] = df["bb_bandwidth"].diff()  # Momentum
+#     df["bb_bandwidth_ma"] = df["bb_bandwidth"].rolling(5).mean()  # Smoothing
+#     df["bb_bw_mom"] = df["bb_bandwidth"].pct_change(3)
+#     df["bb_bw_regime"] = (df["bb_bandwidth"] > df["bb_bandwidth"].quantile(0.75)).astype("int8")
+
+#     # Calculate candlestick patterns
+#     df["CDL_HAMMER"] = talib.CDLHAMMER(df["open"], df["high"], df["low"], df["close"])
+#     df["CDL_INVERTEDHAMMER"] = talib.CDLINVERTEDHAMMER(
+#         df["open"], df["high"], df["low"], df["close"]
+#     )
+#     df["CDL_ENGULFING"] = talib.CDLENGULFING(df["open"], df["high"], df["low"], df["close"])
+#     df["CDL_HARAMI"] = talib.CDLHARAMI(df["open"], df["high"], df["low"], df["close"])
+#     df["CDL_DOJI"] = talib.CDLDOJI(df["open"], df["high"], df["low"], df["close"])
+#     df["CDL_DRAGONFLYDOJI"] = talib.CDLDRAGONFLYDOJI(df["open"], df["high"], df["low"], df["close"])
+#     df["CDL_GRAVESTONEDOJI"] = talib.CDLGRAVESTONEDOJI(
+#         df["open"], df["high"], df["low"], df["close"]
+#     )
+
+#     # Tweezers patterns
+#     prev_close = df["close"].shift(1)
+#     prev_open = df["open"].shift(1)
+#     tolerance_factor = 0.001  # 0.1% of price
+#     df["CDL_TWEEZER_BOT"] = (
+#         (np.abs(df["low"].shift(1) - df["low"]) <= df["close"] * tolerance_factor)
+#         & (prev_close < prev_open)
+#         & (df["close"] > df["open"])
+#     )
+#     df["CDL_TWEEZER_TOP"] = (
+#         (np.abs(df["high"].shift(1) - df["high"]) <= df["close"] * tolerance_factor)
+#         & (prev_close > prev_open)
+#         & (df["close"] < df["open"])
+#     )
+
+#     # Band proximity (with tolerance)
+#     tolerance = 0.005  # 0.5% tolerance
+#     df["at_upper_band"] = (df["high"] >= df["bb_upper"] * (1 - tolerance)).astype(int)
+#     df["at_lower_band"] = (df["low"] <= df["bb_lower"] * (1 + tolerance)).astype(int)
+
+#     # Calculate oscillators and volatility measures
+#     df["bb_bandwidth_diff"] = df["bb_bandwidth"].diff().apply(np.sign).fillna(0)  # Bandwidth change
+#     df["is_widening_bb"] = (
+#         df["bb_bandwidth_diff"].replace({-1: 0}).astype(int)
+#     )  # Convert -1 to 0 for consistency
+#     df["is_shrinking_bb"] = (
+#         df["bb_bandwidth_diff"].replace({1: 0}).astype(int)
+#     )  # Convert 1 to 0 for consistency
+#     df["tr"] = talib.TRANGE(df["high"], df["low"], df["close"])  # True Range for volatility
+#     df["atr"] = talib.ATR(
+#         df["high"], df["low"], df["close"], timeperiod=rsi_period
+#     )  # ATR for volatility
+
+#     # bb_half_life = int(window / 2)
+#     df["yz_vol"] = get_yang_zhang_vol(
+#         df["open"], df["high"], df["low"], df["close"], window=window
+#     )  # Yang-Zhang volatility
+#     df["macd"], df["macdsignal"], df["macdhist"] = talib.MACD(
+#         df["close"], fastperiod=12, slowperiod=26, signalperiod=9
+#     )  # MACD
+#     df["rsi"] = talib.RSI(df["close"], timeperiod=rsi_period)  # RSI for overbought/oversold
+
+#     # Stochastic Oscillator
+#     df["stoch_k"], df["stoch_d"] = talib.STOCH(
+#         df["high"], df["low"], df["close"], fastk_period=14, slowk_period=3, slowd_period=3
+#     )
+
+#     adx = df.ta.adx(length=rsi_period)  # Using pandas_ta for ADX
+#     adx.columns = [
+#         x.split("_")[0].lower() for x in adx.columns
+#     ]  # Rename columns to match convention
+#     df = pd.concat([df, adx], axis=1)  # Concatenate ADX columns
+#     df["is_adx_positive"] = (df["adx"] > 20).astype(int)  # ADX threshold for trend strength
+
+#     # Create pattern-band features
+#     pattern_map = {
+#         "bullish_hammer": "CDL_HAMMER",
+#         "bullish_inverted_hammer": "CDL_INVERTEDHAMMER",
+#         "bullish_engulfing": "CDL_ENGULFING",
+#         "bullish_harami": "CDL_HARAMI",
+#         "dragonfly_doji": "CDL_DRAGONFLYDOJI",
+#         "tweezers_bottom": "CDL_TWEEZER_BOT",
+#         "bearish_inverted_hammer": "CDL_INVERTEDHAMMER",
+#         "bearish_hammer": "CDL_HAMMER",
+#         "bearish_engulfing": "CDL_ENGULFING",
+#         "bearish_harami": "CDL_HARAMI",
+#         "gravestone_doji": "CDL_GRAVESTONEDOJI",
+#         "tweezers_top": "CDL_TWEEZER_TOP",
+#     }
+
+#     for feature, pattern in pattern_map.items():
+#         # TA-Lib returns 100 for bullish, -100 for bearish patterns
+#         multiplier = 1 if "bullish" in feature else -1
+#         band_cond = df["at_lower_band"] if "bullish" in feature else df["at_upper_band"]
+
+#         df[feature] = ((df[pattern] == (100 * multiplier)) & (band_cond == 1)).astype(int)
+
+#     # Add confirmation labels
+#     df["next_close"] = df["close"].shift(-1)
+#     df["confirmation_bullish"] = (
+#         (df["next_close"] > df["close"]) & (df["at_lower_band"] == 1)
+#     ).astype(int)
+#     df["confirmation_bearish"] = (
+#         (df["next_close"] < df["close"]) & (df["at_upper_band"] == 1)
+#     ).astype(int)
+
+#     # Clean up intermediate columns
+#     intermediate_cols = df.columns[
+#         df.columns.str.startswith("CDL_") | df.columns.isin(["next_close"])
+#     ]
+#     df = df.drop(columns=intermediate_cols, errors="ignore")  # Drop intermediate columns safely
+
+#     int_cols = df.select_dtypes(include=[int, bool]).columns
+#     df[int_cols] = df[int_cols].astype("int8")  # Memory optimization
+
+#     return df

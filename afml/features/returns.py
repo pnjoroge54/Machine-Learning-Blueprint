@@ -1,5 +1,3 @@
-from typing import Union
-
 import numpy as np
 import pandas as pd
 from numba import njit, prange
@@ -86,7 +84,7 @@ def get_period_autocorr(close: pd.Series, lookback: int = 100, **time_delta_kwar
 
 
 def get_lagged_returns(
-    prices: Union[pd.Series, pd.DataFrame],
+    prices: pd.Series | pd.DataFrame,
     lags: list,
     nperiods: int = 3,
 ) -> pd.DataFrame:
@@ -144,6 +142,6 @@ def get_return_dist_features(close, window=10):
     ret = np.log(close).diff()
     sma_returns = ret.rolling(window, min_periods=3)
     df["returns_norm"] = (ret - sma_returns.mean()) / sma_returns.std()
-    df[f"returns_skew"] = sma_returns.skew()
-    df[f"returns_kurt"] = sma_returns.kurt()
+    df["returns_skew"] = sma_returns.skew()
+    df["returns_kurt"] = sma_returns.kurt()
     return df

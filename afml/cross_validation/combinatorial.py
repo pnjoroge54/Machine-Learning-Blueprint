@@ -1,501 +1,1076 @@
-"""
-Implements the Combinatorial Purged Cross-Validation class from Chapter 12
-"""
+"""Combinatorial Purged Cross-Validation and CPCV-based performance analysis."""
 
-from itertools import combinations
+import itertools
+import math
+import numbers
+from collections.abc import Iterator
 
+import joblib
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+import sklearn.utils as sku
+from joblib import Parallel, delayed
+from numba import njit
+from scipy.stats import kurtosis as scipy_kurt
+from scipy.stats import norm
+from scipy.stats import skew as scipy_skew
+from sklearn.base import clone
+from sklearn.model_selection import BaseCrossValidator
+
+from .cross_validation import ml_get_train_times
+
+_MAX_COMBINATIONS = 100_000
 
 
-class CombinatorialPurgedKFold:
+# ---------------------------------------------------------------------------
+# Numba Optimized Utilities
+# ---------------------------------------------------------------------------
+
+
+@njit(cache=True)
+def fill_sides_numba(num_close, t0_idx, t1_idx, side):
     """
-    Robust implementation of Combinatorial Purged Cross-Validation (CPCV) with proper embargo handling.
+    Maps event-based signals to a continuous timeline by additive accumulation.
 
-    This class implements the CPCV method from Chapter 12 of "Advances in Financial Machine Learning"
-    by Marcos López de Prado, with corrections to ensure proper temporal separation between
-    training and testing periods through purging and embargo mechanisms.
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for the start (entry) of each bet.
+    t1_idx : np.ndarray (int64)
+        Integer indices for the end (exit) of each bet.
+    side : np.ndarray (float64)
+        The signal values/sizes to be mapped.
 
-    CPCV addresses the limited number of backtests in traditional time series cross-validation
-    by generating multiple combinations of test splits, allowing for more robust model validation
-    while maintaining temporal dependencies.
+    Returns
+    -------
+    np.ndarray (float64)
+        A continuous timeline of accumulated bet sizes.
+    """
+    full_side = np.zeros(num_close, dtype=np.float64)
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            full_side[start : end + 1] += side[i]
+    return full_side
 
-    Key Features:
-    - Combinatorial generation of train/test splits
-    - Proper purging of overlapping samples
-    - Configurable embargo period to prevent data leakage
-    - Robust index handling for financial time series
 
-    Args:
-        n_splits (int): Total number of splits to divide the dataset into.
-            Each split represents a contiguous time block. Default: 3.
-        n_test_splits (int): Number of test splits to use in each combination.
-            Must be less than n_splits. Default: 2.
-        samples_info_sets (pd.Series): Series containing the information ranges for each sample.
-            - Index: Time when information extraction started
-            - Values: Time when information extraction ended
-            Used for purging overlapping samples between train and test sets.
-        pct_embargo (float): Percentage of total samples to use as embargo period (0-1).
-            Embargo prevents using samples immediately after test period to avoid
-            forward-looking bias. Default: 0.01 (1% embargo).
-        random_state (int, optional): Random seed for reproducibility. Not currently
-            used but included for future compatibility. Default: None.
+@njit(cache=True)
+def fill_average_active_sides(num_close, t0_idx, t1_idx, side):
+    """
+    Maps event-based signals to a timeline by averaging concurrent signals.
+    Implementation of AFML Snippet 10.3 logic.
 
-    Attributes:
-        n_splits (int): Stored parameter for total splits
-        n_test_splits (int): Stored parameter for test splits per combination
-        samples_info_sets (pd.Series): Stored information ranges
-        pct_embargo (float): Stored embargo percentage
-        random_state (int): Stored random state
+    Parameters
+    ----------
+    num_close : int
+        The total number of bars in the reference price series.
+    t0_idx : np.ndarray (int64)
+        Integer indices for signal entries.
+    t1_idx : np.ndarray (int64)
+        Integer indices for signal exits.
+    side : np.ndarray (float64)
+        The conviction/probability signals.
 
-    Raises:
-        ValueError: If n_test_splits >= n_splits
-        TypeError: If samples_info_sets is not a pandas Series
+    Returns
+    -------
+    np.ndarray (float64)
+        The time-weighted average signal at every timestamp.
+    """
+    sum_side = np.zeros(num_close, dtype=np.float64)
+    active_count = np.zeros(num_close, dtype=np.int32)
 
-    Example:
-        >>> from combinatorial import CombinatorialPurgedKFold
-        >>> import pandas as pd
-        >>> import numpy as np
+    for i in range(len(t0_idx)):
+        start, end = t0_idx[i], t1_idx[i]
+        if start != -1 and end != -1:
+            sum_side[start : end + 1] += side[i]
+            active_count[start : end + 1] += 1
 
-        # Create sample financial time series data
-        >>> dates = pd.date_range('2020-01-01', periods=100, freq='D')
-        >>> samples_info = pd.Series(
-        ...     index=dates,
-        ...     data=dates + pd.Timedelta(days=5)  # 5-day information periods
-        ... )
-        >>> X = pd.DataFrame(np.random.randn(100, 5), index=dates)
-        >>> y = pd.Series(np.random.randint(0, 2, 100), index=dates)
+    avg_side = np.zeros(num_close, dtype=np.float64)
+    for t in range(num_close):
+        if active_count[t] > 0:
+            avg_side[t] = sum_side[t] / active_count[t]
+    return avg_side
 
-        # Initialize CPCV with embargo
-        >>> cv = CombinatorialPurgedKFold(
-        ...     n_splits=5,
-        ...     n_test_splits=2,
-        ...     samples_info_sets=samples_info,
-        ...     pct_embargo=0.01  # 1% embargo
-        ... )
 
-        # Generate splits
-        >>> for train_idx, test_idx in cv.split(X, y):
-        ...     print(f"Train size: {len(train_idx)}, Test size: {len(test_idx)}")
-        ...     # Model training and validation would go here
+# ---------------------------------------------------------------------------
+# Helper statistics functions
+# ---------------------------------------------------------------------------
 
-    Note:
-        - The number of total combinations generated is C(n_splits, n_test_splits)
-        - Each combination uses n_test_splits contiguous blocks as test set
-        - Remaining (n_splits - n_test_splits) blocks form the training set
-        - Purging removes any training samples whose information period overlaps with test period
-        - Embargo removes additional samples after test period to prevent leakage
 
-    Reference:
-        López de Prado, M. (2018). Advances in Financial Machine Learning, Chapter 12.
-        Wiley. ISBN: 978-1-119-48208-6
+def _n_splits(n_folds: int, n_test_folds: int) -> int:
+    """Number of splits = C(n_folds, n_test_folds)."""
+    return math.comb(n_folds, n_test_folds)
+
+
+def _n_test_paths(n_folds: int, n_test_folds: int) -> int:
+    """Number of distinct backtest paths that can be reconstructed."""
+    return _n_splits(n_folds=n_folds, n_test_folds=n_test_folds) * n_test_folds // n_folds
+
+
+def _avg_train_size(n_observations: int, n_folds: int, n_test_folds: int) -> float:
+    """Average number of observations in each training set."""
+    return n_observations / n_folds * (n_folds - n_test_folds)
+
+
+# ---------------------------------------------------------------------------
+# Main class
+# ---------------------------------------------------------------------------
+
+
+class CombinatorialPurgedCV(BaseCrossValidator):
+    """
+    Combinatorial Purged Cross-Validation for financial time series.
+
+    Provides train/test indices to split time series data samples based on
+    Combinatorial Purged Cross-Validation [1]_.
+
+    Compared to ``KFold``, which uses a single test fold, this class uses
+    ``n_test_folds > 1`` test folds per split so that multiple independent
+    backtest paths can be recombined from the train/test combinations.
+
+    To prevent data leakage, **purging** and **embargoing** are applied:
+
+    * **Purging** (event-based, via ``t1``) – removes every training
+      observation whose label formation period ``[t1.index[i], t1.iloc[i]]``
+      overlaps in time with any test-set event window.  This is the exact
+      overlap test from López de Prado (2018) Ch. 7, implemented in
+      :func:`ml_get_train_times`.
+
+    * **Embargoing** (positional, via ``pct_embargo``) – after the last
+      observation of each contiguous test block, the next ``embargo_size``
+      training observations are excluded to guard against serial-correlation
+      leakage (e.g. from ARMA-type features).  ``embargo_size`` is computed
+      as ``int(n_samples * pct_embargo)`` at ``split`` time.
+
+    Parameters
+    ----------
+    n_folds : int, default=10
+        Total number of folds. Must be at least 3.
+
+    n_test_folds : int, default=2
+        Number of test folds per split. Must be at least 2 and strictly less
+        than ``n_folds``. For one test fold use ``sklearn.model_selection.KFold``.
+
+    t1 : pd.Series
+        The information range for each observation.
+
+        * ``t1.index``  – timestamp when information extraction *started*
+          (bar open / observation start time).
+        * ``t1.values`` – timestamp when the label was *finalised*
+          (e.g. when a triple-barrier was hit).
+
+        Must be aligned with ``X`` (same index). Used exclusively for
+        event-based purging via :func:`ml_get_train_times`.
+
+    pct_embargo : float, default=0.01
+        Fraction of total observations to exclude from the start of each
+        training segment immediately following a test block (positional
+        embargo). Set to ``0.0`` to disable.
+
+    Attributes
+    ----------
+    index_train_test_ : ndarray of shape (n_observations, n_splits)
+        Populated after the generator from ``split()`` is fully exhausted.
+        Encodes each observation's role per split:
+
+        *  ``0`` – training
+        *  ``1`` – test
+        * ``-1`` – excluded (purged or embargoed)
+
+    Examples
+    --------
+    >>> import numpy as np, pandas as pd
+    >>> from combinatorial import CombinatorialPurgedCV
+    >>> dates = pd.date_range("2020-01-01", periods=12, freq="D")
+    >>> X = pd.DataFrame(np.random.randn(12, 2), index=dates)
+    >>> t1 = pd.Series(dates + pd.Timedelta(days=2), index=dates)
+    >>> cv = CombinatorialPurgedCV(n_folds=3, n_test_folds=2, t1=t1, pct_embargo=0.0)
+    >>> for i, (train_idx, test_list) in enumerate(cv.split(X)):
+    ...     print(f"Split {i}: train={train_idx.tolist()}")
+    ...     for j, t in enumerate(test_list):
+    ...         print(f"  test[{j}]={t.tolist()}")
+
+    References
+    ----------
+    .. [1] "Advances in Financial Machine Learning",
+       Marcos López de Prado (2018).
     """
 
     def __init__(
         self,
-        n_splits: int = 3,
-        n_test_splits: int = 2,
-        samples_info_sets: pd.Series = None,
+        n_folds: int = 10,
+        n_test_folds: int = 2,
+        t1: pd.Series | None = None,
         pct_embargo: float = 0.01,
-        random_state: int = None,
-    ):
-        # Validate input parameters
-        if n_test_splits >= n_splits:
-            raise ValueError(
-                f"n_test_splits ({n_test_splits}) must be less than n_splits ({n_splits})"
+    ) -> None:
+        # ---- validate t1 ----
+        if not isinstance(t1, pd.Series):
+            raise TypeError(
+                "`t1` must be a pd.Series whose index holds event-start times "
+                "and whose values hold event-end times."
             )
 
-        if not isinstance(samples_info_sets, pd.Series):
-            raise TypeError("samples_info_sets must be a pandas Series")
+        # ---- validate n_folds ----
+        if not isinstance(n_folds, numbers.Integral):
+            raise ValueError(
+                "The number of folds must be of Integral type. "
+                f"{n_folds} of type {type(n_folds)} was passed."
+            )
+        n_folds = int(n_folds)
+        if n_folds <= 2:
+            raise ValueError(f"`n_folds` must be at least 3, got `n_folds={n_folds}`.")
 
-        if not 0 <= pct_embargo <= 1:
-            raise ValueError(f"pct_embargo ({pct_embargo}) must be between 0 and 1")
+        # ---- validate n_test_folds ----
+        if n_test_folds <= 1:
+            raise ValueError(
+                f"`n_test_folds` must be at least 2, got `n_test_folds={n_test_folds}`."
+            )
+        if n_test_folds >= n_folds:
+            raise ValueError(
+                "`n_folds` must be strictly greater than `n_test_folds`, "
+                f"got n_folds={n_folds}, n_test_folds={n_test_folds}."
+            )
 
-        # Initialize instance variables
-        self.n_splits = n_splits
-        self.n_test_splits = n_test_splits
-        self.samples_info_sets = samples_info_sets
+        # ---- validate pct_embargo ----
+        if not (0.0 <= pct_embargo < 1.0):
+            raise ValueError("`pct_embargo` must be in [0, 1).")
+
+        # ---- guard against combinatorial explosion ----
+        n_combinations = math.comb(n_folds, n_test_folds)
+        if n_combinations > _MAX_COMBINATIONS:
+            raise ValueError(
+                f"n_folds={n_folds} and n_test_folds={n_test_folds} produce "
+                f"{n_combinations:,} splits, exceeding the maximum of "
+                f"{_MAX_COMBINATIONS:,}. Reduce `n_folds` or move `n_test_folds` "
+                "further from n_folds / 2."
+            )
+
+        self.n_folds = n_folds
+        self.n_test_folds = n_test_folds
+        self.t1 = t1
         self.pct_embargo = pct_embargo
-        self.random_state = random_state
 
-        # Calculate total number of combinations for information
-        from scipy.special import comb
+    # ------------------------------------------------------------------
+    # sklearn BaseCrossValidator interface
+    # ------------------------------------------------------------------
 
-        self.n_combinations = int(comb(n_splits, n_test_splits))
+    def get_n_splits(self, X=None, y=None, groups=None) -> int:
+        """Return the total number of splits = C(n_folds, n_test_folds)."""
+        return self.n_splits
 
-        # Log initialization parameters (optional - for debugging)
-        # print(f"Initialized CPCV with {n_splits} splits, {n_test_splits} test splits, "
-        #       f"{pct_embargo:.1%} embargo, generating {self.n_combinations} combinations")
+    def _iter_test_indices(self, X=None, y=None, groups=None):
+        """Required stub; not useful here – use ``split()`` directly."""
+        raise NotImplementedError(
+            "Use `split()` directly – it yields (train_index, [test_0, test_1, ...])."
+        )
 
-    def split(self, X, y=None, groups=None):
+    # --------------------------------------------------------------------------
+    # Read-only combinatorial properties (depend only on n_folds / n_test_folds)
+    # --------------------------------------------------------------------------
+
+    @property
+    def n_splits(self) -> int:
+        """Total number of train/test splits."""
+        return _n_splits(n_folds=self.n_folds, n_test_folds=self.n_test_folds)
+
+    @property
+    def n_test_paths(self) -> int:
+        """Number of distinct backtest paths that can be reconstructed."""
+        return _n_test_paths(n_folds=self.n_folds, n_test_folds=self.n_test_folds)
+
+    @property
+    def test_set_index(self) -> np.ndarray:
+        """Shape (n_splits, n_test_folds) – fold numbers used as test per split."""
+        return np.array(
+            list(itertools.combinations(np.arange(self.n_folds), self.n_test_folds))
+        ).reshape(-1, self.n_test_folds)
+
+    @property
+    def binary_train_test_sets(self) -> np.ndarray:
+        """Shape (n_folds, n_splits) – 0 = train fold, 1 = test fold."""
+        mat = np.zeros((self.n_folds, self.n_splits))
+        mat[self.test_set_index, np.arange(self.n_splits)[:, np.newaxis]] = 1
+        return mat
+
+    @property
+    def recombined_paths(self) -> np.ndarray:
         """
-        Generate indices to split data into training and testing sets.
+        Shape (n_folds, n_test_paths) – split index in which each fold appears
+        as a test set, ordered by path.  Used to reconstruct backtest paths."""
+        return np.argwhere(self.binary_train_test_sets == 1)[:, 1].reshape(self.n_folds, -1)
 
-        This method implements the core combinatorial purged cross-validation logic:
-        1. Divides the dataset into n_splits contiguous blocks
-        2. Generates all combinations of n_test_splits blocks for testing
-        3. For each combination:
-           - Uses the selected blocks as test set
-           - Uses remaining blocks as training set (after purging and embargo)
+    # ------------------------------------------------------------------
+    # Path IDs
+    # ------------------------------------------------------------------
 
-        Args:
-            X (array-like, shape (n_samples, n_features)): Training data matrix
-            y (array-like, shape (n_samples,), optional): Target variable vector
-            groups (array-like, optional): Group labels for the samples used while
-                splitting the dataset. Not used in this implementation but included
-                for sklearn compatibility.
+    def get_path_ids(self) -> np.ndarray:
+        """Return the path id of each test set in each split.
 
-        Yields:
-            tuple: (train_indices, test_indices) for each combination
-
-        Raises:
-            ValueError: If X has different number of samples than samples_info_sets
-
-        Note:
-            - The method yields C(n_splits, n_test_splits) combinations
-            - Each yield provides indices for one train/test split
-            - Training indices are purged of samples overlapping with test information periods
-            - Embargo period is applied after each test block
+        Returns
+        -------
+        path_ids : ndarray of shape (n_splits, n_test_folds)
+            ``path_ids[i, j]`` is the path index that the j-th test fold of
+            split *i* contributes to.
         """
-        # Validate input dimensions
-        n_samples = len(X)
-        if n_samples != len(self.samples_info_sets):
+        recombined = self.recombined_paths
+        path_ids = np.zeros((self.n_splits, self.n_test_folds), dtype=int)
+        for i in range(self.n_splits):
+            for j in range(self.n_test_folds):
+                path_ids[i, j] = int(np.argwhere(recombined == i)[j][1])
+        return path_ids
+
+    def split_paths(self, X, y=None, groups=None):
+        """Yield each combinatorial backtest path as a list of (train, test) per fold."""
+        # Generate all splits once (cached)
+        splits = list(self.split(X, y, groups))  # each element: (train_idx, test_idx_list)
+        for path_id in range(self.n_test_paths):
+            path_splits = []
+            for fold_id in range(self.n_folds):
+                # Find which split uses this fold as test and belongs to this path
+                split_idx = self.recombined_paths[fold_id, path_id]  # shape (n_folds, n_test_paths)
+                train, test_list = splits[split_idx]
+                # The test_list contains arrays for each test fold; find the one for this fold
+                test_idx = test_list[list(self.test_set_index[split_idx]).index(fold_id)]
+                path_splits.append((train, test_idx))
+            yield path_splits
+
+    # ------------------------------------------------------------------
+    # Core split
+    # ------------------------------------------------------------------
+
+    def split(
+        self,
+        X,
+        y=None,
+        groups=None,
+    ) -> Iterator[tuple[np.ndarray, list[np.ndarray]]]:
+        """
+        Generate train/test index arrays for each combinatorial split.
+
+        Each yielded training set has already been:
+
+        1. **Purged** (event-based) – observations whose ``t1`` window overlaps
+           any test-set event window are removed via :func:`ml_get_train_times`.
+        2. **Embargoed** (positional) – the first ``embargo_size`` training
+           observations immediately following the end of each contiguous test
+           block are removed.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Must share its index with ``self.t1``.
+        y : array-like of shape (n_samples,), optional
+        groups : ignored
+
+        Yields
+        ------
+        train_index : ndarray
+            Row indices for the purged + embargoed training set.
+        test_index_list : list of ndarray
+            One array of row indices per test fold, in ascending fold order.
+        """
+        X, y = sku.indexable(X, y)
+        n_samples = X.shape[0]
+
+        # ---- validate X / t1 alignment ----
+        x_index = X.index if hasattr(X, "index") else pd.RangeIndex(n_samples)
+        if len(x_index) != len(self.t1) or not x_index.equals(self.t1.index):
             raise ValueError(
-                f"X has {n_samples} samples but samples_info_sets has "
-                f"{len(self.samples_info_sets)} entries. They must match."
+                "X and t1 must share the same index (same length and identical index labels)."
             )
 
-        # Create array of sample indices [0, 1, 2, ..., n_samples-1]
-        indices = np.arange(n_samples)
+        embargo_size = int(n_samples * self.pct_embargo)
 
-        # Calculate absolute number of samples for embargo
-        # Using percentage of total samples provides consistent embargo size
-        embargo_samples = int(n_samples * self.pct_embargo)
+        # Map every observation to a fold id  (0 … n_folds-1)
+        fold_index_num = np.arange(n_samples) // (n_samples // self.n_folds)
+        fold_index_num[fold_index_num == self.n_folds] = self.n_folds - 1
 
-        # Split indices into n_splits contiguous blocks
-        # Example: 100 samples, 5 splits → blocks of [0-19], [20-39], [40-59], [60-79], [80-99]
-        base_splits = np.array_split(indices, self.n_splits)
+        # Pre-compute positional arrays for each fold
+        fold_pos: dict = {
+            fid: np.argwhere(fold_index_num == fid).reshape(-1) for fid in range(self.n_folds)
+        }
 
-        # Store split boundaries for easy reference
-        # Each tuple contains (split_index, start_index, end_index)
-        split_boundaries = []
-        for i, split in enumerate(base_splits):
-            start = split[0]  # First index in this split
-            end = split[-1] + 1  # Last index + 1 (exclusive boundary)
-            split_boundaries.append((i, start, end))
+        # Observation-role matrix:  0=train, 1=test, -1=excluded
+        index_train_test = np.zeros((n_samples, self.n_splits), dtype=np.int8)
 
-        # Generate all possible combinations of test splits
-        # Example: 5 splits, choose 2 → C(5,2) = 10 combinations
-        test_combinations = list(combinations(range(self.n_splits), self.n_test_splits))
+        test_set_index = self.test_set_index  # (n_splits, n_test_folds)
+        recombined = self.recombined_paths  # (n_folds,  n_test_paths)
 
-        # Log combination count (optional - for debugging)
-        # print(f"Generating {len(test_combinations)} train/test combinations")
+        for i in range(self.n_splits):
+            # 1. Mark test observations
+            for fid in test_set_index[i]:
+                index_train_test[fold_pos[fid], i] = 1
 
-        # Iterate through each combination of test splits
-        for test_split_indices in test_combinations:
-            # test_split_indices contains the indices of splits used for testing
-            # Example: (0, 2) means use first and third splits as test set
+            # 2. Event-based purging via t1
+            test_pos = np.argwhere(index_train_test[:, i] == 1).reshape(-1)
+            train_pos = np.argwhere(index_train_test[:, i] == 0).reshape(-1)
 
-            test_indices = []  # Will contain all test sample indices
-            test_ranges = []  # Will store start/end boundaries for each test split
+            t1_test = pd.Series(
+                self.t1.iloc[test_pos].values,
+                index=self.t1.index[test_pos],
+            )
+            t1_train_candidate = pd.Series(
+                self.t1.iloc[train_pos].values,
+                index=self.t1.index[train_pos],
+            )
 
-            # Collect all indices from the selected test splits
-            for split_idx in test_split_indices:
-                # Get boundaries for this test split
-                start, end = split_boundaries[split_idx][1], split_boundaries[split_idx][2]
+            t1_purged = ml_get_train_times(t1_train_candidate, t1_test)
+            surviving = set(t1_purged.index)
 
-                # Add all indices in this range to test set
-                test_indices.extend(range(start, end))
+            purged_pos = np.array(
+                [p for p in train_pos if self.t1.index[p] not in surviving],
+                dtype=int,
+            )
+            if purged_pos.size:
+                index_train_test[purged_pos, i] = -1
 
-                # Store the range for purging and embargo calculations
-                test_ranges.append((start, end))
+            # 3. Positional embargo after each contiguous test block
+            if embargo_size > 0:
+                test_mask = index_train_test[:, i] == 1
+                # Block-end: test obs followed by non-test obs (or end of series)
+                block_ends = np.where(test_mask & ~np.append(test_mask[1:], False))[0]
+                for end_pos in block_ends:
+                    for ep in range(end_pos + 1, min(end_pos + 1 + embargo_size, n_samples)):
+                        if index_train_test[ep, i] == 0:
+                            index_train_test[ep, i] = -1
 
-            # Get training indices with proper purging and embargo
-            # This ensures no temporal leakage between train and test sets
-            train_indices = self._get_purged_train_indices(test_ranges, embargo_samples, n_samples)
+            # 4. Yield
+            train_index = np.argwhere(index_train_test[:, i] == 0).reshape(-1)
+            test_index_list = [fold_pos[fid] for fid, _ in np.argwhere(recombined == i)]
+            yield train_index, test_index_list
 
-            # Convert to numpy arrays for consistency with sklearn API
-            train_array = np.array(train_indices)
-            test_array = np.array(test_indices)
+        # Store after all splits are generated
+        self.index_train_test_ = index_train_test
+        self._fold_index_num = fold_index_num
 
-            # Validate that train and test sets are disjoint
-            if len(np.intersect1d(train_array, test_array)) > 0:
-                raise RuntimeError(
-                    f"Train and test sets overlap! This indicates a bug in purging logic. "
-                    f"Train size: {len(train_array)}, Test size: {len(test_array)}, "
-                    f"Intersection: {len(np.intersect1d(train_array, test_array))}"
+    # ------------------------------------------------------------------
+    # Prediction recombination
+    # ------------------------------------------------------------------
+
+    def recombine_test_predictions(
+        self,
+        all_predictions: list[np.ndarray],
+    ) -> list[np.ndarray]:
+        """
+        Recombine per-split predictions into complete backtest paths.
+
+        Each path covers every test observation exactly once, assigned to
+        paths via :meth:`get_path_ids`.
+
+        Parameters
+        ----------
+        all_predictions : list of ndarray, length ``n_splits``
+            ``all_predictions[i]`` contains model predictions for split *i*,
+            ordered to match ``np.concatenate(test_index_list)`` from
+            ``split()``.
+
+        Returns
+        -------
+        paths : list of ndarray, length ``n_test_paths``
+            Each array holds predictions for all test observations on that
+            path, ordered by their original row position in ``X``.
+        """
+        if not hasattr(self, "index_train_test_") or not hasattr(self, "_fold_index_num"):
+            raise RuntimeError(
+                "Exhaust the `split(X)` generator fully before calling "
+                "`recombine_test_predictions`."
+            )
+
+        path_ids = self.get_path_ids()  # (n_splits, n_test_folds)
+        test_set_index = self.test_set_index  # (n_splits, n_test_folds)
+
+        # path_store[p] : {row_position -> [prediction, ...]}
+        path_store: list[dict] = [{} for _ in range(self.n_test_paths)]
+
+        for i, (preds, fold_ids, pid_row) in enumerate(
+            zip(all_predictions, test_set_index, path_ids)
+        ):
+            split_preds = np.asarray(preds)
+            # Test observations for this split in positional order
+            test_pos_all = np.argwhere(self.index_train_test_[:, i] == 1).reshape(-1)
+            offset = 0
+            for j, fold_id in enumerate(fold_ids):
+                path_id = int(pid_row[j])
+                fold_size = int((self._fold_index_num == fold_id).sum())
+                chunk_pos = test_pos_all[offset : offset + fold_size]
+                chunk_preds = split_preds[offset : offset + fold_size]
+                for pos, pred_val in zip(chunk_pos, chunk_preds):
+                    path_store[path_id].setdefault(int(pos), []).append(float(pred_val))
+                offset += fold_size
+
+        paths = []
+        for store in path_store:
+            sorted_keys = sorted(store.keys())
+            paths.append(np.array([np.mean(store[k]) for k in sorted_keys]))
+        return paths
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+
+    def summary(self, X) -> pd.Series:
+        """
+        Return a human-readable summary of the CV configuration.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+
+        Returns
+        -------
+        pd.Series
+        """
+        n_obs = np.asarray(X).shape[0]
+        return pd.Series(
+            {
+                "Number of Observations": n_obs,
+                "Total Number of Folds": self.n_folds,
+                "Number of Test Folds": self.n_test_folds,
+                "Embargo Size (obs)": int(n_obs * self.pct_embargo),
+                "Average Training Size": int(
+                    _avg_train_size(n_obs, self.n_folds, self.n_test_folds)
+                ),
+                "Number of Test Paths": self.n_test_paths,
+                "Number of Training Combinations": self.n_splits,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Visualization
+    # ------------------------------------------------------------------
+
+    def plot_train_test_folds(self) -> go.Figure:
+        """Plot the train/test fold locations."""
+        values = self.binary_train_test_sets
+        fill_color = np.where(values == 0, "blue", "red")
+        fill_color = fill_color.astype(object)
+        fill_color = np.insert(
+            fill_color, 0, np.array(["darkblue" for _ in range(self.n_splits)]), axis=0
+        )
+        values = np.insert(values, 0, np.arange(self.n_splits), axis=0)
+        fig = go.Figure(
+            data=[
+                go.Table(
+                    header=dict(
+                        values=["Train Combinations"] + [f"Fold {i}" for i in range(self.n_folds)],
+                        fill_color="darkblue",
+                        font=dict(color="white"),
+                        align="left",
+                    ),
+                    cells=dict(
+                        values=values,
+                        font=dict(color="white"),
+                        fill_color=fill_color,
+                        line_color="grey",
+                        align="left",
+                    ),
                 )
+            ]
+        )
+        fig.update_layout(title="Split Train (0) /Test (1) Folds per Combination")
+        return fig
 
-            # Yield the indices for this combination
-            yield train_array, test_array
-
-    def _get_purged_train_indices(self, test_ranges, embargo_samples, n_samples):
+    def plot_train_test_index(self, X) -> go.Figure:
         """
-        Calculate training indices after applying purging and embargo.
+        Plot the training and test indices for each split by assigning ``0`` to
+        training, ``1`` to test, and ``-1`` to purged or embargoed observations.
 
-        This helper method implements the core data leakage prevention:
-        - Purging: Remove any training samples whose information period overlaps with test period
-        - Embargo: Remove additional samples immediately after test period to prevent
-          leakage from serially correlated data
+        Each column of the resulting table corresponds to one of the
+        ``n_splits`` combinatorial train/test splits; each row corresponds to
+        one observation in ``X``.  The colour encoding is:
 
-        Args:
-            test_ranges (list of tuples): List of (start, end) index ranges for test splits
-            embargo_samples (int): Number of samples to embargo after each test range
-            n_samples (int): Total number of samples in dataset
+        * **Blue**  (0)  – observation is in the training set for that split.
+        * **Red**   (1)  – observation is in the test set for that split.
+        * **Green** (−1) – observation has been excluded from the training set
+          due to purging (event-label overlap with the test window) or
+          embargoing (positional buffer immediately after the test block).
 
-        Returns:
-            list: Sorted list of training indices after purging and embargo
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Must share its index with ``self.t1``.  Only the shape and index
+            are used; the feature values are not accessed.
 
-        Note:
-            - Purging uses samples_info_sets to determine temporal overlaps
-            - Embargo uses simple index-based exclusion for efficiency
-            - The method is conservative - it may remove more samples than strictly necessary
-              to ensure no data leakage
+        Returns
+        -------
+        go.Figure
+            An interactive Plotly table figure.
+
+        Notes
+        -----
+        This method requires ``index_train_test_`` to be fully populated
+        across **all** ``n_splits`` columns before it can render a correct
+        visualisation.  ``index_train_test_`` is built incrementally inside
+        the ``split()`` generator and is only finalised once the generator is
+        fully exhausted.
+
+        To guarantee this, the method checks whether ``index_train_test_``
+        already exists (e.g. because ``CPCVAnalyzer.fit_predict`` or a manual
+        ``list(self.split(X))`` call has already run).  If it does not exist,
+        the full generator is exhausted here automatically.  The previous
+        behaviour of calling ``next(self.split(X))`` — which populated only
+        the first column — has been removed, as it produced an incorrect
+        visualisation for all splits after the first.
         """
-        # Start with all possible indices as candidates for training
-        train_candidates = set(range(n_samples))
+        if not hasattr(self, "index_train_test_"):
+            # Exhaust the full generator so every column of index_train_test_
+            # is populated before we attempt to render the table.
+            for _ in self.split(X):
+                pass
 
-        # Step 1: Remove all test indices from training candidates
-        for start, end in test_ranges:
-            # Remove the entire test range from training candidates
-            test_range_indices = set(range(start, end))
-            train_candidates -= test_range_indices
-
-        # Step 2: Apply embargo - remove samples immediately after each test range
-        # This prevents using data that might be correlated with test period
-        for start, end in test_ranges:
-            # Calculate embargo range: from end of test to end + embargo_samples
-            embargo_start = end
-            embargo_end = min(end + embargo_samples, n_samples)  # Don't exceed dataset bounds
-
-            # Remove embargoed samples from training candidates
-            if embargo_start < embargo_end:  # Only if embargo period is valid
-                embargo_indices = set(range(embargo_start, embargo_end))
-                train_candidates -= embargo_indices
-
-        # Step 3: Apply purging based on temporal information overlap
-        # This is the most crucial step for financial data
-        final_train_indices = self._apply_temporal_purging(train_candidates, test_ranges)
-
-        # Return sorted list for consistent ordering
-        return sorted(final_train_indices)
-
-    def _apply_temporal_purging(self, candidate_indices, test_ranges):
-        """
-        Apply temporal purging to remove samples with overlapping information periods.
-
-        This method uses the samples_info_sets to identify and remove training samples
-        whose information collection period overlaps with any test sample's period.
-
-        Args:
-            candidate_indices (set): Candidate training indices after basic exclusion
-            test_ranges (list): Test range boundaries for overlap checking
-
-        Returns:
-            set: Purged training indices with no temporal overlap with test set
-        """
-        if self.samples_info_sets is None:
-            # If no temporal information provided, return candidates as-is
-            return candidate_indices
-
-        # Get all test sample indices for overlap checking
-        all_test_indices = set()
-        for start, end in test_ranges:
-            all_test_indices.update(range(start, end))
-
-        # Get information periods for test samples
-        test_info_starts = self.samples_info_sets.index[list(all_test_indices)]
-        test_info_ends = self.samples_info_sets.iloc[list(all_test_indices)].values
-
-        # Convert candidate indices to list for processing
-        candidate_list = list(candidate_indices)
-
-        # Check each candidate training sample for temporal overlap
-        safe_train_indices = set()
-
-        for train_idx in candidate_list:
-            train_info_start = self.samples_info_sets.index[train_idx]
-            train_info_end = self.samples_info_sets.iloc[train_idx]
-
-            # Check if this training sample overlaps with any test sample
-            has_overlap = False
-
-            for test_idx in all_test_indices:
-                test_info_start = self.samples_info_sets.index[test_idx]
-                test_info_end = self.samples_info_sets.iloc[test_idx]
-
-                # Check for temporal overlap using the standard conditions
-                # 1. Train starts during test period
-                condition1 = test_info_start <= train_info_start <= test_info_end
-                # 2. Train ends during test period
-                condition2 = test_info_start <= train_info_end <= test_info_end
-                # 3. Train completely contains test period
-                condition3 = train_info_start <= test_info_start and test_info_end <= train_info_end
-
-                if condition1 or condition2 or condition3:
-                    has_overlap = True
-                    break  # No need to check other test samples
-
-            # Only keep training sample if it has no temporal overlap
-            if not has_overlap:
-                safe_train_indices.add(train_idx)
-
-        return safe_train_indices
-
-    def get_n_splits(self, X=None, y=None, groups=None):
-        """
-        Returns the number of splitting iterations in the cross-validator.
-
-        This method provides compatibility with sklearn's cross-validation interface.
-
-        Args:
-            X (object): Always ignored, exists for compatibility
-            y (object): Always ignored, exists for compatibility
-            groups (object): Always ignored, exists for compatibility
-
-        Returns:
-            int: Number of train/test splits that will be generated
-
-        Note:
-            The number of splits is determined by the combinatorial formula:
-            C(n_splits, n_test_splits) - the number of ways to choose n_test_splits
-            test blocks from n_splits total blocks.
-        """
-        return self.n_combinations
-
-    def __repr__(self):
-        """
-        Return string representation of the cross-validator.
-
-        Returns:
-            str: Informative string representation
-        """
-        return (
-            f"CombinatorialPurgedKFold(n_splits={self.n_splits}, "
-            f"n_test_splits={self.n_test_splits}, "
-            f"pct_embargo={self.pct_embargo}, "
-            f"n_combinations={self.n_combinations})"
+        n_samples = X.shape[0]
+        cond = [
+            self.index_train_test_ == -1,
+            self.index_train_test_ == 0,
+            self.index_train_test_ == 1,
+        ]
+        values = self.index_train_test_.T
+        values = np.insert(values, 0, np.arange(n_samples), axis=0)
+        fill_color = np.select(cond, ["green", "blue", "red"], default="green").T
+        fill_color = fill_color.astype(object)
+        fill_color = np.insert(
+            fill_color, 0, np.array(["darkblue" for _ in range(n_samples)]), axis=0
+        )
+        fig = go.Figure(
+            data=[
+                go.Table(
+                    header=dict(
+                        values=["observations"] + [f"Split {i}" for i in range(self.n_splits)],
+                        fill_color="darkblue",
+                        font=dict(color="white"),
+                        align="left",
+                    ),
+                    cells=dict(
+                        values=values,
+                        font=dict(color="white"),
+                        fill_color=fill_color,
+                        line_color="grey",
+                        align="left",
+                    ),
+                )
+            ]
+        )
+        fig.update_layout(
+            title="Train (0), Test (1) and Purge/Embargo (-1) observations per splits"
         )
 
+        return fig
 
-def demonstrate_combinatorial_cv():
+
+# ---------------------------------------------------------------------------
+# Optimal-folds search
+# ---------------------------------------------------------------------------
+
+
+@njit(cache=True)
+def _avg_train_size(n_obs: int, n_folds: int, n_test_folds: int) -> float:
+    """Average training set size (number of observations)."""
+    return n_obs / n_folds * (n_folds - n_test_folds)
+
+
+@njit(cache=True)
+def _n_test_paths(n_folds: int, n_test_folds: int) -> int:
+    """Number of distinct backtest paths = C(n_folds, n_test_folds) * n_test_folds / n_folds."""
+
+    # Using math.comb is not supported in Numba; implement manually.
+    # For small n_folds (<= 1000) we can use iterative multiplication.
+    def comb(n, k):
+        if k < 0 or k > n:
+            return 0
+        k = min(k, n - k)
+        c = 1
+        for i in range(1, k + 1):
+            c = c * (n - k + i) // i
+        return c
+
+    return comb(n_folds, n_test_folds) * n_test_folds // n_folds
+
+
+@njit(cache=True)
+def _cost(
+    n_obs: int,
+    n_folds: int,
+    n_test_folds: int,
+    target_train_size: int,
+    target_n_test_paths: int,
+    weight_train_size: float,
+    weight_n_test_paths: float,
+) -> float:
+    """Weighted relative distance cost."""
+    avg_tr = _avg_train_size(n_obs, n_folds, n_test_folds)
+    n_paths = _n_test_paths(n_folds, n_test_folds)
+    term1 = weight_train_size * abs(avg_tr - target_train_size) / target_train_size
+    term2 = weight_n_test_paths * abs(n_paths - target_n_test_paths) / target_n_test_paths
+    return term1 + term2
+
+
+def optimal_folds_number(
+    n_observations: int,
+    target_train_size: int,
+    target_n_test_paths: int,
+    weight_train_size: float = 1.0,
+    weight_n_test_paths: float = 1.0,
+) -> tuple:
     """
-    Comprehensive demonstration of CombinatorialPurgedKFold usage.
+    Find (n_folds, n_test_folds) that best matches the targets using Numba.
 
-    This example shows how to properly use the combinatorial CV with financial data,
-    including validation of the embargo and purging functionality.
+    Parameters
+    ----------
+    n_observations : int
+        Total number of samples.
+    target_train_size : int
+        Desired average number of observations in each training set.
+    target_n_test_paths : int
+        Desired number of distinct backtest paths.
+    weight_train_size : float, default=1.0
+        Relative importance of matching target_train_size.
+    weight_n_test_paths : float, default=1.0
+        Relative importance of matching target_n_test_paths.
+
+    Returns
+    -------
+    tuple (n_folds, n_test_folds)
     """
-    from datetime import timedelta
+    best_cost = np.inf
+    best_pair = (3, 2)  # fallback
 
-    import numpy as np
-    import pandas as pd
+    for n_folds in range(3, n_observations + 1):
+        # Upper bound for n_test_folds: at most n_folds - 1, but we can stop early.
+        # The cost tends to increase when n_test_folds becomes too large relative to n_folds.
+        # A heuristic: stop when n_folds - n_test_folds <= 1? We'll just loop all.
+        for n_test_folds in range(2, n_folds):
+            c = _cost(
+                n_observations,
+                n_folds,
+                n_test_folds,
+                target_train_size,
+                target_n_test_paths,
+                weight_train_size,
+                weight_n_test_paths,
+            )
+            if c < best_cost:
+                best_cost = c
+                best_pair = (n_folds, n_test_folds)
+    return best_pair
 
-    # Create realistic financial time series data
-    print("Creating sample financial dataset...")
-    n_samples = 252 * 2  # 2 years of daily data
-    dates = pd.date_range("2020-01-01", periods=n_samples, freq="D")
 
-    # Simulate information collection periods (typical in financial ML)
-    # Each sample uses information from the past 10 days
-    samples_info_sets = pd.Series(index=dates, data=[date + timedelta(days=10) for date in dates])
+# ---------------------------------------------------------------------------
+# CPCVAnalyzer — module-level worker functions
+# (must be at module scope so joblib can pickle them across processes)
+# ---------------------------------------------------------------------------
 
-    # Create features and target
-    X = pd.DataFrame(
-        {
-            "feature1": np.random.randn(n_samples),
-            "feature2": np.random.randn(n_samples),
-            "feature3": np.random.randn(n_samples),
-        },
-        index=dates,
-    )
 
-    y = pd.Series(np.random.randint(0, 2, n_samples), index=dates)
+def _fit_predict_fold(
+    estimator,
+    X: pd.DataFrame,
+    y: pd.Series,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,  # flat array — caller concatenates test_index_list
+    fold_idx: int,
+    sample_weight: pd.Series | None = None,
+) -> tuple[int, np.ndarray, np.ndarray]:
+    """
+    Train one fold and return (fold_idx, test_idx, predictions).
 
-    print(f"Dataset created: {n_samples} samples from {dates[0]} to {dates[-1]}")
+    Returns the fold index so that results can be reordered after parallel
+    execution regardless of completion order.
+    """
+    model = clone(estimator)
+    fit_kwargs = {}
+    if sample_weight is not None:
+        fit_kwargs["sample_weight"] = sample_weight.iloc[train_idx]
+    model.fit(X.iloc[train_idx], y.iloc[train_idx], **fit_kwargs)
 
-    # Initialize combinatorial CV with meaningful parameters
-    print("\nInitializing Combinatorial Purged Cross-Validation...")
-    cv = CombinatorialPurgedKFold(
-        n_splits=6,  # Divide data into 6 contiguous blocks
-        n_test_splits=2,  # Use 2 blocks for testing in each combination
-        samples_info_sets=samples_info_sets,
-        pct_embargo=0.02,  # 2% embargo to prevent leakage
-        random_state=42,
-    )
+    if hasattr(model, "predict_proba"):
+        preds = model.predict_proba(X.iloc[test_idx])[:, 1]
+    else:
+        preds = model.predict(X.iloc[test_idx])
 
-    print(f"CV parameters: {cv}")
-    print(f"Will generate {cv.get_n_splits()} train/test combinations")
+    return fold_idx, test_idx, preds
 
-    # Validate embargo functionality
-    print("\nValidating embargo functionality...")
-    embargo_violations = 0
-    total_combinations = 0
 
-    for i, (train_idx, test_idx) in enumerate(cv.split(X, y)):
-        total_combinations += 1
+def _apply_bet_method_static(
+    method: str,
+    probs: pd.Series,
+    sides: pd.Series,
+    num_classes: int,
+):
+    """
+    Apply a bet-sizing method and return a signal Series.
 
-        # Basic validation
-        assert len(set(train_idx) & set(test_idx)) == 0, "Train/test overlap detected!"
+    Extracted to module scope so it is picklable by joblib workers.
+    """
+    from ..bet_sizing.ch10_snippets import get_signal  # project-local import
 
-        # Check that test indices are contiguous blocks
-        test_indices_sorted = sorted(test_idx)
-        is_contiguous = test_indices_sorted == list(
-            range(test_indices_sorted[0], test_indices_sorted[-1] + 1)
+    if method == "sigmoid":
+        return get_signal(probs, num_classes, pred=sides)
+    elif method == "power":
+        conviction = get_signal(probs, num_classes)
+        return sides * (conviction**2)
+    elif method == "binary":
+        return sides * (probs > 0.5).astype(float)
+    raise ValueError(f"Unknown bet method: {method!r}")
+
+
+def _compute_path_metrics(
+    path_id: int,
+    path_probs: pd.Series,
+    method: str,
+    primary_sides: pd.Series,
+    close_index: pd.Index,
+    t1: pd.Series,
+    log_returns_values: np.ndarray,
+    num_classes: int,
+    step_size: float,
+) -> dict | None:
+    """
+    Compute all performance metrics for one (path, method) combination.
+
+    Module-level so joblib can serialise it. Returns None when there are
+    insufficient OOS observations to produce meaningful statistics.
+    """
+    clean_probs = path_probs.dropna()
+    if clean_probs.empty:
+        return None
+
+    clean_sides = primary_sides.loc[clean_probs.index]
+    signals = _apply_bet_method_static(method, clean_probs, clean_sides, num_classes)
+
+    if step_size > 0:
+        from ..bet_sizing.ch10_snippets import discrete_signal
+
+        signals = discrete_signal(signals, step_size)
+
+    # Positional index arrays for the MtM averaging kernel
+    t0_idx = close_index.get_indexer(signals.index)
+    t1_idx = close_index.get_indexer(t1.loc[signals.index])
+
+    avg_pos = fill_average_active_sides(len(close_index), t0_idx, t1_idx, signals.values)
+
+    full_log_rets = avg_pos * log_returns_values
+    active_mask = avg_pos != 0
+    oos_log_rets = full_log_rets[active_mask]
+
+    if len(oos_log_rets) < 5:
+        return None
+
+    # ---- summary statistics (scipy avoids pd.Series allocation overhead) ----
+    arith_rets = np.expm1(oos_log_rets)
+    sr_raw = oos_log_rets.mean() / oos_log_rets.std(ddof=1)
+    skewness = float(scipy_skew(oos_log_rets))
+    excess_kurt = float(scipy_kurt(oos_log_rets, fisher=True))  # excess kurtosis
+    n = len(oos_log_rets)
+
+    # ---- profit factor ----
+    neg_sum = arith_rets[arith_rets < 0].sum()
+    pf = (arith_rets[arith_rets > 0].sum() / abs(neg_sum)) if neg_sum != 0 else 0.0
+
+    # ---- PSR (López de Prado AFML Ch. 14) ----
+    var_sr = (1 - skewness * sr_raw + ((excess_kurt - 1) / 4) * sr_raw**2) / (n - 1)
+    psr = float(norm.cdf(sr_raw / np.sqrt(var_sr))) if var_sr > 0 else 0.0
+
+    # ---- max drawdown (log-space for numerical stability) ----
+    cum = np.exp(np.cumsum(full_log_rets))
+    peak = np.maximum.accumulate(cum)
+    max_dd = float(np.min(cum / peak - 1))
+
+    # ---- turnover ----
+    turnover = float(np.abs(np.diff(avg_pos)).sum())
+
+    return {
+        "method": method,
+        "path_id": path_id,
+        "mtm_profit_factor": pf,
+        "mtm_sharpe": sr_raw,
+        "psr": psr,
+        "max_drawdown": max_dd,
+        "turnover": turnover,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CPCVAnalyzer
+# ---------------------------------------------------------------------------
+
+
+class CPCVAnalyzer:
+    """
+    Parallel CPCV execution and MtM performance metric distribution.
+
+    Handles the full pipeline from raw model predictions to a distribution of
+    time-weighted portfolio performance across all combinatorial backtest paths.
+
+    Parameters
+    ----------
+    estimator : sklearn-compatible estimator
+    cv_gen : CombinatorialPurgedCV
+        The configured CPCV generator. Must have ``t1`` set.
+    close_prices : pd.Series
+        Continuous price series for Mark-to-Market calculation.
+    n_jobs : int, default=-1
+        Joblib parallelism for both ``fit_predict`` and ``get_distribution_metrics``.
+    """
+
+    _BET_METHODS = ("sigmoid", "power", "binary")
+
+    def __init__(
+        self,
+        estimator,
+        cv_gen: CombinatorialPurgedCV,
+        close_prices: pd.Series,
+        n_jobs: int = -1,
+    ) -> None:
+        self.estimator = estimator
+        self.cv_gen = cv_gen
+        self.close = close_prices
+        self.n_jobs = n_jobs if n_jobs != -1 else joblib.cpu_count(only_physical_cores=True)
+
+        # Pre-compute log returns once; aligned to close_prices index
+        self.log_returns: pd.Series = np.log(close_prices).diff().shift(-1).fillna(0)
+
+        # Set by fit_predict
+        self._X: pd.DataFrame | None = None
+        self._split_predictions: list[np.ndarray] | None = None
+        self._backtest_paths_cache: list[pd.Series] | None = None
+
+    # ------------------------------------------------------------------
+    # Training
+    # ------------------------------------------------------------------
+
+    def fit_predict(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        sample_weight: pd.Series | None = None,
+    ) -> pd.Series:
+        """Train the estimator across all CPCV splits in parallel.
+
+        The split generator is exhausted eagerly so that ``cv_gen`` stores
+        ``index_train_test_`` and ``_fold_index_num`` before any downstream
+        method reads them.
+
+        Returns
+        -------
+        pd.Series
+            Recombined (bagged) predictions — mean across all paths per timestamp.
+        """
+        self._X = X
+        self._backtest_paths_cache = None  # invalidate on refit
+
+        # Exhaust the generator eagerly: this populates cv_gen.index_train_test_
+        # and cv_gen._fold_index_num, which recombine_test_predictions requires.
+        splits = [
+            (train, np.concatenate(test_list)) for train, test_list in self.cv_gen.split(X, y)
+        ]  # length == cv_gen.n_splits
+
+        results: list[tuple[int, np.ndarray, np.ndarray]] = Parallel(n_jobs=self.n_jobs)(
+            delayed(_fit_predict_fold)(self.estimator, X, y, train, test, i, sample_weight)
+            for i, (train, test) in enumerate(splits)
         )
 
-        if not is_contiguous:
-            print(f"Warning: Test indices in combination {i} are not contiguous")
+        # Sort by fold index — Parallel does not guarantee return order
+        results.sort(key=lambda r: r[0])
+        self._split_predictions = [preds for _, _, preds in results]
 
-        # Check embargo: no train samples immediately after test period
-        if len(test_idx) > 0:
-            max_test_idx = max(test_idx)
-            # Look for train samples in the embargo period (next 5 samples after test)
-            embargo_violations_in_split = sum(
-                1 for idx in train_idx if max_test_idx < idx <= max_test_idx + int(n_samples * 0.02)
+        return self.recombined_predictions
+
+    # ------------------------------------------------------------------
+    # Derived views (cached)
+    # ------------------------------------------------------------------
+
+    @property
+    def backtest_paths(self) -> list[pd.Series]:
+        """Assemble the ``n_test_paths`` backtest paths from split predictions.
+
+        Delegates entirely to ``cv_gen.recombine_test_predictions`` — no
+        manual fold-index arithmetic here.  The result is cached after the
+        first call and invalidated by ``fit_predict``.
+
+        Returns
+        -------
+        list of pd.Series, length ``cv_gen.n_test_paths``
+            Each Series covers all observations in the dataset, indexed by
+            the original timestamps from ``X``.
+        """
+        if self._split_predictions is None:
+            raise RuntimeError("Call fit_predict before accessing backtest_paths.")
+
+        if self._backtest_paths_cache is None:
+            raw: list[np.ndarray] = self.cv_gen.recombine_test_predictions(self._split_predictions)
+            self._backtest_paths_cache = [
+                pd.Series(path, index=self._X.index, name=f"path_{j}") for j, path in enumerate(raw)
+            ]
+
+        return self._backtest_paths_cache
+
+    @property
+    def recombined_predictions(self) -> pd.Series:
+        """Mean prediction across all paths at each timestamp.
+
+        Each observation appears in every path exactly once, so this is
+        equivalent to averaging across splits where the observation was OOS.
+        """
+        return pd.concat(self.backtest_paths, axis=1).mean(axis=1).rename("recombined_prediction")
+
+    # ------------------------------------------------------------------
+    # Performance distribution
+    # ------------------------------------------------------------------
+
+    def get_distribution_metrics(
+        self,
+        primary_sides: pd.Series,
+        num_classes: int = 2,
+        step_size: float = 0.0,
+    ) -> pd.DataFrame:
+        """Calculate MtM performance metrics for all paths and bet-sizing methods.
+
+        All ``n_test_paths × 3`` (path, method) pairs are evaluated in parallel
+        so the wall time is roughly that of the single slowest combination.
+
+        Parameters
+        ----------
+        primary_sides : pd.Series
+            Direction (+1 / -1) from the primary model for meta-labeling.
+        num_classes : int, default=2
+            Number of classes for confidence z-score in ``get_signal``.
+        step_size : float, default=0.0
+            Discretisation step for bet sizes; 0.0 = continuous.
+
+        Returns
+        -------
+        pd.DataFrame
+            MultiIndex ``[method, path_id]`` with columns:
+            ``mtm_profit_factor``, ``mtm_sharpe``, ``psr``,
+            ``max_drawdown``, ``turnover``.
+        """
+        # Snapshot heavy attributes once — avoids repeated self-lookups inside workers
+        close_index = self.close.index
+        t1 = self.cv_gen.t1
+        log_ret_vals = self.log_returns.values
+
+        raw_results: list[dict | None] = Parallel(n_jobs=self.n_jobs)(
+            delayed(_compute_path_metrics)(
+                path_id=i,
+                path_probs=path,
+                method=method,
+                primary_sides=primary_sides,
+                close_index=close_index,
+                t1=t1,
+                log_returns_values=log_ret_vals,
+                num_classes=num_classes,
+                step_size=step_size,
+            )
+            for i, path in enumerate(self.backtest_paths)
+            for method in self._BET_METHODS
+        )
+
+        records = [r for r in raw_results if r is not None]
+        if not records:
+            return pd.DataFrame(
+                columns=["mtm_profit_factor", "mtm_sharpe", "psr", "max_drawdown", "turnover"]
             )
 
-            if embargo_violations_in_split > 0:
-                embargo_violations += 1
-                print(f"Combination {i}: {embargo_violations_in_split} embargo violations")
-
-    print(
-        f"Embargo validation: {embargo_violations} violations in {total_combinations} combinations"
-    )
-
-    # Demonstrate usage with a classifier
-    print("\nDemonstrating usage with Random Forest classifier...")
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import accuracy_score
-
-    clf = RandomForestClassifier(n_estimators=50, random_state=42)
-    scores = []
-
-    for fold, (train_idx, test_idx) in enumerate(cv.split(X, y)):
-        # Split data
-        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-        # Train model
-        clf.fit(X_train, y_train)
-
-        # Predict and score
-        y_pred = clf.predict(X_test)
-        accuracy = accuracy_score(y_test, y_pred)
-        scores.append(accuracy)
-
-        print(
-            f"Fold {fold + 1}: Train size={len(train_idx)}, Test size={len(test_idx)}, "
-            f"Accuracy={accuracy:.4f}"
-        )
-
-    print(f"\nCross-validation results:")
-    print(f"Mean accuracy: {np.mean(scores):.4f} ± {np.std(scores):.4f}")
-    print(f"Min accuracy: {np.min(scores):.4f}")
-    print(f"Max accuracy: {np.max(scores):.4f}")
-
-    return cv, scores
-
-
-# Run the demonstration
-if __name__ == "__main__":
-    cv, scores = demonstrate_combinatorial_cv()
+        return pd.DataFrame(records).set_index(["method", "path_id"]).sort_index()
