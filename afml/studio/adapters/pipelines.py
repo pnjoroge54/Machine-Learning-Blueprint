@@ -16,6 +16,7 @@ compute_events       bars + label spec -> triple-barrier events with both weight
 labels_report        events -> label balance, holding times, concurrency, uniqueness
 build_feature_matrix bars + feature set spec -> X and the provenance catalog
 features_report      X + catalog -> NaN share per column
+run_screening        X + events + screening spec -> stationarity, entropy and MI gates
 run_importance       X + events + importance spec -> MDI / MDA / SFI under PurgedKFold
 run_model            X + events + model spec -> Optuna study (optimize_trading_model)
                      or purged-CV grid search (clf_hyper_fit), one ledger trial each
@@ -547,6 +548,89 @@ def features_report(X: pd.DataFrame, catalog: pd.DataFrame) -> Tuple[Tables, Dic
     return {"features": X, "catalog": catalog, "nan_share": nan_share, "describe": desc}, summary
 
 
+# --------------------------------------------------------------------------- screening
+
+
+def _block_length_in_events(events: pd.DataFrame, multiple: float = 5.0, floor: int = 50) -> float:
+    """
+    ``afml.screening.suggested_block_length`` measured in events rather than bars.
+
+    The null resamples the event-indexed target, so a label's span is counted as the
+    number of later events that start before it ends. The block is capped at half
+    the sample so a short window still gets more than one block.
+    """
+    starts = events.index
+    ends = pd.to_datetime(events["t1"]).to_numpy()
+    spans = np.searchsorted(starts.to_numpy(), ends, side="right") - np.arange(len(starts)) - 1
+    spans = spans[spans > 0]
+    mean_span = float(spans.mean()) if spans.size else 1.0
+    return float(min(max(floor, multiple * mean_span), max(len(starts) // 2, 2)))
+
+
+def run_screening(X: pd.DataFrame, events: pd.DataFrame, screening: Dict[str, Any],
+                  seed: int = 42, progress: Progress = _noop_progress) -> Tuple[Tables, Dict, Dict]:
+    """
+    The three gates of ``afml.screening.screen_features``: stationarity and entropy on
+    the bar-level features, then mutual information against the event target
+    under a permutation null, with Westfall-Young adjustment across the family.
+
+    Returns ``(tables, summary, trial)``. The screen is a selection step, so it is
+    logged as one trial.
+    """
+    from afml.screening import screen_features
+
+    target = events["bin"].astype(float) if screening["target"] == "label" else events["ret"].astype(float)
+    scheme_kwargs = None
+    if screening["scheme"] == "stationary_bootstrap":
+        scheme_kwargs = {"mean_block": _block_length_in_events(events)}
+    progress(0.05, f"screening {X.shape[1]} features, {screening['n_perm']} permutations")
+    report = screen_features(
+        X, target,
+        alpha=screening["alpha"],
+        min_entropy=screening["min_entropy"],
+        max_modal_occupancy=screening["max_modal_occupancy"],
+        scheme=screening["scheme"],
+        n_perm=screening["n_perm"],
+        seed=seed,
+        skip_stationarity=screening["skip_stationarity"],
+        scheme_kwargs=scheme_kwargs,
+    )
+    progress(0.95, "collecting results")
+
+    def clean(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df.attrs = {}
+        for c in df.columns:  # dict and list cells (null quantiles) do not round-trip through parquet
+            if df[c].map(lambda v: isinstance(v, (dict, list))).any():
+                df[c] = df[c].map(lambda v: json.dumps(v) if isinstance(v, (dict, list)) else v)
+        return df
+
+    tables: Tables = {"screening_summary": clean(report.summary()),
+                      "screening_stationarity": clean(report.stationarity)}
+    if not report.entropy.empty:
+        tables["screening_entropy"] = clean(report.entropy)
+    if not report.mutual_information.empty:
+        tables["screening_mi"] = clean(report.mutual_information)
+
+    gates = pd.Series(report.rejected, dtype=object).map(lambda r: r.split(":")[0])
+    summary = {
+        "n_features": int(X.shape[1]),
+        "n_selected": len(report.selected),
+        "selected": list(report.selected),
+        "rejected_by": {g: int(n) for g, n in gates.value_counts().items()},
+        "effective_tests": None if not np.isfinite(report.effective_tests) else float(report.effective_tests),
+        "target": screening["target"],
+        "scheme": screening["scheme"],
+        "mean_block": scheme_kwargs["mean_block"] if scheme_kwargs else None,
+        "n_perm": int(screening["n_perm"]),
+        "alpha": float(screening["alpha"]),
+        "n_events": int(len(events)),
+    }
+    trial = {"params": {"selected": summary["selected"], "target": summary["target"],
+                        "scheme": summary["scheme"], "n_features": summary["n_features"]}}
+    return tables, summary, trial
+
+
 # --------------------------------------------------------------------------- importance
 
 
@@ -1034,7 +1118,7 @@ def capabilities() -> Dict[str, Any]:
     return {
         "importance_methods": ["mdi", "mda", "sfi"],
         "missing_importance_methods": ["clustered_mdi", "clustered_mda", "pca", "orthogonal", "fingerprint"],
-        "screening": False,  # afml.screening.screen_features exists; not wired yet
+        "screening": True,
         "optuna": _importable("optuna"),
         "optuna_dashboard": _importable("optuna_dashboard"),
         "optuna_estimators": sorted(DEFAULT_SEARCH_SPACES),

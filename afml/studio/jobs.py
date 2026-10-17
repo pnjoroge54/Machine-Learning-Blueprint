@@ -120,10 +120,11 @@ def resume(run_id: str, ledger: Optional[Ledger] = None) -> str:
 
 def save_feature_set(run_id: str, columns: List[str], ledger: Optional[Ledger] = None) -> Dict[str, Any]:
     """
-    Save a column selection from an importance run as a feature set.
+    Save a column selection from an importance or screening run as a feature set.
 
     Saving counts as a trial: choosing columns by out-of-fold MDA reuses the folds
-    that will later score the model, so the choice is logged to the family. Returns
+    that will later score the model, and choosing them by a screen is a selection
+    on the same labels, so the choice is logged to the family. Returns
     the source run's config with ``features.selected_columns`` set, as a new draft.
     """
     ledger = ledger or get_ledger()

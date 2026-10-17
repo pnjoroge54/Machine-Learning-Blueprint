@@ -53,7 +53,7 @@ Each run folder holds `config.json`, `code_version.json`, `env.json`, `replay.py
 
 1. Every launch is logged to a family before it is queued. Grid candidates and Optuna
    trials (pruned and failed ones included) are one trial each, written as each one
-   finishes, and saving a feature set is a trial too.
+   finishes. A feature screen and saving a feature set are trials too.
 2. Scores are shown beside the family's N, effective N and null threshold, and are
    only compared within the same metric.
 3. A symbol with no `research_end` cannot start any run. Research runs cannot request
@@ -61,6 +61,14 @@ Each run folder holds `config.json`, `code_version.json`, `env.json`, `replay.py
    second hold-out access contaminates the family permanently.
 4. Two weight fields, never one: `train_weight_scheme` (fit) and `score_weight_source`
    (`events['w']`, scoring). The model role is derived from `side` in events.
+
+## Feature screening
+
+The `screening` stage runs `afml.screening.screen_features` on the feature set
+against the page 2 labels (or event returns): stationarity, entropy, then mutual
+information under a circular-shift or stationary-bootstrap null with Westfall-Young
+adjustment. The naive shuffle is not offered. Each screen is one trial, and keeping
+the screened columns is another.
 
 ## Model development (Phase 2)
 
@@ -75,7 +83,7 @@ It supports estimators that take `sample_weight` directly (`random_forest`,
 ## Rewiring to the newer afml
 
 afml also has `FeatureEngineeringPipeline`, `ModelDevelopmentPipeline`,
-`screen_features`, `LearnedStrategy`, and the clustered, orthogonal and fingerprint
+`LearnedStrategy`, and the clustered, orthogonal and fingerprint
 importance methods, which the studio does not call yet. Moving a stage onto them
 means changing `adapters/pipelines.py` (the step functions and `capabilities()`)
 and nothing else.

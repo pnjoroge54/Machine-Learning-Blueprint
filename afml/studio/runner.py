@@ -45,6 +45,7 @@ STEP_ORDER = {
     "bars": ["bars"],
     "labels": ["bars", "labels"],
     "features": ["bars", "features"],
+    "screening": ["bars", "labels", "features", "screening"],
     "importance": ["bars", "labels", "features", "importance"],
     "model": ["bars", "labels", "features", "model"],
 }
@@ -162,6 +163,18 @@ def step_features(ctx: RunContext, state: Dict[str, Any]) -> None:
     report(1.0, f"{X.shape[1]} features")
 
 
+def step_screening(ctx: RunContext, state: Dict[str, Any]) -> None:
+    report = ctx.progress_for("screening")
+    tables, summary, trial = P.run_screening(state["X"], state["events"], ctx.cfg["screening"],
+                                             seed=ctx.cfg["seed"], progress=report)
+    ctx.write_tables(tables)
+    ctx.summary["screening"] = summary
+    # A screen chooses features, so it counts toward the family's N
+    ctx.ledger.add_trial(run_id=ctx.run_id, family_id=ctx.family_id, kind="screening",
+                         params=trial["params"])
+    report(1.0, f"{summary['n_selected']}/{summary['n_features']} features pass all three gates")
+
+
 def step_importance(ctx: RunContext, state: Dict[str, Any]) -> None:
     report = ctx.progress_for("importance")
     tables, summary, trial = P.run_importance(state["X"], state["events"], ctx.cfg["importance"],
@@ -197,7 +210,7 @@ def step_model(ctx: RunContext, state: Dict[str, Any]) -> None:
 
 
 STEPS = {"bars": step_bars, "labels": step_labels, "features": step_features,
-         "importance": step_importance, "model": step_model}
+         "screening": step_screening, "importance": step_importance, "model": step_model}
 
 
 # =========================================================================== replay script
@@ -232,6 +245,9 @@ def replay_script(run_id: str, spec: RunSpec) -> str:
     if "features" in steps:
         lines += ['X, catalog = P.build_feature_matrix(bars, cfg["features"])',
                   "print(P.features_report(X, catalog)[1])"]
+    if "screening" in steps:
+        lines += ['tables, summary, trial = P.run_screening(X, events, cfg["screening"], seed=cfg["seed"])',
+                  "print(summary)"]
     if "importance" in steps:
         lines += ['tables, summary, trial = P.run_importance(X, events, cfg["importance"], seed=cfg["seed"])',
                   "print(summary)"]

@@ -9,6 +9,7 @@ End-to-end checks from the plan's Phase 0:
 import time
 from pathlib import Path
 
+import pandas as pd
 import psutil
 import pytest
 
@@ -138,3 +139,36 @@ def test_optuna_study_logs_every_trial_in_its_family(home):
 
     paths = {a["path"] for a in home.artifacts(run_id)}
     assert {"optuna.db", "tables/cv_results.parquet", "tables/optuna_trials.parquet"} <= paths
+
+
+def test_screening_run_logs_a_trial_and_writes_each_gate(home):
+    vault.set_research_end("SYNTH", "2024-06-30", ledger=home)
+    run_id = jobs.submit(base_config(stage="screening", screening={"n_perm": 60}), ledger=home)
+    _run_queue(home)
+    run = home.get_run(run_id)
+    assert run["status"] == "done", run["error"]
+    s = run["summary"]["screening"]
+    assert s["n_features"] == 4 and s["scheme"] == "circular_shift"
+    assert s["n_selected"] + sum(s["rejected_by"].values()) == s["n_features"]
+
+    trials = home.trials(run["family_id"])
+    assert [t["kind"] for t in trials] == ["screening"]
+    paths = {a["path"] for a in home.artifacts(run_id)}
+    assert {"tables/screening_summary.parquet", "tables/screening_stationarity.parquet"} <= paths
+
+    # A screen shares its family with importance and model runs on the same labels
+    imp = RunSpec.model_validate(base_config(stage="importance"))
+    assert imp.family_id() == run["family_id"]
+
+    # Keeping screened columns is a second trial and yields a draft with them selected
+    cfg = jobs.save_feature_set(run_id, ["ret_1", "rv_10"], ledger=home)
+    assert cfg["features"]["selected_columns"] == ["ret_1", "rv_10"]
+    assert [t["kind"] for t in home.trials(run["family_id"])] == ["screening", "feature_set"]
+
+
+def test_block_length_counts_events_not_bars():
+    idx = pd.date_range("2024-01-01", periods=200, freq="h")
+    events = pd.DataFrame({"t1": idx + pd.Timedelta(hours=3)}, index=idx)  # each label spans 3 later events
+    assert P._block_length_in_events(events, multiple=5.0, floor=1) == pytest.approx(15.0, rel=0.01)
+    assert P._block_length_in_events(events) == 50.0             # the floor
+    assert P._block_length_in_events(events.iloc[:40]) == 20.0   # capped at half the sample

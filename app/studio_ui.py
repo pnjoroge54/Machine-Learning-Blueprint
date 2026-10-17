@@ -64,6 +64,15 @@ DEFAULT_DRAFT: Dict[str, Any] = {
         ],
         "selected_columns": None,
     },
+    "screening": {
+        "target": "label",
+        "scheme": "circular_shift",
+        "n_perm": 500,
+        "alpha": 0.05,
+        "min_entropy": 0.5,
+        "max_modal_occupancy": 0.5,
+        "skip_stationarity": False,
+    },
     "importance": {
         "methods": ["mdi", "mda"],
         "n_splits": 5,

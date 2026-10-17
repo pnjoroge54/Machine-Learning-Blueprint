@@ -60,6 +60,7 @@ def example_config(stage: str = "importance", symbol: str = "SYNTH") -> dict:
                 {"name": "frac_diff_close", "params": {"d": 0.4}},
             ]
         },
+        "screening": {"n_perm": 200},
         "importance": {
             "methods": ["mdi", "mda"],
             "n_splits": 4,
@@ -243,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("family_id"); p.add_argument("config_hash"); p.set_defaults(fn=cmd_preregister)
     p = sub.add_parser("example")
     p.add_argument("--stage", default="importance",
-                   choices=["bars", "labels", "features", "importance", "model"])
+                   choices=["bars", "labels", "features", "screening", "importance", "model"])
     p.add_argument("--symbol", default="SYNTH")
     p.set_defaults(fn=cmd_example)
     p = sub.add_parser("app")

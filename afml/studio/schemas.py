@@ -23,10 +23,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from . import registry
 
-Stage = Literal["bars", "labels", "features", "importance", "model"]
+Stage = Literal["bars", "labels", "features", "screening", "importance", "model"]
 Purpose = Literal["research", "holdout"]
 
-STAGES: List[str] = ["bars", "labels", "features", "importance", "model"]
+STAGES: List[str] = ["bars", "labels", "features", "screening", "importance", "model"]
 
 # Sections each stage needs. Sections a stage does not use are dropped from the
 # canonical config, so they cannot change its hash.
@@ -34,6 +34,7 @@ STAGE_SECTIONS: Dict[str, List[str]] = {
     "bars": ["data"],
     "labels": ["data", "labels"],
     "features": ["data", "features"],
+    "screening": ["data", "labels", "features", "screening"],
     "importance": ["data", "labels", "features", "importance"],
     "model": ["data", "labels", "features", "model"],
 }
@@ -130,6 +131,27 @@ class FeatureSetSpec(_Spec):
     selected_columns: Optional[List[str]] = None
 
 
+class ScreeningSpec(_Spec):
+    """
+    The three-gate screen of ``afml.screening.screen_features``: stationarity, entropy,
+    then mutual information against a permutation null with Westfall-Young adjustment.
+
+    The null resamples the target with a scheme that keeps its serial dependence;
+    the naive shuffle is not offered because overlapping labels are autocorrelated.
+    Set the thresholds once, before looking: tuning them until the screen selects
+    what you hoped for makes its p-values worthless.
+    """
+
+    target: Literal["label", "event_return"] = "label"
+    scheme: Literal["circular_shift", "stationary_bootstrap"] = "circular_shift"
+    n_perm: int = Field(500, ge=50, le=10_000)
+    alpha: float = Field(0.05, gt=0, lt=0.5)
+    min_entropy: float = Field(0.5, ge=0, le=1)
+    max_modal_occupancy: float = Field(0.5, gt=0, le=1)
+    # KPSS is the wrong test for fractionally differenced features; skip gate 1 for them
+    skip_stationarity: bool = False
+
+
 class ImportanceSpec(_Spec):
     methods: List[Literal["mdi", "mda", "sfi"]] = Field(default_factory=lambda: ["mdi", "mda"])
     n_splits: int = Field(5, ge=2, le=20)
@@ -216,6 +238,7 @@ class RunSpec(_Spec):
     data: DataSpec
     labels: Optional[LabelSpec] = None
     features: Optional[FeatureSetSpec] = None
+    screening: Optional[ScreeningSpec] = None
     importance: Optional[ImportanceSpec] = None
     model: Optional[ModelSpec] = None
     seed: int = 42
@@ -236,7 +259,7 @@ class RunSpec(_Spec):
         """Copy with unused sections dropped and registry params filled in."""
         keep = set(STAGE_SECTIONS[self.stage])
         out = self.model_copy(deep=True)
-        for section in ("labels", "features", "importance", "model"):
+        for section in ("labels", "features", "screening", "importance", "model"):
             if section not in keep:
                 object.__setattr__(out, section, None)
         if out.labels is not None:

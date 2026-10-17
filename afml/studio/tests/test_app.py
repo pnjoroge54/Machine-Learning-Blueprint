@@ -29,6 +29,7 @@ def seeded_home(tmp_path_factory):
     vault.set_research_end("SYNTH", "2024-06-30", ledger=led)
     for stage in ("bars", "labels", "features", "importance"):
         jobs.submit(base_config(stage=stage), ledger=led)
+    jobs.submit(base_config(stage="screening", screening={"n_perm": 60}), ledger=led)
     jobs.submit(base_config(
         stage="model",
         model={"estimator": {"name": "random_forest", "params": {"n_estimators": 10, "n_jobs": 1}},
@@ -80,3 +81,11 @@ def test_model_page_shows_the_optuna_study(seeded_home):
     assert not at.exception
     assert any("6 trials" in c.value for c in at.caption)
     assert any(m.label.startswith("Trials N") for m in at.metric)
+
+
+def test_feature_set_page_shows_the_screen(seeded_home):
+    at = streamlit_testing.AppTest.from_file(str(APP / "views" / "feature_set.py"), default_timeout=120)
+    at.run()
+    assert not at.exception
+    assert any("Screen features" in h.value for h in at.subheader)
+    assert any(m.label == "Pass all three gates" for m in at.metric)

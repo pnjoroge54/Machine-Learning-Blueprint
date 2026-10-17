@@ -230,3 +230,13 @@ def test_optuna_search_space_is_validated(space, ok):
     else:
         with pytest.raises(ValueError):
             RunSpec.model_validate(cfg)
+
+
+def test_screening_spec_refuses_the_naive_shuffle_null():
+    with pytest.raises(ValueError):
+        RunSpec.model_validate(base_config(stage="screening", screening={"scheme": "naive_shuffle"}))
+    with pytest.raises(ValueError):  # the screen needs labels for its target
+        RunSpec.model_validate({k: v for k, v in base_config(stage="screening", screening={}).items()
+                                if k != "labels"})
+    spec = RunSpec.model_validate(base_config(stage="screening", screening={}))
+    assert spec.resolved().importance is None and spec.resolved().screening.n_perm == 500
