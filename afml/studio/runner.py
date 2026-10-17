@@ -28,7 +28,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -49,6 +49,8 @@ STEP_ORDER = {
     "screening": ["bars", "labels", "features", "screening"],
     "importance": ["bars", "labels", "features", "importance"],
     "model": ["bars", "labels", "features", "model"],
+    "validation": ["bars", "labels", "features", "validation"],
+    "process_permutation": ["bars", "process_permutation"],
 }
 
 
@@ -210,8 +212,44 @@ def step_model(ctx: RunContext, state: Dict[str, Any]) -> None:
     report(1.0, f"best {summary['scoring']} {summary['best_score']:.4f} over {len(trials)} trials")
 
 
+def _frozen_source(ctx: RunContext, section: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The frozen model run and the pre-registration a Phase 3 job runs against."""
+    from . import validation as studio_validation
+
+    cfg = ctx.cfg[section]
+    source = ctx.ledger.get_run(cfg["source_run"])
+    if source is None or source["status"] != "done":
+        raise RuntimeError(f"frozen run {cfg['source_run']} is not a completed run")
+    reg = studio_validation.get_preregistration(cfg["preregistration_id"], ctx.ledger)
+    if reg["family_id"] != ctx.family_id or reg["config_hash"] != source["config_hash"]:
+        raise RuntimeError("the pre-registration does not freeze this run's config in this family")
+    return source, reg
+
+
+def step_validation(ctx: RunContext, state: Dict[str, Any]) -> None:
+    from .adapters import validation as V
+
+    report = ctx.progress_for("validation")
+    source, reg = _frozen_source(ctx, "validation")
+    model_summary = source["summary"]["model"]
+    family = ctx.ledger.family_stats(ctx.family_id, model_summary["scoring"])
+    tables, summary = V.run_battery(state["X"], state["events"], state["bars"], ctx.cfg["model"],
+                                    model_summary, reg["payload"], family, ctx.cfg["validation"]["tests"],
+                                    seed=ctx.cfg["seed"], progress=report)
+    summary.update(source_run=source["run_id"], preregistration_id=reg["id"],
+                   preregistration_version=reg["version"])
+    ctx.write_tables(tables)
+    ctx.summary["validation"] = summary
+    # Rerunning the battery on the same frozen config is a new trial; reports never overwrite
+    ctx.ledger.add_trial(run_id=ctx.run_id, family_id=ctx.family_id, kind="validation",
+                         params={"source_run": source["run_id"], "preregistration_id": reg["id"],
+                                 "passed": summary["passed"], "failed_tests": summary["n_failed"]})
+    report(1.0, "battery " + ("passed" if summary["passed"] else f"failed {summary['n_failed']} test(s)"))
+
+
 STEPS = {"bars": step_bars, "labels": step_labels, "features": step_features,
-         "screening": step_screening, "importance": step_importance, "model": step_model}
+         "screening": step_screening, "importance": step_importance, "model": step_model,
+         "validation": step_validation}
 
 
 # =========================================================================== replay script

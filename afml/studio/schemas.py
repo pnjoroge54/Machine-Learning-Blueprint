@@ -23,10 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from . import registry
 
-Stage = Literal["bars", "labels", "features", "screening", "importance", "model"]
+Stage = Literal["bars", "labels", "features", "screening", "importance", "model", "validation",
+                "process_permutation"]
 Purpose = Literal["research", "holdout"]
 
-STAGES: List[str] = ["bars", "labels", "features", "screening", "importance", "model"]
+STAGES: List[str] = ["bars", "labels", "features", "screening", "importance", "model", "validation",
+                     "process_permutation"]
 
 # Sections each stage needs. Sections a stage does not use are dropped from the
 # canonical config, so they cannot change its hash.
@@ -37,6 +39,8 @@ STAGE_SECTIONS: Dict[str, List[str]] = {
     "screening": ["data", "labels", "features", "screening"],
     "importance": ["data", "labels", "features", "importance"],
     "model": ["data", "labels", "features", "model"],
+    "validation": ["data", "labels", "features", "model", "validation"],
+    "process_permutation": ["data", "labels", "features", "model", "process_permutation"],
 }
 
 
@@ -232,6 +236,28 @@ class ModelSpec(_Spec):
         return self
 
 
+class ValidationSpec(_Spec):
+    """Tests 1 to 6 of the Phase 3 battery against a frozen model run."""
+
+    source_run: str
+    preregistration_id: int
+    tests: List[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
+
+    @field_validator("tests")
+    @classmethod
+    def _known_tests(cls, v):
+        if not v or set(v) - {1, 2, 3, 4, 5, 6}:
+            raise ValueError("tests are a non-empty subset of 1..6 (test 7 is its own job)")
+        return sorted(set(v))
+
+
+class ProcessPermutationSpec(_Spec):
+    """Test 7: the whole development process rerun on permuted bars."""
+
+    source_run: str
+    preregistration_id: int
+
+
 class RunSpec(_Spec):
     stage: Stage
     purpose: Purpose = "research"
@@ -241,6 +267,8 @@ class RunSpec(_Spec):
     screening: Optional[ScreeningSpec] = None
     importance: Optional[ImportanceSpec] = None
     model: Optional[ModelSpec] = None
+    validation: Optional[ValidationSpec] = None
+    process_permutation: Optional[ProcessPermutationSpec] = None
     seed: int = 42
     # Display-only fields, excluded from the config hash.
     notes: str = ""
@@ -259,7 +287,8 @@ class RunSpec(_Spec):
         """Copy with unused sections dropped and registry params filled in."""
         keep = set(STAGE_SECTIONS[self.stage])
         out = self.model_copy(deep=True)
-        for section in ("labels", "features", "screening", "importance", "model"):
+        for section in ("labels", "features", "screening", "importance", "model", "validation",
+                        "process_permutation"):
             if section not in keep:
                 object.__setattr__(out, section, None)
         if out.labels is not None:
