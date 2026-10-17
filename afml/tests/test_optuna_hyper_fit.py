@@ -54,3 +54,15 @@ def test_cv_results_keep_every_fold_score(dataset, tmp_path):
     splits = [c for c in cv_results.columns if c.startswith("split")]
     assert len(splits) == 3
     np.testing.assert_allclose(cv_results[splits].mean(axis=1), cv_results["mean_test_score"])
+
+
+def test_oof_sink_gets_each_completed_trials_probabilities(dataset, tmp_path):
+    got = {}
+    study, cv_results = _study(dataset, tmp_path, oof_sink=lambda n, s: got.__setitem__(n, s))
+    complete = {t.number for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE}
+    assert set(got) == complete
+    X = dataset[0]
+    for s in got.values():
+        assert s.index.equals(X.index)
+        covered = s.dropna()
+        assert len(covered) > 0.5 * len(X) and covered.between(0, 1).all()

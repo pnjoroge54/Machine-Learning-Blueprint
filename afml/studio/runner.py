@@ -13,6 +13,7 @@ Run folder layout::
         process.log        raw stdout/stderr of the subprocess
         summary.json       per-step summaries and cache hit/miss counts
         optuna.db          the Optuna study (model runs with search="optuna")
+        oof/trial_*.parquet each complete Optuna trial's out-of-fold probabilities
         tables/*.parquet   every table a page plots from
 
 Invoked as ``python -m afml.studio.runner <run_id>`` by the worker, one subprocess per

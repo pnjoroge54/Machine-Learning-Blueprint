@@ -977,6 +977,13 @@ def run_optuna(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
     study_name = "studio"
     n_trials = int(model["n_trials"])
     trials: List[Dict] = []
+    oof_dir = storage_dir / "oof"
+    oof_dir.mkdir(exist_ok=True)
+
+    def save_oof(number: int, probs: pd.Series) -> None:
+        # Per-trial OOF probabilities, float32: what PBO across trials and the
+        # signal-permutation test are computed from (Phase 3)
+        probs.astype("float32").to_frame("p").to_parquet(oof_dir / f"trial_{number:04d}.parquet")
 
     def record(study, trial):
         t = _trial_record(trial, metric)
@@ -996,6 +1003,7 @@ def run_optuna(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
             n_trials=n_trials, timeout=int(model["timeout_s"]), n_splits=int(model["cv_splits"]),
             pruner_type=model["pruner"], metric=metric, study_name=study_name, db_path=storage,
             random_state=seed, refit=False, callbacks=[record], pct_embargo=float(model["pct_embargo"]),
+            oof_sink=save_oof,
         )
     except Exception:
         # Optuna skips callbacks for a trial whose objective raised; log it anyway
@@ -1054,6 +1062,7 @@ def run_optuna(X: pd.DataFrame, events: pd.DataFrame, model: Dict[str, Any],
         "n_samples": int(len(Xa)),
         "storage": storage,
         "study_name": study_name,
+        "oof_dir": str(oof_dir),
         "score_weights_applied": True,
     }
     return tables, summary, trials

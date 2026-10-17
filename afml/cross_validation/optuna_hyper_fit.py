@@ -200,9 +200,15 @@ def optimize_trading_model_with_pruning(
     n_splits: int = 5,
     metric="neg_log_loss",
     pct_embargo: float = 0.01,
+    oof_sink: Callable[[int, pd.Series], None] | None = None,
 ):
     """
     Objective function for tuning models using Purged K-Fold cross-validation.
+
+    When ``oof_sink`` is given, a trial that completes every fold hands it the
+    trial number and its out-of-fold probability of the highest class (1 for
+    meta-labels, +1 for side labels), indexed like ``X``. PBO across trials and
+    the signal-permutation test are computed from these.
     """
 
     suggester = FinancialModelSuggester()
@@ -216,6 +222,7 @@ def optimize_trading_model_with_pruning(
     w_score = events["w"]
 
     fold_scores = []
+    oof = pd.Series(np.nan, index=X.index, dtype=float) if oof_sink is not None else None
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y)):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
@@ -230,6 +237,9 @@ def optimize_trading_model_with_pruning(
         else:
             y_pred = fit.predict(X_val)
             score = f1_score(y_val, y_pred, sample_weight=w_val)
+        if oof is not None:
+            proba = y_prob if metric == "neg_log_loss" else fit.predict_proba(X_val)
+            oof.iloc[val_idx] = np.asarray(proba)[:, -1]
         fold_scores.append(score)
         trial.report(score, step=fold_idx)
 
@@ -241,6 +251,8 @@ def optimize_trading_model_with_pruning(
             raise TrialPruned(f"Pruned at fold {fold_idx}. Avg score: {avg_score_so_far:.4f}")
 
     final_score = np.mean(fold_scores)
+    if oof is not None:
+        oof_sink(trial.number, oof)
     trial.set_user_attr("fold_scores", fold_scores)
     trial.set_user_attr("score_std", np.std(fold_scores))
     return final_score
@@ -324,6 +336,7 @@ def optimize_trading_model(
     continue_study: bool = False,
     callbacks: list[Callable] = [],
     pct_embargo: float = 0.01,
+    oof_sink: Callable[[int, pd.Series], None] | None = None,
 ):
     """
     Executes a high-performance hyperparameter optimization (HPT) study for trading models.
@@ -350,6 +363,8 @@ def optimize_trading_model(
         refit (bool): Fit best model on full data.
         continue_study (bool): Run new trials.
         pct_embargo (float): Embargo fraction for PurgedKFold.
+        oof_sink (callable): Receives (trial number, OOF probabilities) for every
+            trial that completes all folds.
 
     Returns:
         optuna.study.Study: The completed study object with history and best params.
@@ -399,7 +414,7 @@ def optimize_trading_model(
         def objective(trial):
             return optimize_trading_model_with_pruning(
                 trial, X, y, events, data_index, classifier, param_distributions, n_splits, metric,
-                pct_embargo,
+                pct_embargo, oof_sink,
             )
 
         callbacks = [*callbacks]

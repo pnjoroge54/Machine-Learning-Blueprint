@@ -139,6 +139,9 @@ def test_optuna_study_logs_every_trial_in_its_family(home):
 
     paths = {a["path"] for a in home.artifacts(run_id)}
     assert {"optuna.db", "tables/cv_results.parquet", "tables/optuna_trials.parquet"} <= paths
+    oof = sorted((Path(run["run_dir"]) / "oof").glob("trial_*.parquet"))
+    assert len(oof) == len(complete)
+    assert pd.read_parquet(oof[0])["p"].dtype == "float32"
 
 
 def test_screening_run_logs_a_trial_and_writes_each_gate(home):
